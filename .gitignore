@@ -1,0 +1,37 @@
+# ===== Landing (Next.js webapp) =====
+landing/node_modules/
+landing/.next/
+landing/out/
+*.tsbuildinfo
+landing/next-env.d.ts
+
+# ===== Runtime data — waitlist API stores real submitter emails here =====
+landing/data/
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# ===== Environment & secrets =====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+secrets*
+
+# ===== Pipeline (Python) =====
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# ===== OS / editor =====
+.DS_Store
+Thumbs.db
+*.swp
+.idea/

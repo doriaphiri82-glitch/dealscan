@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Runtime data — waitlist API stores real submitter emails here
+data/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
