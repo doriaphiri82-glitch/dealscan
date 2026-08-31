@@ -15,7 +15,9 @@ next-env.d.ts
 *.key
 
 # Runtime data — waitlist API stores real submitter emails here
-data/
+data/*
+!data/bundle.json
+!data/registry.json
 *.log
 
 # OS / editor

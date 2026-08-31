@@ -1,0 +1,28 @@
+{
+ "runs": [
+  {
+   "county_id": "cochise_az",
+   "status": "ok",
+   "counts": {
+    "found": 0,
+    "vacant": 0,
+    "saved": 0,
+    "published": 0
+   },
+   "error": "",
+   "at": "2026-08-31T10:22:27.187706+00:00"
+  }
+ ],
+ "last_run": {
+  "county_id": "cochise_az",
+  "status": "ok",
+  "counts": {
+   "found": 0,
+   "vacant": 0,
+   "saved": 0,
+   "published": 0
+  },
+  "error": "",
+  "at": "2026-08-31T10:22:27.187706+00:00"
+ }
+}

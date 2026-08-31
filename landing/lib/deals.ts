@@ -1,0 +1,69 @@
+export interface Deal {
+  apn: string
+  address: string
+  county_id: string
+  county_name?: string
+  lot_size_acres: number | null
+  asking_price: number | null
+  deal_score: number
+  estimated_arv_low: number | null
+  estimated_arv_high: number | null
+  estimated_profit_low: number | null
+  estimated_profit_high: number | null
+  motivation_signals?: string[]
+  market_velocity?: number | null
+  competition_level?: string
+  owner_state?: string | null
+  zoning?: string | null
+  tax_delinquent_years?: number | null
+  source?: string
+}
+
+export interface DealsResponse {
+  count: number
+  deals: Deal[]
+  generated_at: string | null
+  meta?: {
+    status: string
+    scraped_counties: string[]
+    storage_source?: string
+  }
+}
+
+const FALLBACK_DEALS: DealsResponse = {
+  count: 0,
+  deals: [],
+  generated_at: null,
+  meta: { status: 'no-data', scraped_counties: [] },
+}
+
+/**
+ * Fetch top deals from the pipeline. Never throws — returns an empty
+ * response when no real data has been published yet (the consumer decides
+ * whether to render the labeled demo section or an empty state).
+ */
+export async function fetchTopDeals(limit = 25): Promise<DealsResponse> {
+  try {
+    const res = await fetch(`/api/deals?limit=${limit}`, {
+      headers: { Accept: 'application/json' },
+    })
+    if (!res.ok) return FALLBACK_DEALS
+    const data = (await res.json()) as DealsResponse
+    return { ...FALLBACK_DEALS, ...data }
+  } catch {
+    return FALLBACK_DEALS
+  }
+}
+
+export async function fetchDealByApn(apn: string): Promise<{ deal: Deal } | null> {
+  try {
+    const res = await fetch(`/api/deals/${encodeURIComponent(apn)}`, {
+      headers: { Accept: 'application/json' },
+    })
+    if (!res.ok) return null
+    const data = (await res.json()) as { deal: Deal }
+    return data.deal ? data : null
+  } catch {
+    return null
+  }
+}

@@ -1,44 +1,72 @@
-# DealScan AI - Data Pipeline
-# Core engine for finding, scoring, and delivering land deals
+# DealScan Pipeline
 
-## Architecture
+Land-deal screening pipeline: scrapes county parcel data, scores deals, and
+publishes a web bundle. See also `docs/DATA_PIPELINE_SCOPE.md` for the full
+plan and `scrapers/` for data sources.
+
+## Layout
 
 ```
 pipeline/
-├── config/
-│   ├── counties.py          # County configurations (URLs, data formats)
-│   └── settings.py          # Global settings (thresholds, scoring weights)
+├── config/            # counties + settings
 ├── scrapers/
-│   ├── base.py              # Base scraper class
-│   ├── county_scraper.py    # County-specific data collection
-│   └── comps_scraper.py     # Comparable sales data
-├── scoring/
-│   ├── deal_scorer.py       # Deal scoring algorithm (1-100)
-│   ├── profit_calculator.py # Profit estimation engine
-│   └── motivated_seller.py  # Motivated seller signal detection
-├── delivery/
-│   ├── email_sender.py      # Daily email delivery
-│   └── templates.py         # Email templates
-├── models.py                # Data models
-├── database.py              # SQLite database management
-├── main.py                  # Main pipeline orchestrator
-└── requirements.txt         # Python dependencies
+│   ├── base.py        # polite HTTP + cache + robots.txt + probing
+│   ├── argis.py       # ArcGIS REST adapter (parcel layers)
+│   └── counties.py    # per-county source registry
+├── scoring/           # deal_scorer (signals, ARV, 1-100 score)
+├── delivery/          # email digest (Resend/SendGrid/console)
+├── runners.py         # orchestration of one county run
+├── scheduler.py       # daily/weekly scheduling + --run-once (CI)
+├── publish.py         # push bundle to Vercel KV / REDIS_URL
+├── runregistry.py     # run history + bundle artifact
+├── demo_pipeline.py   # offline demo data run
+├── main.py            # CLI (setup-db / run / probe / dry-run / bundle / demo)
+└── tests/             # offline unit tests
 ```
 
-## Setup
+## Commands
 
 ```bash
-cd pipeline
-pip install -r requirements.txt
-python main.py --setup-db    # Initialize database
-python main.py --run         # Run full pipeline
-python main.py --county cochise_az  # Run for specific county
+python main.py --setup-db                    # create SQLite schema
+python main.py --run                         # scrape + score + publish bundle
+python main.py --run --county cochise_az     # one county
+python main.py --run --etl-only              # ETL only, no publish
+python main.py --probe                       # probe county data sources
+python main.py --dry-run --county cochise_az # ETL offline (data_file mode)
+python main.py --bundle                      # show published bundle summary
+python main.py --demo                        # offline demo run
+python scheduler.py --run-once               # all counties once (CI cron)
+python scheduler.py --watch                  # scheduled local loop (needs schedule)
 ```
 
-## How It Works
+## Scheduling
 
-1. **Collect**: Scrape county assessor data for target counties
-2. **Filter**: Identify motivated seller signals
-3. **Enrich**: Pull comparable sales data
-4. **Score**: Calculate deal score (1-100) and profit estimate
-5. **Deliver**: Send top deals via email/community
+* **Production (recommended):** `.github/workflows/scrape.yml` (repo root)
+  runs `scheduler.py --run-once` on a cron — daily delta + weekly full —
+  inside GitHub Actions, then commits `pipeline/data/bundle.json` +
+  `registry.json` and copies them to `landing/data/` so Vercel serves the
+  latest artifact.
+* **Local:** `python scheduler.py --watch`.
+
+## Publishing to the webapp
+
+Producers write `data/bundle.json` (top scored deals) + `data/registry.json`
+(run history). The webapp reads, in order:
+
+1. `REDIS_URL` — Upstash REST (`https://`) or native (`redis://`)
+2. `KV_REST_API_URL` + `KV_REST_API_TOKEN` — Vercel KV REST
+3. committed `landing/data/bundle.json` artifact
+
+Set the secret in GitHub Actions to publish through your store. Otherwise the
+committed artifact is used automatically (deploy-time snapshot).
+
+## Tests
+
+```bash
+python -m pytest pipeline/tests/   # offline fixtures, no network
+```
+
+## Delivery
+
+`delivery/email_sender.py` sends the daily digest. Configure
+`EMAIL_PROVIDER` + `EMAIL_API_KEY` in `.env` (see `.env.example`).
