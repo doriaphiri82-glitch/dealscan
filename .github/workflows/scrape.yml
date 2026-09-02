@@ -32,6 +32,10 @@ jobs:
         working-directory: pipeline
         run: python main.py --setup-db || true
 
+      - name: Probe county data sources
+        working-directory: pipeline
+        run: python main.py --probe
+
       - name: Run county scrapers
         working-directory: pipeline
         env:
