@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+import SEED_BUNDLE from '../../../../lib/seed-bundle'
+
 const KEY_PREFIX = 'deal:'
 
 const REDIS_URL = process.env.REDIS_URL || ''
@@ -54,12 +56,12 @@ export async function GET(
   if (isRedisRest || isRedisProto) {
     const cacheKey = `${KEY_PREFIX}${apn}`
     const data = await readFromRedis(cacheKey)
-    if (!data && isRedisRest) {
+    if (data) {
+      report = data
+    } else if (isRedisRest) {
       // try URL-encoded variant as a fallback (APNs sometimes include /)
-      const data2 = await readFromRedis(`${KEY_PREFIX}${encodeURIComponent(apn)}`)
-      return _respond(data2, apn)
+      report = await readFromRedis(`${KEY_PREFIX}${encodeURIComponent(apn)}`)
     }
-    report = data
   } else if (KV_URL && KV_TOKEN) {
     try {
       const res = await fetch(`${KV_URL}/get/${KEY_PREFIX}${encodeURIComponent(apn)}`, {
@@ -74,23 +76,10 @@ export async function GET(
     }
   }
 
-  // 2. Repo artifact (deployed bundle.json)
+          // 2. Seed bundle fallback (statically imported, ships with deployment)
   if (!report) {
-    try {
-      const fs = await import('fs')
-      const path = await import('path')
-      const raw = await fs.promises.readFile(
-        path.join(process.cwd(), 'data', 'bundle.json'),
-        'utf-8'
-      )
-      const bundle = JSON.parse(raw)
-      const deals = Array.isArray(bundle.deals) ? bundle.deals : []
-      report = deals.find(
-        (d: { apn?: unknown }) => String(d?.apn) === String(apn)
-      ) ?? null
-    } catch {
-      /* no artifact */
-    }
+    const deals = SEED_BUNDLE.deals
+    report = deals.find((d) => d.apn === apn) ?? null
   }
 
   return _respond(report, apn)

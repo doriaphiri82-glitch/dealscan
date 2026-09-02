@@ -6,8 +6,11 @@ landing/out/
 landing/next-env.d.ts
 
 # ===== Runtime data — waitlist API stores real submitter emails here =====
-landing/data/
-data/
+landing/data/*
+!landing/data/bundle.json
+!landing/data/registry.json
+data/*
+!landing/data/
 *.db
 *.sqlite
 *.sqlite3

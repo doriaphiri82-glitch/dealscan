@@ -4,17 +4,19 @@ import { NextRequest, NextResponse } from 'next/server'
  * GET /api/deals
  * Returns the top scored deals published by the pipeline.
  *
- * Storage resolution (same strategy as /api/waitlist):
+ * Storage resolution:
  *   1. REDIS_URL (Upstash REST https:// or native redis://) — production
  *   2. KV_REST_API_URL + KV_REST_API_TOKEN — Vercel KV REST
- *   3. Repo artifact data/bundle.json (checked into the deployment)
+  *   3. Committed seed bundle (../../../lib/seed-bundle.ts, statically compiled)
  *
- * Returns a missing-data envelope (not an error) when no bundle exists yet,
+ * Returns a missing-data envelope (not an error) when no live data exists yet,
  * so the site can fall back to its clearly-labeled demo section.
  */
+import SEED_BUNDLE from '../../../lib/seed-bundle'
+
 const KEY_TOP = 'deals:top'
 
-type DealsSource = 'redis' | 'redis-proto' | 'kv' | 'file' | null
+type DealsSource = 'redis' | 'redis-proto' | 'kv' | 'seed' | null
 
 const REDIS_URL = process.env.REDIS_URL || ''
 const KV_URL = process.env.KV_REST_API_URL || ''
@@ -78,18 +80,10 @@ async function readBundle(): Promise<{ data: unknown; source: string }> {
     } catch {
       /* fall through */
     }
-  }
-  try {
-    const fs = await import('fs')
-    const path = await import('path')
-    const raw = await fs.promises.readFile(
-      path.join(process.cwd(), 'data', 'bundle.json'),
-      'utf-8'
-    )
-    return { data: JSON.parse(raw), source: 'file' }
-  } catch {
-    return { data: null, source: 'none' }
-  }
+    }
+  // Seed bundle fallback: statically imported so it ships with the deployment.
+  // The pipeline overwrites the live source (Redis/KV) when real data exists.
+  return { data: SEED_BUNDLE, source: 'seed' }
 }
 
 export async function GET(request: NextRequest) {

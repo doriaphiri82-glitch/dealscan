@@ -1,0 +1,89 @@
+{
+ "generated_at": "2026-08-31T10:18:27.894612+00:00",
+ "count": 3,
+ "deals": [
+  {
+   "apn": "123-45-678A",
+   "address": "Lot 12, Sierra Vista Estates",
+   "county_id": "cochise_az",
+   "lot_size_acres": 2.31,
+   "asking_price": 2100.0,
+   "deal_score": 88,
+   "estimated_arv_low": 8279.0,
+   "estimated_arv_high": 10349.0,
+   "estimated_profit_low": 5517.0,
+   "estimated_profit_high": 7586.0,
+   "motivation_signals": [
+    "tax_delinquent",
+    "absentee_owner",
+    "long_ownership",
+    "no_improvements",
+    "vacant_land"
+   ],
+   "market_velocity": 0.7,
+   "competition_level": "low",
+   "owner_state": "CA",
+   "zoning": "Rural Residential",
+   "tax_delinquent_years": 3,
+   "source": "demo"
+  },
+  {
+   "apn": "456-78-901B",
+   "address": "Parcel 7, Golden Valley Ranchos",
+   "county_id": "mohave_az",
+   "lot_size_acres": 5.02,
+   "asking_price": 4500.0,
+   "deal_score": 74,
+   "estimated_arv_low": 12132.0,
+   "estimated_arv_high": 15165.0,
+   "estimated_profit_low": 6661.0,
+   "estimated_profit_high": 9694.0,
+   "motivation_signals": [
+    "absentee_owner",
+    "long_ownership",
+    "no_improvements",
+    "vacant_land",
+    "probate"
+   ],
+   "market_velocity": 0.6,
+   "competition_level": "low",
+   "owner_state": "AZ",
+   "zoning": "Rural Residential",
+   "tax_delinquent_years": 1,
+   "source": "demo"
+  },
+  {
+   "apn": "789-01-234C",
+   "address": "Tract 3, Rio Grande Estates",
+   "county_id": "socorro_nm",
+   "lot_size_acres": 10.5,
+   "asking_price": 3200.0,
+   "deal_score": 73,
+   "estimated_arv_low": 6262.0,
+   "estimated_arv_high": 7827.0,
+   "estimated_profit_low": 2561.0,
+   "estimated_profit_high": 4126.0,
+   "motivation_signals": [
+    "tax_delinquent",
+    "absentee_owner",
+    "long_ownership",
+    "no_improvements",
+    "vacant_land",
+    "probate"
+   ],
+   "market_velocity": 0.55,
+   "competition_level": "low",
+   "owner_state": "TX",
+   "zoning": "Agricultural Residential",
+   "tax_delinquent_years": 4,
+   "source": "demo"
+  }
+ ],
+ "error": "",
+ "meta": {
+  "scraped_counties": [
+   "demo"
+  ],
+  "status": "demo"
+ }
+}
