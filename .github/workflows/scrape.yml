@@ -23,6 +23,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Run the currently configured/verified pilot counties. The national
+        # expansion registry remains the source of truth for future batches;
+        # unverified candidates must be probed before entering production.
         county: [cochise_az, mohave_az, el_paso_tx]
     steps:
       - uses: actions/checkout@v5
