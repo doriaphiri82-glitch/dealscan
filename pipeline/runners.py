@@ -58,9 +58,20 @@ def fetch_parcels(cfg: Dict[str, Any], county_id: str,
                       f"{folder}/{service} {keywords}")
                 continue
             print(f"[debug] arcgis {county_id}: querying layer {layer}")
+            available = arcgis.layer_fields(layer) or []
+            print(f"[debug] arcgis {county_id}: layer has {len(available)} "
+                  f"fields; sample: {available[:25]}")
+            configured = list(cfg.get("fields", {}).values())
+            valid = [f for f in configured if f in available]
+            if valid:
+                out_fields: List[str] = valid
+            else:
+                out_fields = []
+                print(f"[debug] arcgis {county_id}: configured fields "
+                      f"{configured} not in layer -> using outFields=*")
             got = 0
             for attrs in arcgis.query_layer(layer, cfg.get("where", "1=1"),
-                                            list(cfg.get("fields", {}).values()),
+                                            out_fields,
                                             max_records=max_records):
                 got += 1
                 if got == 1:

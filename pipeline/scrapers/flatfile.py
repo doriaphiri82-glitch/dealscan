@@ -149,12 +149,27 @@ def fetch_el_paso_properties(county_id: str = "el_paso_tx",
     props_url = downloads.get("properties")
     if not props_url:
         return []
-    r = fetch(props_url, ttl=7 * 24 * 3600)  # cache data 7 days
+    r = fetch(props_url, ttl=7 * 24 * 3600, raw=True)  # cache data 7 days
     print(f"[debug] epcad properties fetch ok={r.ok} status={r.status} "
           f"error={r.error[:80] if r.error else ''}")
-    if not r.ok or not isinstance(r.body, str):
+    if not r.ok or not isinstance(r.body, bytes):
         return []
-    rows = parse_flat_file(r.body)
+    # The dump is a ZIP archive containing a ~-delimited .txt file
+    import io
+    import zipfile
+    text: str = ""
+    try:
+        with zipfile.ZipFile(io.BytesIO(r.body)) as zf:
+            member = next((n for n in zf.namelist()
+                           if n.lower().endswith((".txt", ".csv"))), None)
+            if member is None:
+                print(f"[debug] epcad zip members: {zf.namelist()[:10]}")
+                return []
+            raw_bytes = zf.read(member)
+            text = raw_bytes.decode("utf-8", errors="replace")
+    except zipfile.BadZipFile:
+        text = r.body.decode("utf-8", errors="replace")
+    rows = parse_flat_file(text)
     print(f"[debug] epcad parsed {len(rows)} rows; "
           f"headers sample: {list(rows[0].keys())[:20] if rows else 'none'}")
     out = []

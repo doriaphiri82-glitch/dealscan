@@ -43,17 +43,17 @@ class FetchResult:
     error: str = ""
 
 
-def _cache_path(url: str) -> str:
+def _cache_path(url: str, ns: str = "") -> str:
     import hashlib
-    h = hashlib.sha256(url.encode()).hexdigest()[:24]
+    h = hashlib.sha256(f"{ns}:{url}".encode()).hexdigest()[:24]
     host = urlparse(url).netloc.replace(":", "_")
     d = os.path.join(CACHE_DIR, host)
     os.makedirs(d, exist_ok=True)
     return os.path.join(d, f"{h}.cache")
 
 
-def _cached(url: str, ttl: int) -> Optional[Any]:
-    p = _cache_path(url)
+def _cached(url: str, ttl: int, ns: str = "") -> Optional[Any]:
+    p = _cache_path(url, ns)
     if not os.path.exists(p):
         return None
     if time.time() - os.path.getmtime(p) > ttl:
@@ -61,15 +61,23 @@ def _cached(url: str, ttl: int) -> Optional[Any]:
     try:
         with open(p, "r", encoding="utf-8") as f:
             envelope = json.load(f)
+        if envelope.get("b64"):
+            import base64
+            return base64.b64decode(envelope.get("body") or "")
         return envelope.get("body")
     except Exception:
         return None
 
 
-def _store_cache(url: str, body: Any) -> None:
+def _store_cache(url: str, body: Any, ns: str = "") -> None:
     try:
-        with open(_cache_path(url), "w", encoding="utf-8") as f:
-            json.dump({"url": url, "fetched_at": time.time(), "body": body}, f)
+        stored: Any = body
+        if isinstance(body, bytes):
+            import base64
+            stored = base64.b64encode(body).decode("ascii")
+        with open(_cache_path(url, ns), "w", encoding="utf-8") as f:
+            json.dump({"url": url, "fetched_at": time.time(),
+                       "b64": isinstance(body, bytes), "body": stored}, f)
     except Exception:
         pass  # cache is best-effort
 
@@ -100,9 +108,12 @@ def robots_allows(url: str) -> bool:
 
 def fetch(url: str, ttl: int = DEFAULT_TTL, as_json: bool = False,
           respect_robots: bool = True, retries: int = 2,
-          timeout: int = 30) -> FetchResult:
-    """GET with cache, politeness delay, robots.txt guard, and backoff."""
-    cached = _cached(url, ttl)
+          timeout: int = 30, raw: bool = False) -> FetchResult:
+    """GET with cache, politeness delay, robots.txt guard, and backoff.
+
+    raw=True returns the undecoded bytes (for zip/binary downloads)."""
+    ns = "raw" if raw else ""
+    cached = _cached(url, ttl, ns)
     if cached is not None:
         return FetchResult(ok=True, status=200, body=cached, from_cache=True)
 
@@ -114,12 +125,14 @@ def fetch(url: str, ttl: int = DEFAULT_TTL, as_json: bool = False,
         try:
             resp = _session.get(url, timeout=timeout)
             if resp.status_code == 200:
-                if as_json:
-                    body: Any = resp.json()
+                if raw:
+                    body: Any = resp.content
+                elif as_json:
+                    body = resp.json()
                 else:
                     ctype = resp.headers.get("content-type", "")
                     body = resp.json() if "application/json" in ctype else resp.text
-                _store_cache(url, body)
+                _store_cache(url, body, ns)
                 return FetchResult(ok=True, status=200, body=body)
             if resp.status_code in (429, 503) and attempt < retries:
                 time.sleep(2 ** attempt * 5)  # backoff 5s, 10s

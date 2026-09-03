@@ -90,6 +90,16 @@ def find_layer_via_hub(hub_root: str,
     return best
 
 
+def layer_fields(layer_url: str) -> Optional[List[str]]:
+    """Return the layer's actual field names from its metadata endpoint."""
+    r = fetch(f"{layer_url}?f=json", ttl=24 * 3600, as_json=True,
+              respect_robots=False)
+    if not r.ok or not isinstance(r.body, dict):
+        return None
+    return [f.get("name") for f in r.body.get("fields") or []
+            if f.get("name")]
+
+
 def query_layer(layer_url: str, where: str, out_fields: List[str],
                 max_records: int = 5000,
                 page_size: int = 1000) -> Iterator[Dict[str, Any]]:
@@ -107,6 +117,12 @@ def query_layer(layer_url: str, where: str, out_fields: List[str],
         }
         r = post_json(f"{layer_url}/query", payload)
         if not r.ok or not isinstance(r.body, dict):
+            print(f"[debug] arcgis query failed: ok={r.ok} "
+                  f"error={r.error[:120] if r.error else ''}")
+            return
+        if r.body.get("error"):
+            print(f"[debug] arcgis query error response: "
+                  f"{str(r.body['error'])[:150]}")
             return
         feats = r.body.get("features") or []
         if r.body.get("exceededTransferLimit") and not feats:
