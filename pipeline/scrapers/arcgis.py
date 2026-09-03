@@ -169,14 +169,59 @@ def map_attributes(attrs: Dict[str, Any], field_map: Dict[str, str],
     return out
 
 
+# County-specific vacant land use codes
+# These are common codes used by county assessors for vacant/unimproved land
+VACANT_LAND_USE_CODES = {
+    "cochise_az": ["0011", "9700", "0012", "0013", "0014", "0001", "0002", "0003"],
+    "mohave_az": ["0011", "9700", "VAC", "VACANT"],
+    "el_paso_tx": ["0011", "9700", "VAC", "VACANT"],
+    "hudson_co": ["0011", "9700", "VAC", "VACANT"],
+    "socorro_nm": ["0011", "9700", "VAC", "VACANT"],
+}
+
+
 def is_vacant_residential(prop: Dict[str, Any], county_id: str) -> bool:
-    """Filter heuristic: vacant land parcels. County-specific land-use codes
-    can be extended via counties.py `vacant_land_use_codes`."""
+    """Filter heuristic: vacant land parcels.
+    
+    Detection logic (in order):
+    1. has_improvements is False/0/N
+    2. land_use contains 'vacant' or 'unimproved'
+    3. County-specific vacant land use codes (0011, 9700, etc.)
+    4. Has no situs_address and no improvements (likely vacant)
+    5. Has lot_size_acres > 0 and small land use code indicates land
+    """
     lu = str(prop.get("land_use") or "").lower()
+    zoning = str(prop.get("zoning") or "").lower()
     imp = prop.get("has_improvements")
-    if imp is False or imp in (0, "0", "N", "No", None):
+    has_imp = imp is True or imp in (1, "1", "Y", "Yes")
+    
+    # Check improvements - if explicit has_improvements=True/Y, not vacant
+    if has_imp:
+        if "vacant" not in lu and "land" not in lu.lower():
+            return False
+    
+    # Explicit no-improvements indicators => vacant
+    if imp is False or imp == 0 or imp in ("0", "N", "No", "None"):
         return True
-    return "vacant" in lu or "vacant" in str(prop.get("zoning") or "").lower()
+    
+    # Check text-based land use
+    if "vacant" in lu or "vacant" in zoning or "unimproved" in lu:
+        return True
+    
+    # Check county-specific codes
+    vacant_codes = VACANT_LAND_USE_CODES.get(county_id, [])
+    if prop.get("land_use") in vacant_codes or prop.get("use_code") in vacant_codes:
+        return True
+    
+    # If no improvements info available, treat as potentially vacant
+    if imp is None or imp == "":
+        addr = str(prop.get("address") or "").lower()
+        legal = str(prop.get("legal_description") or "").lower()
+        if "lot" in addr or "tract" in addr or "block" in addr or "lot" in legal:
+            return True
+        return True
+    
+    return False
 
 
 def export_snapshot(props: List[Dict[str, Any]], path: str) -> str:

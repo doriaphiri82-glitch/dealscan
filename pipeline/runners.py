@@ -12,17 +12,81 @@ from __future__ import annotations
 import traceback
 from typing import Any, Dict, List, Optional
 
-from config.counties import COUNTIES
+from config.counties.national_registry import PILOT_COUNTIES
 from database import get_top_deals, save_deal, save_property
 from runregistry import record_run, write_bundle
 from scoring.deal_scorer import score_and_enrich_deal
 from scrapers import arcgis
+from scrapers.adapter import BaseScraperAdapter, ScrapeResult
+from scrapers.arcgis_adapter import ArcGISFeatureServerAdapter, ArcGISHubAdapter
 from scrapers.counties import COUNTY_SCRAPERS
+from scrapers.flatfile_adapter import FlatFileAdapter, CSVAdapter, ExcelAdapter
+
+
+ADAPTER_MAP = {
+    "arcgis": ArcGISFeatureServerAdapter,
+    "arcgis_hub": ArcGISHubAdapter,
+    "flatfile": FlatFileAdapter,
+    "csv": CSVAdapter,
+    "excel": ExcelAdapter,
+    "state_parcel": ArcGISFeatureServerAdapter,
+}
+
+
+def _adapter_for(cfg: Dict[str, Any]) -> Optional[BaseScraperAdapter]:
+    scraper_type = cfg.get("scraper_type") or cfg.get("data_mode", "arcgis")
+    adapter_cls = ADAPTER_MAP.get(scraper_type)
+    if not adapter_cls:
+        return None
+    return adapter_cls()
+
+
+class RunMetrics:
+    """Observability metrics for a single county run."""
+    __slots__ = (
+        'county_id', 'discovered', 'downloaded', 'parsed', 'normalized',
+        'rejected', 'rejection_reasons', 'stored', 'scored', 'qualified',
+        'published', 'errors'
+    )
+
+    def __init__(self, county_id: str) -> None:
+        self.county_id = county_id
+        self.discovered = 0
+        self.downloaded = 0
+        self.parsed = 0
+        self.normalized = 0
+        self.rejected = 0
+        self.rejection_reasons: Dict[str, int] = {}
+        self.stored = 0
+        self.scored = 0
+        self.qualified = 0
+        self.published = 0
+        self.errors: List[str] = []
+
+    def to_counts(self) -> Dict[str, int]:
+        return {
+            'discovered': self.discovered,
+            'downloaded': self.downloaded,
+            'parsed': self.parsed,
+            'normalized': self.normalized,
+            'rejected': self.rejected,
+            'stored': self.stored,
+            'scored': self.scored,
+            'qualified': self.qualified,
+            'published': self.published,
+        }
+
+    def record_rejection(self, reason: str) -> None:
+        self.rejected += 1
+        self.rejection_reasons[reason] = self.rejection_reasons.get(reason, 0) + 1
 
 
 def _county_config(county_id: str) -> Dict[str, Any]:
-    cfg = dict(COUNTIES.get(county_id) or {})
-    cfg.update(COUNTY_SCRAPERS.get(county_id) or {})
+    cfg = dict(COUNTY_SCRAPERS.get(county_id) or {})
+    if not cfg:
+        pilot = PILOT_COUNTIES.get(county_id)
+        if pilot:
+            cfg = dict(pilot)
     return cfg
 
 
@@ -30,10 +94,19 @@ def fetch_parcels(cfg: Dict[str, Any], county_id: str,
                   max_records: int = 5000) -> List[Dict[str, Any]]:
     """Return normalized property dicts from the configured source.
 
-    Supports two modes:
-      * arcgis: locate + query a parcel layer via the REST API.
-      * data_file: read from a local JSON/CSV (tests/dev, or a cached export).
+    Supports:
+      * arcgis adapter
+      * flatfile adapter
+      * direct ArcGIS layer URL fallback
+      * data_file mode
     """
+    adapter = _adapter_for(cfg)
+    if adapter:
+        result, normalized = adapter.run(cfg, max_records=max_records)
+        if result.errors:
+            print(f"[debug] adapter {county_id}: errors={result.errors}")
+        return normalized[:max_records]
+
     mode = cfg.get("data_mode", "arcgis")
     if mode == "flatfile":
         from scrapers.flatfile import fetch_el_paso_properties
@@ -42,14 +115,33 @@ def fetch_parcels(cfg: Dict[str, Any], county_id: str,
         print(f"[debug] flatfile {county_id}: fetched {len(props)} properties")
         return props
     if mode == "arcgis":
+        direct_layer = cfg.get("arcgis_layer_url")
+        if direct_layer:
+            print(f"[debug] arcgis {county_id}: using direct layer {direct_layer}")
+            available = arcgis.layer_fields(direct_layer) or []
+            print(f"[debug] arcgis {county_id}: layer has {len(available)} "
+                  f"fields; sample: {available[:25]}")
+            configured = list(cfg.get("fields", {}).values())
+            valid = [f for f in configured if f in available]
+            out_fields: List[str] = valid if valid else []
+            if not valid:
+                print(f"[debug] arcgis {county_id}: configured fields "
+                      f"{configured} not in layer -> using outFields=*")
+            props: List[Dict[str, Any]] = []
+            for attrs in arcgis.query_layer(direct_layer, cfg.get("where", "1=1"),
+                                            out_fields, max_records=max_records):
+                prop = arcgis.map_attributes(attrs, cfg.get("fields", {}),
+                                             county_id, cfg.get("defaults", {}))
+                props.append(prop)
+            print(f"[debug] arcgis {county_id}: direct layer returned {len(props)} records")
+            return props
         root = cfg.get("arcgis_root")
         if not root:
             return []
-        props: List[Dict[str, Any]] = []
+        props = []
         for folder, service, keywords in cfg.get("services") or []:
             layer: Optional[str] = None
             if "opendata.arcgis.com" in root:
-                # Hub subdomain: discover the real service via the DCAT feed
                 layer = arcgis.find_layer_via_hub(root, keywords)
             if not layer:
                 layer = arcgis.find_layer(root, folder, service, keywords)
@@ -63,10 +155,8 @@ def fetch_parcels(cfg: Dict[str, Any], county_id: str,
                   f"fields; sample: {available[:25]}")
             configured = list(cfg.get("fields", {}).values())
             valid = [f for f in configured if f in available]
-            if valid:
-                out_fields: List[str] = valid
-            else:
-                out_fields = []
+            out_fields: List[str] = valid if valid else []
+            if not valid:
                 print(f"[debug] arcgis {county_id}: configured fields "
                       f"{configured} not in layer -> using outFields=*")
             got = 0
@@ -74,18 +164,14 @@ def fetch_parcels(cfg: Dict[str, Any], county_id: str,
                                             out_fields,
                                             max_records=max_records):
                 got += 1
-                if got == 1:
-                    print(f"[debug] arcgis {county_id}: sample field keys: "
-                          f"{sorted(attrs.keys())[:20]}")
                 prop = arcgis.map_attributes(attrs, cfg.get("fields", {}),
                                              county_id, cfg.get("defaults", {}))
                 props.append(prop)
             print(f"[debug] arcgis {county_id}: layer returned {got} records")
             if props:
-                break  # first service that yields data wins
+                break
         return props
 
-    # data_file mode
     data_file = cfg.get("data_file")
     if not data_file:
         return []
@@ -99,7 +185,6 @@ def fetch_parcels(cfg: Dict[str, Any], county_id: str,
             if isinstance(it, dict) and it.get("county_id"):
                 out.append(it)
             else:
-                # raw ArcGIS-ish record: keep as-is, normalize minimally
                 out.append(dict(it))
         return out
     except Exception:
@@ -107,14 +192,10 @@ def fetch_parcels(cfg: Dict[str, Any], county_id: str,
 
 
 def _load_comps_for(county_id: str, prop: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Stub: real comps need recorder/GIS transfers (Phase 2). Until then the
-    scorer runs with no comps -> empty profit estimate -> such deals won't
-    pass MIN_PROFIT_ESTIMATE, so nothing fabricated gets scored."""
     return []
 
 
 def _shape_for_bundle(row: Dict[str, Any]) -> Dict[str, Any]:
-    """Map a DB row (via get_top_deals) to the webapp bundle shape."""
     return {
         "apn": row.get("apn"),
         "address": row.get("address"),
@@ -138,33 +219,46 @@ def _shape_for_bundle(row: Dict[str, Any]) -> Dict[str, Any]:
 
 def run(county_id: str, mode: str = "publish", max_records: int = 5000,
         dry_run: bool = False, offline: bool = False) -> Dict[str, Any]:
-    """Full county ETL + scoring + publish. Never raises.
-
-    `offline=True` forces the local data_file mode (no network), so a
-    dry-run works in CI-less / blocked environments.
-    """
+    """Full county ETL + scoring + publish. Never raises."""
     cfg = _county_config(county_id)
+    metrics = RunMetrics(county_id)
     summary: Dict[str, Any] = {
         "county_id": county_id,
-        "counts": {"found": 0, "vacant": 0, "saved": 0, "published": 0},
+        "counts": metrics.to_counts(),
         "status": "ok",
         "error": "",
     }
+
+    if cfg.get("_unavailable"):
+        unavailable_reason = cfg.get("_unavailable_reason", "Marked as unavailable")
+        summary["status"] = "skipped"
+        summary["error"] = unavailable_reason
+        print(f"[debug] {county_id}: SKIPPED - {unavailable_reason}")
+        record_run(county_id, "skipped", summary["counts"], unavailable_reason)
+        return summary
+
     try:
         if offline:
             props = fetch_parcels({**cfg, "data_mode": "data_file"}, county_id,
                                   max_records=max_records)
         else:
             props = fetch_parcels(cfg, county_id, max_records=max_records)
-        summary["counts"]["found"] = len(props)
+        metrics.downloaded = len(props)
+        metrics.discovered = metrics.downloaded
+
         vacant = [p for p in props if arcgis.is_vacant_residential(p, county_id)]
-        summary["counts"]["vacant"] = len(vacant)
+        metrics.normalized = len(vacant)
 
         scored: List[Dict[str, Any]] = []
         for prop in vacant:
-            comps = _load_comps_for(county_id, prop)
-            deal = score_and_enrich_deal(prop, comps, cfg)
+            try:
+                comps = _load_comps_for(county_id, prop)
+                deal = score_and_enrich_deal(prop, comps, cfg)
+            except Exception as exc:
+                metrics.record_rejection(f"score_error: {exc}")
+                continue
             if deal is None:
+                metrics.record_rejection("below_min_profit")
                 continue
             if not dry_run:
                 try:
@@ -174,27 +268,35 @@ def run(county_id: str, mode: str = "publish", max_records: int = 5000,
                     deal["motivation_signals"] = ",".join(
                         deal.get("motivation_signals", []))
                     save_deal(deal)
-                except Exception:
+                    metrics.stored += 1
+                except Exception as exc:
+                    metrics.errors.append(f"save_error: {exc}")
+                    metrics.record_rejection("save_error")
                     continue
             deal["apn"] = prop.get("apn")
             deal["address"] = prop.get("address")
             deal["county_id"] = county_id
             deal["county_name"] = cfg.get("name", county_id)
             scored.append(deal)
-            summary["counts"]["saved"] += 1
+            metrics.scored += 1
+            metrics.qualified += 1
 
         if mode == "publish" and not dry_run:
             top = get_top_deals(limit=25, min_score=0)
             publish_deals = [_shape_for_bundle(d) for d in top[:25]] if top else []
         else:
             publish_deals = [_shape_for_bundle(d) for d in scored[:25]]
-        summary["counts"]["published"] = len(publish_deals)
+        metrics.published = len(publish_deals)
 
         if mode == "publish":
             path = write_bundle(publish_deals, [county_id],
                                 status="ok", error=summary["error"])
             summary["bundle_path"] = path
 
+        if metrics.errors:
+            summary["status"] = "degraded"
+            summary["error"] = "; ".join(metrics.errors[:3])
+        summary["counts"] = metrics.to_counts()
         record_run(county_id, summary["status"], summary["counts"],
                    summary["error"])
     except Exception as exc:

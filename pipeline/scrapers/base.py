@@ -177,6 +177,7 @@ class ProbeResult:
     reachable: bool
     status: int = 0
     detail: str = ""
+    error: str = ""
     verified: bool = False
     extras: Dict[str, Any] = field(default_factory=dict)
 

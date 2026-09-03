@@ -6,6 +6,10 @@ Usage:
     python main.py --run            # Run full pipeline
     python main.py --demo           # Run with demo data (for testing)
     python main.py --deliver        # Send daily deals to subscribers
+    python main.py --probe-all      # Probe all configured county sources
+    python main.py --health         # Show county health dashboard
+    python main.py --counties       # List configured counties
+    python main.py --expand         # Generate county expansion report
 """
 import argparse
 import json
@@ -14,23 +18,32 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config.counties import COUNTIES  # noqa: E402
+from scrapers.counties import COUNTY_SCRAPERS  # noqa: E402
 from config.settings import MIN_DEAL_SCORE, MAX_DEALS_PER_EMAIL  # noqa: E402
 from database import init_db, get_top_deals  # noqa: E402
 from runners import run as run_county  # noqa: E402
 from runregistry import load_bundle  # noqa: E402
 from scoring.deal_scorer import score_and_enrich_deal  # noqa: E402
-from scrapers.counties import COUNTY_SCRAPERS, probe_county  # noqa: E402
+from scrapers.counties import probe_county  # noqa: E402
+from cli.county_commands import add_county_commands  # noqa: E402
 
 
 def _print_run_summary(summary: dict) -> None:
-    print(f"[{summary['county_id']}] {summary['status']}  "
-          f"found={summary['counts']['found']} "
-          f"vacant={summary['counts']['vacant']} "
-          f"saved={summary['counts']['saved']} "
-          f"published={summary['counts']['published']}")
+    counts = summary.get("counts", {})
+    print(f"[{summary['county_id']}] {summary.get('status', 'unknown')}  "
+          f"found={counts.get('discovered', counts.get('found', 0))} "
+          f"downloaded={counts.get('downloaded', 0)} "
+          f"parsed={counts.get('parsed', 0)} "
+          f"normalized={counts.get('normalized', 0)} "
+          f"rejected={counts.get('rejected', 0)} "
+          f"stored={counts.get('stored', 0)} "
+          f"scored={counts.get('scored', 0)} "
+          f"published={counts.get('published', 0)}")
     if summary.get('error'):
         print(f"  ERROR: {summary['error'][:200]}")
+    rejection = counts.get('rejection_reasons') or {}
+    if rejection:
+        print(f"  REJECTIONS: {rejection}")
 
 
 def run_all(mode: str = 'publish', only: str = '') -> None:
@@ -43,14 +56,11 @@ def run_all(mode: str = 'publish', only: str = '') -> None:
 def cmd_probe():
     """Probe configured data sources. Mark sources verified/blocked."""
     print("Probing county data sources...\n")
-    results = {}
     for cid in COUNTY_SCRAPERS:
-        results[cid] = []
         for r in probe_county(cid):
             status = 'OK' if r.reachable else 'FAIL'
             print(f"  {status:4} {cid:12} {r.source_name:28} "
                   f"{r.detail or r.error[:60]}")
-            results[cid].append(r)
     print("\nSource probe complete.")
 
 
@@ -58,16 +68,6 @@ def cmd_run(args):
     init_db()
     mode = 'etl-only' if args.etl_only else 'publish'
     run_all(mode=mode, only=args.county or '')
-
-
-def cmd_dry_run():
-    banner = "DRY RUN (offline) - run a county from its local data_file only"
-    print(banner)
-    if not args.county:
-        print("Please use --county to pick a county for a dry run.")
-        return
-    summary = run_county(args.county, mode='etl-only', dry_run=True, offline=True)
-    _print_run_summary(summary)
 
 
 def cmd_bundle():
@@ -95,11 +95,10 @@ def main():
     parser.add_argument('--demo', action='store_true')
     parser.add_argument('--probe', action='store_true',
                         help='Probe configured county data sources')
-    parser.add_argument('--dry-run', action='store_true',
-                        help='Dry run a county without network/persist')
     parser.add_argument('--deliver', action='store_true')
     parser.add_argument('--bundle', action='store_true',
                         help='Show current web bundle summary')
+    add_county_commands(parser.add_subparsers())
     args = parser.parse_args()
 
     if args.setup_db:
@@ -109,8 +108,6 @@ def main():
         cmd_probe()
     elif args.bundle:
         cmd_bundle()
-    elif args.dry_run:
-        cmd_dry_run()
     elif args.run:
         cmd_run(args)
     elif args.demo:
@@ -118,6 +115,8 @@ def main():
         run_demo_pipeline()
     elif args.deliver:
         print("Delivery requires EMAIL_API_KEY in .env. See pipeline README.")
+    elif hasattr(args, 'func'):
+        args.func()
     else:
         parser.print_help()
 
