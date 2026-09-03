@@ -193,6 +193,21 @@ def fetch_el_paso_properties(county_id: str = "el_paso_tx",
                         print(f"[debug] epcad schema| {ln.strip()[:120]}")
             except StopIteration:
                 print(f"[debug] epcad: no [Properties] section in schema")
+            # Also print Owners + Values sections (needed for owner/value data)
+            lines2 = stext.splitlines()
+            for section in ("[Owners]", "[Values]", "[Lands]"):
+                try:
+                    s = next(i for i, ln in enumerate(lines2)
+                             if ln.strip().lower() == section.lower())
+                    e = next((i for i in range(s + 1, len(lines2))
+                              if lines2[i].lstrip() == lines2[i]
+                              and lines2[i].strip().startswith("[")), len(lines2))
+                    print(f"[debug] epcad {section} schema: {e - s - 1} columns")
+                    for ln in lines2[s + 1:e]:
+                        if ln.strip():
+                            print(f"[debug] epcad schema| {ln.strip()[:120]}")
+                except StopIteration:
+                    pass
         else:
             print(f"[debug] epcad schema fetch failed: "
                   f"ok={sr.ok} err={sr.error[:80] if sr.error else ''}")
@@ -200,7 +215,9 @@ def fetch_el_paso_properties(county_id: str = "el_paso_tx",
     print(f"[debug] epcad first lines (no header expected):")
     for ln in raw_lines[:2]:
         cells = ln.split("~")
-        print(f"[debug] epcad line: {len(cells)} cells | {cells[:14]}")
+        print(f"[debug] epcad line: {len(cells)} cells")
+        for i, c in enumerate(cells):
+            print(f"[debug] epcad cell[{i}] = {c.strip()[:80]!r}")
     rows = parse_flat_file(text)
     print(f"[debug] epcad parsed {len(rows)} rows; "
           f"headers sample: {list(rows[0].keys())[:20] if rows else 'none'}")
