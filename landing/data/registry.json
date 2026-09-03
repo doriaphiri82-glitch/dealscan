@@ -10,6 +10,42 @@
     "published": 0
    },
    "error": "",
+   "at": "2026-09-03T13:50:37.131336+00:00"
+  },
+  {
+   "county_id": "mohave_az",
+   "status": "error",
+   "counts": {
+    "found": 5000,
+    "vacant": 5000,
+    "saved": 0,
+    "published": 0
+   },
+   "error": "'NoneType' object has no attribute 'lower' | Traceback (most recent call last):\n  File \"/home/runner/work/dealscan/dealscan/pipeline/runners.py\", line 166, in run\n    deal = score_and_enrich_deal(prop, comps, cfg)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/dealscan/dealscan/pipeline/scoring/deal_scorer.py\", line 131, in score_and_enrich_deal\n    signals = detect_motivation_signals(property_data)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'NoneType' object has no attribute 'lower'\n",
+   "at": "2026-09-03T13:50:32.627701+00:00"
+  },
+  {
+   "county_id": "cochise_az",
+   "status": "ok",
+   "counts": {
+    "found": 5000,
+    "vacant": 5000,
+    "saved": 0,
+    "published": 0
+   },
+   "error": "",
+   "at": "2026-09-03T13:50:19.021644+00:00"
+  },
+  {
+   "county_id": "el_paso_tx",
+   "status": "ok",
+   "counts": {
+    "found": 0,
+    "vacant": 0,
+    "saved": 0,
+    "published": 0
+   },
+   "error": "",
    "at": "2026-09-03T13:40:13.612846+00:00"
   },
   {
@@ -179,6 +215,6 @@
    "published": 0
   },
   "error": "",
-  "at": "2026-09-03T13:40:13.612846+00:00"
+  "at": "2026-09-03T13:50:37.131336+00:00"
  }
 }
