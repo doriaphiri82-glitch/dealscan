@@ -64,6 +64,13 @@ class ArcGISFeatureServerAdapter(BaseScraperAdapter):
 
     def validate(self, record: Dict[str, Any]) -> bool:
         apn = record.get("apn") or record.get("PARCEL_ID") or record.get("GEO_ID")
+        # County configs map source APN fields during normalize(), so accept
+        # common source identifiers here as well.
+        if not apn:
+            for key in ("TAXPIN", "PARCELNO", "PARCEL_ID", "APN", "ACCOUNT", "ACCOUNT_NO", "PROP_ID"):
+                apn = record.get(key)
+                if apn:
+                    break
         return bool(apn and str(apn).strip())
 
 
@@ -81,4 +88,7 @@ class ArcGISHubAdapter(BaseScraperAdapter):
 
     def validate(self, record: Dict[str, Any]) -> bool:
         apn = record.get("apn") or record.get("PARCEL_ID") or record.get("GEO_ID")
+        for key in ("TAXPIN", "PARCELNO", "ACCOUNT", "ACCOUNT_NO", "PROP_ID"):
+            if not apn:
+                apn = record.get(key)
         return bool(apn and str(apn).strip())
