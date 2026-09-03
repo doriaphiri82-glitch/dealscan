@@ -59,6 +59,37 @@ def find_layer(rest_root: str, folder: str, service: str,
     return None
 
 
+def find_layer_via_hub(hub_root: str,
+                       keywords: List[str]) -> Optional[str]:
+    """Discover a parcel feature layer via an ArcGIS Hub opendata site.
+
+    Hub subdomains (e.g. gis-cochise.opendata.arcgis.com) are NOT REST roots;
+    their datasets are listed in the DCAT-US 1.1 feed, whose distributions
+    link the underlying ArcGIS REST services.
+
+    Returns a full layer URL (MapServer/{id} or FeatureServer/{id}).
+    """
+    url = hub_root.rstrip("/") + "/api/feed/dcat-us/1.1.json"
+    r = fetch(url, ttl=24 * 3600, as_json=True, respect_robots=False)
+    if not r.ok or not isinstance(r.body, dict):
+        return None
+    best: Optional[str] = None
+    for ds in r.body.get("dataset") or []:
+        title = str(ds.get("title") or "").lower()
+        if not any(k in title for k in keywords):
+            continue
+        for dist in ds.get("distribution") or []:
+            for key in ("accessURL", "downloadURL"):
+                u = str(dist.get(key) or "")
+                if "/MapServer/" in u or "/FeatureServer/" in u:
+                    cand = u.rstrip("/")
+                    # prefer explicit layer endpoints
+                    if cand.split("/")[-1].isdigit():
+                        return cand
+                    best = best or cand
+    return best
+
+
 def query_layer(layer_url: str, where: str, out_fields: List[str],
                 max_records: int = 5000,
                 page_size: int = 1000) -> Iterator[Dict[str, Any]]:

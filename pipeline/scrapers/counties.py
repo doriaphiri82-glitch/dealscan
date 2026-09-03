@@ -70,7 +70,7 @@ COUNTY_SCRAPERS: Dict[str, Dict[str, Any]] = {
         "where": "1=1",
         "html_search_url": "https://www.mohave.gov/departments/assessor/assessor-search/",
         "delinquent_list_url": "https://www.mohave.gov/departments/information-technology/gis-maps/",
-        "verified": False,
+                "verified": False,
         "status": "Mohave has ArcGIS Hub + GeoCortex viewer (2k-record export)",
     },
         "el_paso_tx": {
@@ -98,13 +98,16 @@ def probe_county(county_id: str) -> List[ProbeResult]:
             # Test whether the OpenGovernment page is reachable and contains
             # the expected ~-delimited flat-file download links.
             try:
-                from scrapers.flatfile import discover_downloads
+                from scrapers.flatfile import discover_downloads, discover_links_sample
                 downloads = discover_downloads(og_url)
                 ok = bool(downloads)
+                detail = (f"flat-file downloads: {sorted(downloads.keys())}"
+                          if downloads else
+                          f"no data-file links found; sample hrefs: "
+                          f"{discover_links_sample(og_url, 8)}")
                 results.append(ProbeResult(
-                    county_id, "open_gov_url", og_url, ok, 200 if ok else 200,
-                    f"flat-file downloads: {list(downloads.keys())}" if downloads else "no .txt links found",
-                    verified=ok,
+                    county_id, "open_gov_url", og_url, ok, 200,
+                    detail, verified=ok,
                 ))
             except Exception as exc:
                 results.append(ProbeResult(county_id, "open_gov_url", og_url, False, 0,
@@ -112,9 +115,21 @@ def probe_county(county_id: str) -> List[ProbeResult]:
         return results
     root = cfg.get("arcgis_root")
     if root:
-        r = probe(f"{root}/arcgis/rest/services?f=json", county_id,
-                  "arcgis-root", expect="arcgis")
-        results.append(r)
+        if "opendata.arcgis.com" in root:
+            # Hub site: verify the DCAT feed yields a parcel feature layer
+            layer = arcgis.find_layer_via_hub(root, ["parcel", "ownership"])
+            results.append(ProbeResult(
+                county_id, "arcgis-hub-dcat",
+                f"{root}/api/feed/dcat-us/1.1.json",
+                layer is not None, 200 if layer else 404,
+                layer or "no parcel layer found in DCAT feed",
+                verified=layer is not None,
+                extras={"layer": layer or ""},
+            ))
+        else:
+            r = probe(f"{root}/arcgis/rest/services?f=json", county_id,
+                      "arcgis-root", expect="arcgis")
+            results.append(r)
         # If reachable, try to locate a parcel layer in each candidate service
         if r.verified:
             for folder, service, keywords in cfg.get("services", []):

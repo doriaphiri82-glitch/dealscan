@@ -10,7 +10,7 @@ Pipeline of one county scrape:
 from __future__ import annotations
 
 import traceback
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from config.counties import COUNTIES
 from database import get_top_deals, save_deal, save_property
@@ -45,7 +45,12 @@ def fetch_parcels(cfg: Dict[str, Any], county_id: str,
             return []
         props: List[Dict[str, Any]] = []
         for folder, service, keywords in cfg.get("services") or []:
-            layer = arcgis.find_layer(root, folder, service, keywords)
+            layer: Optional[str] = None
+            if "opendata.arcgis.com" in root:
+                # Hub subdomain: discover the real service via the DCAT feed
+                layer = arcgis.find_layer_via_hub(root, keywords)
+            if not layer:
+                layer = arcgis.find_layer(root, folder, service, keywords)
             if not layer:
                 continue
             for attrs in arcgis.query_layer(layer, cfg.get("where", "1=1"),

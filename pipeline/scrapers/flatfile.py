@@ -115,18 +115,29 @@ def discover_downloads(open_gov_url: str) -> Dict[str, str]:
     if not r.ok or not isinstance(r.body, str):
         return {}
     import re
-    from urllib.parse import urlparse
+    from urllib.parse import urljoin
     links: Dict[str, str] = {}
-    for m in re.finditer(r'href=["\']([^"\']+\.txt)["\']', r.body):
-        url = m.group(1)
-        if url.startswith("/"):
-            url = f"{urlparse(open_gov_url).scheme}://{urlparse(open_gov_url).netloc}{url}"
-        name = url.split("/")[-1].lower()
+    for m in re.finditer(r'href=["\']([^"\']+)["\']', r.body):
+        raw = m.group(1)
+        low = raw.lower()
+        if not any(ext in low for ext in (".txt", ".zip", ".csv")):
+            continue
+        url = urljoin(open_gov_url, raw)
         for key in ("properties", "owners", "lands", "values", "deeds"):
-            if key in name:
+            if key in low:
                 links[key] = url
                 break
     return links
+
+
+def discover_links_sample(open_gov_url: str, limit: int = 15) -> List[str]:
+    """Diagnostic: return sample hrefs from the page (probe debugging)."""
+    r = fetch(open_gov_url, ttl=24 * 3600)
+    if not r.ok or not isinstance(r.body, str):
+        return []
+    import re
+    hrefs = re.findall(r'href=["\']([^"\']+)["\']', r.body)
+    return [h[:120] for h in hrefs[:limit]]
 
 
 def fetch_el_paso_properties(county_id: str = "el_paso_tx",
