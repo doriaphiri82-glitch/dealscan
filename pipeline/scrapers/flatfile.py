@@ -183,7 +183,9 @@ def fetch_el_paso_properties(county_id: str = "el_paso_tx",
                 start = next(i for i, ln in enumerate(lines)
                              if ln.strip().lower() == "[properties]")
                 end = next((i for i in range(start + 1, len(lines))
-                            if lines[i].strip().startswith("[")), len(lines))
+                            # section headers start at col 0; fields are tab-indented
+                            if lines[i].lstrip() == lines[i]
+                            and lines[i].strip().startswith("[")), len(lines))
                 print(f"[debug] epcad [Properties] schema: "
                       f"{end - start - 1} columns")
                 for ln in lines[start + 1:end]:
