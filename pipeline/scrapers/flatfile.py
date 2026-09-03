@@ -177,10 +177,20 @@ def fetch_el_paso_properties(county_id: str = "el_paso_tx",
         sr = fetch(schema_url, ttl=7 * 24 * 3600, raw=True)
         if sr.ok and isinstance(sr.body, bytes):
             stext = sr.body.decode("utf-8", errors="replace")
-            print(f"[debug] epcad SCHEMA ({schema_url}):")
-            for ln in stext.splitlines()[:60]:
-                if ln.strip():
-                    print(f"[debug] epcad schema| {ln[:150]}")
+            # Print the complete [Properties] section (column order)
+            lines = stext.splitlines()
+            try:
+                start = next(i for i, ln in enumerate(lines)
+                             if ln.strip().lower() == "[properties]")
+                end = next((i for i in range(start + 1, len(lines))
+                            if lines[i].strip().startswith("[")), len(lines))
+                print(f"[debug] epcad [Properties] schema: "
+                      f"{end - start - 1} columns")
+                for ln in lines[start + 1:end]:
+                    if ln.strip():
+                        print(f"[debug] epcad schema| {ln.strip()[:120]}")
+            except StopIteration:
+                print(f"[debug] epcad: no [Properties] section in schema")
         else:
             print(f"[debug] epcad schema fetch failed: "
                   f"ok={sr.ok} err={sr.error[:80] if sr.error else ''}")

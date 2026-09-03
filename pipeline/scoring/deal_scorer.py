@@ -116,10 +116,10 @@ def detect_motivation_signals(property_data: Dict) -> List[str]:
         signals.append('long_ownership')
     if not property_data.get('has_improvements', False):
         signals.append('no_improvements')
-    land_use = property_data.get('land_use', '').lower()
+    land_use = str(property_data.get('land_use') or '').lower()
     if 'vacant' in land_use or 'unimproved' in land_use:
         signals.append('vacant_land')
-    owner_name = property_data.get('owner_name', '').lower()
+    owner_name = str(property_data.get('owner_name') or '').lower()
     if any(t in owner_name for t in ['estate', 'trust', 'heirs', 'executor']):
         signals.append('probate')
     return signals
