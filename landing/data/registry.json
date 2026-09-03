@@ -10,6 +10,42 @@
     "published": 0
    },
    "error": "",
+   "at": "2026-09-03T16:43:17.348419+00:00"
+  },
+  {
+   "county_id": "mohave_az",
+   "status": "ok",
+   "counts": {
+    "found": 5000,
+    "vacant": 5000,
+    "saved": 0,
+    "published": 0
+   },
+   "error": "",
+   "at": "2026-09-03T16:43:10.782050+00:00"
+  },
+  {
+   "county_id": "cochise_az",
+   "status": "ok",
+   "counts": {
+    "found": 5000,
+    "vacant": 5000,
+    "saved": 0,
+    "published": 0
+   },
+   "error": "",
+   "at": "2026-09-03T16:42:50.870848+00:00"
+  },
+  {
+   "county_id": "el_paso_tx",
+   "status": "ok",
+   "counts": {
+    "found": 0,
+    "vacant": 0,
+    "saved": 0,
+    "published": 0
+   },
+   "error": "",
    "at": "2026-09-03T14:04:49.985471+00:00"
   },
   {
@@ -323,6 +359,6 @@
    "published": 0
   },
   "error": "",
-  "at": "2026-09-03T14:04:49.985471+00:00"
+  "at": "2026-09-03T16:43:17.348419+00:00"
  }
 }
