@@ -73,17 +73,15 @@ COUNTY_SCRAPERS: Dict[str, Dict[str, Any]] = {
         "verified": False,
         "status": "Mohave has ArcGIS Hub + GeoCortex viewer (2k-record export)",
     },
-    "el_paso_tx": {
+        "el_paso_tx": {
         "name": "El Paso County, TX",
         "data_mode": "flatfile",
         "open_gov_url": "https://epcad.org/OpenGovernment",
         "fields": _DEFAULT_FIELDS,
         "defaults": {"county_state": "Texas"},
         "where": "1=1",
-        "html_search_url": "https://epcad.org/OpenGovernment",
-        "delinquent_list_url": "https://epcad.org/OpenGovernment",
         "verified": False,
-        "status": "EPCAD publishes CAMA flat files (Properties/Owners/Values); probe confirms",
+        "status": "EPCAD publishes CAMA flat files (Properties/Owners/Values); probe confirms open_gov_url",
     },
 }
 
@@ -93,6 +91,25 @@ def probe_county(county_id: str) -> List[ProbeResult]:
     if not cfg:
         return [ProbeResult(county_id, "registry", "", False, 0, "unknown county")]
     results: List[ProbeResult] = []
+    data_mode = cfg.get("data_mode", "arcgis")
+    if data_mode == "flatfile":
+        og_url = cfg.get("open_gov_url")
+        if og_url:
+            # Test whether the OpenGovernment page is reachable and contains
+            # the expected ~-delimited flat-file download links.
+            try:
+                from scrapers.flatfile import discover_downloads
+                downloads = discover_downloads(og_url)
+                ok = bool(downloads)
+                results.append(ProbeResult(
+                    county_id, "open_gov_url", og_url, ok, 200 if ok else 200,
+                    f"flat-file downloads: {list(downloads.keys())}" if downloads else "no .txt links found",
+                    verified=ok,
+                ))
+            except Exception as exc:
+                results.append(ProbeResult(county_id, "open_gov_url", og_url, False, 0,
+                                           f"error: {exc}", verified=False))
+        return results
     root = cfg.get("arcgis_root")
     if root:
         r = probe(f"{root}/arcgis/rest/services?f=json", county_id,
