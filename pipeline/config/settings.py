@@ -29,7 +29,9 @@ SCORING_WEIGHTS = {
 }
 
 # Deal thresholds
-MIN_PROFIT_ESTIMATE = 2000      # Minimum estimated profit to include
+# Keep this low enough to surface real opportunities in rural counties while
+# still preventing zero/near-zero profit records from becoming deals.
+MIN_PROFIT_ESTIMATE = 1000     # Minimum estimated profit to include
 MIN_DEAL_SCORE = 40             # Minimum score to deliver
 MAX_DEALS_PER_EMAIL = 10        # Max deals in daily email
 MIN_DEALS_PER_EMAIL = 3         # Min deals (if fewer qualify, send what we have)
@@ -42,7 +44,7 @@ MIN_OWNERSHIP_YEARS = 10        # Years owned (long-term = more motivated)
 # County data
 DEFAULT_COUNTIES = [
     'cochise_az',
-    'mohave_az', 
+    'mohave_az',
     'el_paso_tx',
     'hudson_co',
     'socorro_nm',
