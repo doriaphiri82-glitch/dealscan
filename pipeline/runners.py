@@ -37,8 +37,10 @@ def fetch_parcels(cfg: Dict[str, Any], county_id: str,
     mode = cfg.get("data_mode", "arcgis")
     if mode == "flatfile":
         from scrapers.flatfile import fetch_el_paso_properties
-        return fetch_el_paso_properties(
+        props = fetch_el_paso_properties(
             county_id, max_records=max_records)
+        print(f"[debug] flatfile {county_id}: fetched {len(props)} properties")
+        return props
     if mode == "arcgis":
         root = cfg.get("arcgis_root")
         if not root:
@@ -52,13 +54,22 @@ def fetch_parcels(cfg: Dict[str, Any], county_id: str,
             if not layer:
                 layer = arcgis.find_layer(root, folder, service, keywords)
             if not layer:
+                print(f"[debug] arcgis {county_id}: no layer for "
+                      f"{folder}/{service} {keywords}")
                 continue
+            print(f"[debug] arcgis {county_id}: querying layer {layer}")
+            got = 0
             for attrs in arcgis.query_layer(layer, cfg.get("where", "1=1"),
                                             list(cfg.get("fields", {}).values()),
                                             max_records=max_records):
+                got += 1
+                if got == 1:
+                    print(f"[debug] arcgis {county_id}: sample field keys: "
+                          f"{sorted(attrs.keys())[:20]}")
                 prop = arcgis.map_attributes(attrs, cfg.get("fields", {}),
                                              county_id, cfg.get("defaults", {}))
                 props.append(prop)
+            print(f"[debug] arcgis {county_id}: layer returned {got} records")
             if props:
                 break  # first service that yields data wins
         return props

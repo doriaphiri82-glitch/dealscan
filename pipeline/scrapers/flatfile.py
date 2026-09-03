@@ -145,13 +145,18 @@ def fetch_el_paso_properties(county_id: str = "el_paso_tx",
     """Download and parse EPCAD Properties; return normalized Property dicts."""
     open_gov = "https://epcad.org/OpenGovernment"
     downloads = discover_downloads(open_gov)
+    print(f"[debug] epcad downloads: {downloads}")
     props_url = downloads.get("properties")
     if not props_url:
         return []
     r = fetch(props_url, ttl=7 * 24 * 3600)  # cache data 7 days
+    print(f"[debug] epcad properties fetch ok={r.ok} status={r.status} "
+          f"error={r.error[:80] if r.error else ''}")
     if not r.ok or not isinstance(r.body, str):
         return []
     rows = parse_flat_file(r.body)
+    print(f"[debug] epcad parsed {len(rows)} rows; "
+          f"headers sample: {list(rows[0].keys())[:20] if rows else 'none'}")
     out = []
     for row in rows:
         prop = map_epcad_property(row, county_id, {"county_state": "Texas"})
