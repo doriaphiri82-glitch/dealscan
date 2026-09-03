@@ -152,7 +152,7 @@ def post_json(url: str, payload: Dict[str, Any], timeout: int = 30,
     for attempt in range(retries + 1):
         _politeness_delay(url)
         try:
-            resp = _session.post(url, json=payload, timeout=timeout)
+            resp = _session.post(url, data=payload, timeout=timeout)
             if resp.status_code == 200:
                 return FetchResult(ok=True, status=200, body=resp.json())
             if resp.status_code == 429 and attempt < retries:

@@ -123,9 +123,10 @@ def discover_downloads(open_gov_url: str) -> Dict[str, str]:
         if not any(ext in low for ext in (".txt", ".zip", ".csv")):
             continue
         url = urljoin(open_gov_url, raw)
-        for key in ("properties", "owners", "lands", "values", "deeds"):
+        for key in ("properties", "owners", "lands", "values", "deeds",
+                    "schema"):
             if key in low:
-                links[key] = url
+                links.setdefault(key, url)
                 break
     return links
 
@@ -169,6 +170,25 @@ def fetch_el_paso_properties(county_id: str = "el_paso_tx",
             text = raw_bytes.decode("utf-8", errors="replace")
     except zipfile.BadZipFile:
         text = r.body.decode("utf-8", errors="replace")
+    # The Properties file has NO header row; EPCAD publishes a Schema
+    # Summary documenting the column order. Fetch + log it for mapping.
+    schema_url = downloads.get("schema")
+    if schema_url:
+        sr = fetch(schema_url, ttl=7 * 24 * 3600, raw=True)
+        if sr.ok and isinstance(sr.body, bytes):
+            stext = sr.body.decode("utf-8", errors="replace")
+            print(f"[debug] epcad SCHEMA ({schema_url}):")
+            for ln in stext.splitlines()[:60]:
+                if ln.strip():
+                    print(f"[debug] epcad schema| {ln[:150]}")
+        else:
+            print(f"[debug] epcad schema fetch failed: "
+                  f"ok={sr.ok} err={sr.error[:80] if sr.error else ''}")
+    raw_lines = text.splitlines()
+    print(f"[debug] epcad first lines (no header expected):")
+    for ln in raw_lines[:2]:
+        cells = ln.split("~")
+        print(f"[debug] epcad line: {len(cells)} cells | {cells[:14]}")
     rows = parse_flat_file(text)
     print(f"[debug] epcad parsed {len(rows)} rows; "
           f"headers sample: {list(rows[0].keys())[:20] if rows else 'none'}")
