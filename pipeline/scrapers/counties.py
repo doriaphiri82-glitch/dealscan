@@ -130,15 +130,16 @@ def probe_county(county_id: str) -> List[ProbeResult]:
             r = probe(f"{root}/arcgis/rest/services?f=json", county_id,
                       "arcgis-root", expect="arcgis")
             results.append(r)
-        # If reachable, try to locate a parcel layer in each candidate service
-        if r.verified:
-            for folder, service, keywords in cfg.get("services", []):
-                layer = arcgis.find_layer(root, folder, service, keywords)
-                results.append(ProbeResult(
-                    county_id, f"layer:{folder}/{service}",
-                    layer or f"{root}/arcgis/rest/services/{folder}/{service}",
-                    layer is not None, 200 if layer else 404,
-                    layer or "layer not found", verified=layer is not None))
+            # If reachable, try to locate a parcel layer in each candidate
+            # service (non-hub REST roots only)
+            if r.verified:
+                for folder, service, keywords in cfg.get("services", []):
+                    layer = arcgis.find_layer(root, folder, service, keywords)
+                    results.append(ProbeResult(
+                        county_id, f"layer:{folder}/{service}",
+                        layer or f"{root}/arcgis/rest/services/{folder}/{service}",
+                        layer is not None, 200 if layer else 404,
+                        layer or "layer not found", verified=layer is not None))
     for key in ("html_search_url", "delinquent_list_url"):
         if cfg.get(key):
             results.append(probe(cfg[key], county_id, key, expect="http"))
