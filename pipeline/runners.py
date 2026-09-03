@@ -35,6 +35,10 @@ def fetch_parcels(cfg: Dict[str, Any], county_id: str,
       * data_file: read from a local JSON/CSV (tests/dev, or a cached export).
     """
     mode = cfg.get("data_mode", "arcgis")
+    if mode == "flatfile":
+        from scrapers.flatfile import fetch_el_paso_properties
+        return fetch_el_paso_properties(
+            county_id, max_records=max_records)
     if mode == "arcgis":
         root = cfg.get("arcgis_root")
         if not root:

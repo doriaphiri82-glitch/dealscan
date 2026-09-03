@@ -11,6 +11,9 @@ on:
 env:
   PYTHONDONTWRITEBYTECODE: '1'
 
+permissions:
+  contents: write
+
 jobs:
   scrape:
     runs-on: ubuntu-latest

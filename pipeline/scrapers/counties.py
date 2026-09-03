@@ -43,7 +43,7 @@ _DEFAULT_FIELDS = {
 COUNTY_SCRAPERS: Dict[str, Dict[str, Any]] = {
     "cochise_az": {
         "name": "Cochise County, AZ",
-        "arcgis_root": "https://gis.cochise.az.gov",
+        "arcgis_root": "https://gis-cochise.opendata.arcgis.com",
         # Candidate service folder/service names, probed in order.
         "services": [
             ("Parcels", "Parcels", ["parcel", "ownership"]),
@@ -53,14 +53,14 @@ COUNTY_SCRAPERS: Dict[str, Dict[str, Any]] = {
         "fields": _DEFAULT_FIELDS,
         "defaults": {"county_state": "Arizona"},
         "where": "1=1",
-        "html_search_url": "https://assessor.cochise.az.gov/",
+        "html_search_url": "https://parcelinquirytreasurer.cochise.az.gov/Main/ParcelSearch",
         "delinquent_list_url": "https://www.cochise.az.gov/treasurer",
         "verified": False,
-        "status": "UNVERIFIED - probe from allowed network (GitHub Actions)",
+        "status": "Cochise has ArcGIS Hub + Treasurer Parcel Inquiry w/ CSV export",
     },
     "mohave_az": {
         "name": "Mohave County, AZ",
-        "arcgis_root": "https://gis.mohave.gov",
+        "arcgis_root": "https://az-mohave.opendata.arcgis.com",
         "services": [
             ("Parcels", "Parcels", ["parcel", "ownership"]),
             ("Hosted", "Hosted", ["parcel", "ownership"]),
@@ -68,25 +68,22 @@ COUNTY_SCRAPERS: Dict[str, Dict[str, Any]] = {
         "fields": _DEFAULT_FIELDS,
         "defaults": {"county_state": "Arizona"},
         "where": "1=1",
-        "html_search_url": "https://assessor.mohave.gov/",
-        "delinquent_list_url": "https://www.mohave.gov/treasurer",
+        "html_search_url": "https://www.mohave.gov/departments/assessor/assessor-search/",
+        "delinquent_list_url": "https://www.mohave.gov/departments/information-technology/gis-maps/",
         "verified": False,
-        "status": "UNVERIFIED - Mohave may require qPublic; confirm in probe",
+        "status": "Mohave has ArcGIS Hub + GeoCortex viewer (2k-record export)",
     },
     "el_paso_tx": {
         "name": "El Paso County, TX",
-        "arcgis_root": "https://gis.epcad.org",
-        "services": [
-            ("Parcel", "Parcel", ["parcel", "land"]),
-            ("Hosted", "Hosted", ["parcel", "land"]),
-        ],
+        "data_mode": "flatfile",
+        "open_gov_url": "https://epcad.org/OpenGovernment",
         "fields": _DEFAULT_FIELDS,
         "defaults": {"county_state": "Texas"},
         "where": "1=1",
-        "html_search_url": "https://epcad.org/PropertySearch/",
-        "delinquent_list_url": "https://epcad.org/TaxSale/",
+        "html_search_url": "https://epcad.org/OpenGovernment",
+        "delinquent_list_url": "https://epcad.org/OpenGovernment",
         "verified": False,
-        "status": "UNVERIFIED - EPCAD publishes bulk data; confirm in probe",
+        "status": "EPCAD publishes CAMA flat files (Properties/Owners/Values); probe confirms",
     },
 }
 

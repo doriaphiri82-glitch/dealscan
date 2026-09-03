@@ -1,0 +1,151 @@
+"""
+DealScan - Flat-file scraper for county bulk data exports.
+
+Currently targets El Paso CAD (EPCAD) Open Government CAMA flat files:
+  * https://epcad.org/OpenGovernment
+  * Delimited flat files (.txt): Properties, Owners, Lands, Values, Deeds
+  * Row delimiter: newline; Column delimiter: ~
+  * Published specifically "for development use"
+
+Usage is explicitly permitted by EPCAD.
+"""
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from scrapers.base import fetch
+
+EPCAD_FIELD_MAP = {
+    "apn": ("ACCOUNT", "ACCOUNTNO", "ACCT", "PARCEL", "ACCOUNT#"),
+    "address": ("SITUSADDRESS", "SITUS_ADDR", "LOCADDRESS", "SITEADDRESS"),
+    "lot_size_acres": ("ACREAGE", "ACRES", "LANDACRES"),
+    "assessed_value": ("ASSESSEDVALUE", "ASSESSED_VALUE", "ASSESSVAL"),
+    "market_value": ("TOTALVALUE", "MARKETVALUE", "MARKET_VALUE", "APPRVALUE"),
+    "owner_name": ("OWNERNAME", "OWNER_NAME", "OWNER1"),
+    "owner_address": ("OWNERMAILADDR", "OWNERADDRESS", "MAILADDR"),
+    "owner_state": ("OWNERSTATE", "OWNER_STATE", "MAILSTATE"),
+    "tax_amount": ("TAXAMOUNT", "TAX_AMT", "TAXES"),
+    "land_use": ("LANDUSE", "LAND_USE", "PROPERTY_TYPE"),
+    "zoning": ("ZONING", "ZONE"),
+    "legal_description": ("LEGALDESC", "LEGAL_DESC", "LEGENDESC"),
+    "latitude": ("LATITUDE", "LAT"),
+    "longitude": ("LONGITUDE", "LON", "LNG"),
+    "last_sale_price": ("SALEPRICE", "SALE_PRICE", "LASTSALEPRICE"),
+    "last_sale_date": ("SALEDATE", "SALE_DATE", "LASTSALEDATE"),
+    "total_sqft": ("TOTALSQFT", "TOTALAREA", "SQUARE_FOOTAGE"),
+    "year_built": ("YEARBUILT", "YEAR_BUILT"),
+}
+
+
+def _pick(row: Dict[str, Any], aliases: tuple, default: Any = None) -> Any:
+    for a in aliases:
+        if a in row and row[a] is not None and str(row[a]).strip() != "":
+            return row[a]
+    return default
+
+
+def _to_float(v: Any) -> Optional[float]:
+    if v is None:
+        return None
+    s = str(v).strip().replace(",", "").replace("$", "").strip('"')
+    if s in ("", "0", "-", "N/A"):
+        return None
+    if "sqft" in s.lower():
+        try:
+            return float(s.lower().replace("sqft", "").strip()) / 43560.0
+        except ValueError:
+            return None
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_flat_file(text: str) -> List[Dict[str, Any]]:
+    """Parse a '~'-delimited flat file with a header row into dicts."""
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return []
+    rows: List[Dict[str, Any]] = []
+    first = [c.strip() for c in lines[0].split("~")]
+    has_header = any(any(ch.isalpha() for ch in cell) for cell in first) and len(
+        first) > 3
+    start = 1 if has_header else 0
+    headers = first if has_header else [f"col{i}" for i in range(len(first))]
+    for ln in lines[start:]:
+        cells = [c.strip() for c in ln.split("~")]
+        while len(cells) < len(headers):
+            cells.append("")
+        rows.append(dict(zip(headers, cells[: len(headers)])))
+    return rows
+
+
+def map_epcad_property(raw: Dict[str, Any], county_id: str,
+                       defaults: Dict[str, Any]) -> Dict[str, Any]:
+    """Map an EPCAD CAMA row to the pipeline Property shape."""
+    prop = {
+        "apn": _pick(raw, EPCAD_FIELD_MAP["apn"]),
+        "address": _pick(raw, EPCAD_FIELD_MAP["address"]),
+        "lot_size_acres": _to_float(_pick(raw, EPCAD_FIELD_MAP["lot_size_acres"])),
+        "assessed_value": _to_float(_pick(raw, EPCAD_FIELD_MAP["assessed_value"])),
+        "market_value": _to_float(_pick(raw, EPCAD_FIELD_MAP["market_value"])),
+        "owner_name": _pick(raw, EPCAD_FIELD_MAP["owner_name"]),
+        "owner_address": _pick(raw, EPCAD_FIELD_MAP["owner_address"]),
+        "owner_state": _pick(raw, EPCAD_FIELD_MAP["owner_state"]),
+        "tax_amount": _to_float(_pick(raw, EPCAD_FIELD_MAP["tax_amount"])),
+        "land_use": _pick(raw, EPCAD_FIELD_MAP["land_use"]),
+        "zoning": _pick(raw, EPCAD_FIELD_MAP["zoning"]),
+        "legal_description": _pick(raw, EPCAD_FIELD_MAP["legal_description"]),
+        "latitude": _to_float(_pick(raw, EPCAD_FIELD_MAP["latitude"])),
+        "longitude": _to_float(_pick(raw, EPCAD_FIELD_MAP["longitude"])),
+        "last_sale_price": _to_float(_pick(raw, EPCAD_FIELD_MAP["last_sale_price"])),
+        "last_sale_date": _pick(raw, EPCAD_FIELD_MAP["last_sale_date"]),
+        "year_acquired": 0,
+        "tax_delinquent_years": 0,
+        "has_improvements": False,
+        "county_id": county_id,
+        **defaults,
+    }
+    return prop
+
+
+def discover_downloads(open_gov_url: str) -> Dict[str, str]:
+    """Fetch the OpenGovernment page and collect flat-file download URLs."""
+    r = fetch(open_gov_url, ttl=24 * 3600)
+    if not r.ok or not isinstance(r.body, str):
+        return {}
+    import re
+    from urllib.parse import urlparse
+    links: Dict[str, str] = {}
+    for m in re.finditer(r'href=["\']([^"\']+\.txt)["\']', r.body):
+        url = m.group(1)
+        if url.startswith("/"):
+            url = f"{urlparse(open_gov_url).scheme}://{urlparse(open_gov_url).netloc}{url}"
+        name = url.split("/")[-1].lower()
+        for key in ("properties", "owners", "lands", "values", "deeds"):
+            if key in name:
+                links[key] = url
+                break
+    return links
+
+
+def fetch_el_paso_properties(county_id: str = "el_paso_tx",
+                             max_records: int = 50000) -> List[Dict[str, Any]]:
+    """Download and parse EPCAD Properties; return normalized Property dicts."""
+    open_gov = "https://epcad.org/OpenGovernment"
+    downloads = discover_downloads(open_gov)
+    props_url = downloads.get("properties")
+    if not props_url:
+        return []
+    r = fetch(props_url, ttl=7 * 24 * 3600)  # cache data 7 days
+    if not r.ok or not isinstance(r.body, str):
+        return []
+    rows = parse_flat_file(r.body)
+    out = []
+    for row in rows:
+        prop = map_epcad_property(row, county_id, {"county_state": "Texas"})
+        if prop.get("apn"):
+            out.append(prop)
+        if len(out) >= max_records:
+            break
+    return out
