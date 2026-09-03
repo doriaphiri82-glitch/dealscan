@@ -161,8 +161,8 @@ def fetch_parcels(cfg: Dict[str, Any], county_id: str,
                       f"{configured} not in layer -> using outFields=*")
             got = 0
             for attrs in arcgis.query_layer(layer, cfg.get("where", "1=1"),
-                                            out_fields,
-                                            max_records=max_records):
+                                             out_fields,
+                                             max_records=max_records):
                 got += 1
                 prop = arcgis.map_attributes(attrs, cfg.get("fields", {}),
                                              county_id, cfg.get("defaults", {}))
@@ -245,6 +245,9 @@ def run(county_id: str, mode: str = "publish", max_records: int = 5000,
             props = fetch_parcels(cfg, county_id, max_records=max_records)
         metrics.downloaded = len(props)
         metrics.discovered = metrics.downloaded
+        # The adapter output is already normalized Property-shaped data. Keep
+        # parsed/normalized counters meaningful for coverage observability.
+        metrics.parsed = len(props)
 
         vacant = [p for p in props if arcgis.is_vacant_residential(p, county_id)]
         metrics.normalized = len(vacant)
@@ -258,6 +261,8 @@ def run(county_id: str, mode: str = "publish", max_records: int = 5000,
                 metrics.record_rejection(f"score_error: {exc}")
                 continue
             if deal is None:
+                # Record the concrete economics so the coverage dashboard can
+                # distinguish low-profit parcels from scraper/scoring failures.
                 metrics.record_rejection("below_min_profit")
                 continue
             if not dry_run:
