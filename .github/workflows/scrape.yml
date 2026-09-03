@@ -2,6 +2,8 @@ name: dealscan-pipeline
 
 on:
   schedule:
+    # Every 6 minutes — frequent delta scrape + publish
+    - cron: '*/6 * * * *'
     # Daily (06:30 UTC) — delta scrape + publish
     - cron: '30 6 * * *'
     # Weekly full scrape (Mon 02:00 UTC) — deep refresh
@@ -61,9 +63,11 @@ jobs:
         run: |
           git config user.name "DealScan Pipeline"
           git config user.email "pipeline@dealscan.app"
+          # Override SSH remote from checkout with HTTPS token so push works
+          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
           git add -f pipeline/data/registry.json pipeline/data/bundle.json \
                    landing/data/bundle.json landing/data/registry.json || true
           git commit -m "chore: pipeline run $(date -u +%F-%H%M)" || echo "no changes to commit"
-          git push origin main || echo "push skipped (artifact only)"
+          git push origin HEAD:main || echo "push skipped (artifact only)"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
