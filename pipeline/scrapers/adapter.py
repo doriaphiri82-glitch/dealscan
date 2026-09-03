@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 @dataclass
@@ -30,7 +30,7 @@ class ScrapeResult:
 
 
 class BaseScraperAdapter(ABC):
-    """Abstract base for all county scraper adapters."""
+    """Abstract base for all county-specific scraper adapters."""
 
     @abstractmethod
     def discover(self, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -45,17 +45,72 @@ class BaseScraperAdapter(ABC):
         """Return True if the record is valid enough to keep."""
 
     def normalize(self, record: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
-        return record
+        """Map county/source fields into DealScan's canonical Property shape.
+
+        County configs define ``fields`` as canonical_field -> source_field.
+        Previously the base adapter returned raw ArcGIS attributes unchanged,
+        which meant scoring could not see market_value, land_use, owner data,
+        etc. This normalization layer makes the adapter contract consistent
+        across all county sources while preserving unmapped source fields.
+        """
+        field_map = cfg.get("fields") or {}
+        defaults = dict(cfg.get("defaults") or {})
+        county_id = cfg.get("county_id")
+
+        def get_value(src_field: str) -> Any:
+            if not src_field:
+                return None
+            if "." in src_field:
+                cur: Any = record
+                for part in src_field.split("."):
+                    if isinstance(cur, dict):
+                        cur = cur.get(part)
+                    else:
+                        return None
+                return cur
+            return record.get(src_field)
+
+        normalized = dict(record)
+        normalized.update(defaults)
+        for canonical, source in field_map.items():
+            value = get_value(source)
+            # Keep an existing canonical value when the configured source is
+            # absent, which helps adapters that already return normalized data.
+            if value is not None or canonical not in normalized:
+                normalized[canonical] = value
+
+        if county_id:
+            normalized["county_id"] = county_id
+
+        # Canonical numeric fields used by scoring/filtering.
+        for key in ("lot_size_acres", "assessed_value", "market_value", "tax_amount", "latitude", "longitude"):
+            value = normalized.get(key)
+            if value in (None, "", " "):
+                normalized[key] = None
+                continue
+            try:
+                normalized[key] = float(value)
+            except (TypeError, ValueError):
+                normalized[key] = None
+
+        for key in ("tax_delinquent_years", "year_acquired"):
+            value = normalized.get(key)
+            try:
+                normalized[key] = int(float(value)) if value not in (None, "", " ") else 0
+            except (TypeError, ValueError):
+                normalized[key] = 0
+
+        return normalized
 
     def run(self, cfg: Dict[str, Any], max_records: int = 5000) -> ScrapeResult:
-        county_id = cfg.get("county_id", cfg.get("county_id", "unknown"))
+        county_id = cfg.get("county_id", "unknown")
         result = ScrapeResult(county_id=county_id, source_type=self.__class__.__name__)
         raw: List[Dict[str, Any]] = []
         try:
             raw = self.discover(cfg)
         except Exception as exc:
             result.errors.append(f"discover_error: {exc}")
-            return result
+            return result, []
         result.discovered = len(raw)
         result.downloaded = len(raw)
         parsed: List[Dict[str, Any]] = []
