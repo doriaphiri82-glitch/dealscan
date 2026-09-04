@@ -112,7 +112,8 @@ def discover_arcgis_county_config(county_id: str, county_name: str, state: str) 
         for layer,lm in candidates:
             fm=_field_map(lm); quality=_source_quality(fm,lm)
             if "apn" in fm or lm.get("objectIdField") or lm.get("geometryType"):
-                return {"name":f"{county_name}, {state}","data_mode":"arcgis","arcgis_layer_url":layer,"arcgis_root":root,"fields":fm,"defaults":{"county_state":state},"where":"1=1","verified":False,"discovery_source":"arcgis_online","discovery_score":score,"status":"DISCOVERED_NOT_VERIFIED",**quality}
+                modified=item.get("modified") or lm.get("lastEditDate") or lm.get("editingInfo",{}).get("lastEditDate")
+                return {"name":f"{county_name}, {state}","data_mode":"arcgis","arcgis_layer_url":layer,"arcgis_root":root,"fields":fm,"defaults":{"county_state":state},"where":"1=1","verified":False,"discovery_source":"arcgis_online","discovery_score":score,"source_last_modified":modified,"status":"DISCOVERED_NOT_VERIFIED",**quality}
     return None
 
 def probe_county_sources(county_id: str, cfg: Dict[str,Any]) -> List[Dict[str,Any]]:
