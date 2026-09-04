@@ -1,17 +1,14 @@
-"""
-DealScan - Source discovery engine.
+"""DealScan source discovery.
 
-Probes county websites and GIS portals to identify likely public
-parcel/property-data sources without manual per-county research.
+Discovers configured sources and public ArcGIS Online parcel layers.
+Discovery is never treated as verification until extraction succeeds.
 """
 from __future__ import annotations
-
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-
+from urllib.parse import quote_plus
 from scrapers.base import fetch, probe
-
 
 @dataclass
 class SourceCandidate:
@@ -20,95 +17,97 @@ class SourceCandidate:
     confidence: float
     notes: str = ""
 
-
 def discover_arcgis_sources(county_cfg: Dict[str, Any]) -> List[SourceCandidate]:
-    candidates: List[SourceCandidate] = []
-    root = county_cfg.get("arcgis_root")
-    if not root:
-        return candidates
-    if "opendata.arcgis.com" in root:
-        candidates.append(SourceCandidate(
-            url=f"{root}/api/feed/dcat-us/1.1.json",
-            source_type="arcgis_hub",
-            confidence=0.9,
-            notes="ArcGIS Hub DCAT feed",
-        ))
-    else:
-        candidates.append(SourceCandidate(
-            url=f"{root}/arcgis/rest/services?f=json",
-            source_type="arcgis_rest",
-            confidence=0.8,
-            notes="ArcGIS REST services directory",
-        ))
-    layer_url = county_cfg.get("arcgis_layer_url")
-    if layer_url:
-        candidates.append(SourceCandidate(
-            url=layer_url,
-            source_type="arcgis_layer",
-            confidence=1.0,
-            notes="Explicit layer URL",
-        ))
-    return candidates
-
+    out=[]; root=county_cfg.get("arcgis_root")
+    if root:
+        root=root.rstrip("/")
+        if "opendata.arcgis.com" in root: out.append(SourceCandidate(f"{root}/api/feed/dcat-us/1.1.json","arcgis_hub",.9,"ArcGIS Hub DCAT feed"))
+        elif "/FeatureServer/" in root or "/MapServer/" in root: out.append(SourceCandidate(root,"arcgis_layer",1.0,"Configured ArcGIS layer"))
+        else: out.append(SourceCandidate(f"{root}/arcgis/rest/services?f=json","arcgis_rest",.8,"ArcGIS REST services directory"))
+    if county_cfg.get("arcgis_layer_url"): out.append(SourceCandidate(county_cfg["arcgis_layer_url"].rstrip("/"),"arcgis_layer",1.0,"Explicit layer URL"))
+    return out
 
 def discover_flatfile_sources(county_cfg: Dict[str, Any]) -> List[SourceCandidate]:
-    candidates: List[SourceCandidate] = []
-    for key in ("parcel_source_url", "open_gov_url", "data_url"):
-        url = county_cfg.get(key)
-        if not url:
-            continue
-        candidates.append(SourceCandidate(
-            url=url,
-            source_type="flatfile",
-            confidence=0.7,
-            notes=f"Configured {key}",
-        ))
-    return candidates
-
+    return [SourceCandidate(county_cfg[k],"flatfile",.7,f"Configured {k}") for k in ("parcel_source_url","open_gov_url","data_url") if county_cfg.get(k)]
 
 def discover_sources(county_cfg: Dict[str, Any]) -> List[SourceCandidate]:
-    candidates = []
-    candidates.extend(discover_arcgis_sources(county_cfg))
-    candidates.extend(discover_flatfile_sources(county_cfg))
-    seen = set()
-    unique = []
-    for c in candidates:
-        if c.url not in seen:
-            seen.add(c.url)
-            unique.append(c)
-    unique.sort(key=lambda c: c.confidence, reverse=True)
-    return unique
+    seen=set(); out=[]
+    for c in sorted(discover_arcgis_sources(county_cfg)+discover_flatfile_sources(county_cfg),key=lambda x:x.confidence,reverse=True):
+        if c.url not in seen: seen.add(c.url); out.append(c)
+    return out
 
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+"," ",s.lower()).strip()
 
-def probe_county_sources(county_id: str, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
-    results = []
-    for candidate in discover_sources(cfg):
+def _pick(fields: List[Dict[str,Any]], patterns: List[str]) -> Optional[str]:
+    for p in patterns:
+        rx=re.compile(p,re.I)
+        for f in fields:
+            if rx.search(str(f.get("name") or "")) or rx.search(str(f.get("alias") or "")): return str(f.get("name"))
+    return None
+
+def _field_map(meta: Dict[str,Any]) -> Dict[str,str]:
+    fields=meta.get("fields") or []
+    pairs={
+      "apn":[r"(^|_)apn($|_)",r"parcel.?id",r"parcel.?number",r"property.?id",r"prop.?id",r"tax.?pin",r"account.?number"],
+      "address":[r"situs",r"site.?address",r"property.?address",r"street.?address",r"address"],
+      "lot_size_acres":[r"acre",r"land.?area",r"lot.?size",r"parcel.?area"],
+      "assessed_value":[r"assess.*value",r"assessed",r"assessment"],
+      "market_value":[r"market.*value",r"full.?cash",r"appraised.*value",r"tax.?value"],
+      "owner_name":[r"owner.*name",r"owner",r"taxpayer"],
+      "owner_address":[r"owner.*address",r"mail.*address",r"mailing"],
+      "owner_state":[r"owner.*state",r"mail.*state"],
+      "tax_amount":[r"tax.*amount",r"taxes"],
+      "tax_delinquent_years":[r"delinq",r"delinquent"],
+      "year_acquired":[r"sale.?year",r"year.?acq",r"acq.*year"],
+      "zoning":[r"zoning",r"zone"],
+      "land_use":[r"land.?use",r"use.?code",r"property.?class",r"class.?code"],
+      "has_improvements":[r"improvement",r"imprv"],
+      "legal_description":[r"legal",r"description"],
+      "latitude":[r"latitude",r"lat($|_)"] , "longitude":[r"longitude",r"long($|_")]}
+    return {dest:f for dest,ps in pairs.items() if (f:=_pick(fields,ps))}
+
+def discover_arcgis_county_config(county_id: str, county_name: str, state: str) -> Optional[Dict[str,Any]]:
+    """Discover a public ArcGIS parcel layer for one county on demand."""
+    county=_norm(county_name.replace(" County","")); st=_norm(state)
+    q=f'("{county}" OR "{county_name}") AND (parcel OR parcels) AND ("{state}" OR {st})'
+    url="https://www.arcgis.com/sharing/rest/search?f=json&num=100&q="+quote_plus(q)
+    r=fetch(url,ttl=6*3600,as_json=True,respect_robots=False)
+    if not r.ok or not isinstance(r.body,dict): return None
+    ranked=[]
+    for item in r.body.get("results") or []:
+        typ=str(item.get("type") or "").lower()
+        if typ not in ("feature service","map service","feature layer") or not item.get("url"): continue
+        title=_norm(str(item.get("title") or "")); desc=_norm(str(item.get("snippet") or "")); score=0
+        if county in title: score+=6
+        if county in desc: score+=2
+        if st in title: score+=3
+        if "parcel" in title: score+=4
+        if "assessor" in title or "property" in title: score+=1
+        ranked.append((score,item))
+    for score,item in sorted(ranked,key=lambda x:x[0],reverse=True)[:10]:
+        root=str(item["url"]).rstrip("/"); meta=fetch(root+"?f=json",ttl=6*3600,as_json=True,respect_robots=False)
+        if not meta.ok or not isinstance(meta.body,dict): continue
+        candidates=[]
+        if meta.body.get("fields"): candidates=[(root,meta.body)]
+        else:
+            for lyr in meta.body.get("layers") or []:
+                name=_norm(str(lyr.get("name") or ""))
+                if any(k in name for k in ("parcel","property","tax")):
+                    u=f"{root}/{lyr.get('id')}"; lm=fetch(u+"?f=json",ttl=6*3600,as_json=True,respect_robots=False)
+                    if lm.ok and isinstance(lm.body,dict): candidates.append((u,lm.body))
+        for layer,lm in candidates:
+            fm=_field_map(lm)
+            if "apn" in fm and "address" in fm:
+                return {"name":f"{county_name}, {state}","data_mode":"arcgis","arcgis_layer_url":layer,"arcgis_root":layer,"fields":fm,"defaults":{"county_state":state},"where":"1=1","verified":False,"discovery_source":"arcgis_online","discovery_score":score,"status":"DISCOVERED_NOT_VERIFIED"}
+    return None
+
+def probe_county_sources(county_id: str, cfg: Dict[str,Any]) -> List[Dict[str,Any]]:
+    results=[]
+    for c in discover_sources(cfg):
         try:
-            result = probe(candidate.url, county_id, candidate.source_type,
-                           expect="arcgis" if "arcgis" in candidate.source_type else "http")
-            results.append({
-                "county_id": county_id,
-                "source_type": candidate.source_type,
-                "url": candidate.url,
-                "reachable": result.reachable,
-                "status": result.status,
-                "detail": result.detail,
-                "error": result.error,
-                "verified": result.verified,
-                "confidence": candidate.confidence,
-                "notes": candidate.notes,
-            })
+            r=probe(c.url,county_id,c.source_type,expect="arcgis" if "arcgis" in c.source_type else "http")
+            results.append({"county_id":county_id,"source_type":c.source_type,"url":c.url,"reachable":r.reachable,"status":r.status,"detail":r.detail,"error":r.error,"verified":r.verified,"confidence":c.confidence,"notes":c.notes})
         except Exception as exc:
-            results.append({
-                "county_id": county_id,
-                "source_type": candidate.source_type,
-                "url": candidate.url,
-                "reachable": False,
-                "status": 0,
-                "detail": "",
-                "error": str(exc)[:200],
-                "verified": False,
-                "confidence": candidate.confidence,
-                "notes": candidate.notes,
-            })
+            results.append({"county_id":county_id,"source_type":c.source_type,"url":c.url,"reachable":False,"status":0,"detail":"","error":str(exc)[:200],"verified":False,"confidence":c.confidence,"notes":c.notes})
     return results
