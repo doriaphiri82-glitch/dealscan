@@ -34,6 +34,7 @@ def discover_and_register(limit: int = 25) -> Dict[str, Any]:
                 continue
             fields = cfg.get("fields", {})
             quality = cfg.get("source_quality", "partial")
+            freshness = cfg.get("source_last_modified")
             update_county(
                 cid,
                 data_source_type="arcgis",
@@ -44,6 +45,7 @@ def discover_and_register(limit: int = 25) -> Dict[str, Any]:
                 verification_status="discovered_not_verified",
                 coverage_status="tier_1",
                 field_mapping=fields,
+                data_freshness=str(freshness) if freshness is not None else None,
                 notes=f"Public ArcGIS source discovered; ETL verification pending; source quality={quality}",
                 extra={
                     "arcgis_layer_url": cfg.get("arcgis_layer_url"),
@@ -54,6 +56,7 @@ def discover_and_register(limit: int = 25) -> Dict[str, Any]:
                     "source_quality_score": cfg.get("source_quality_score", 0),
                     "useful_field_count": cfg.get("useful_field_count", 0),
                     "missing_useful_fields": cfg.get("missing_useful_fields", []),
+                    "source_last_modified": freshness,
                 },
             )
             found += 1
@@ -65,6 +68,7 @@ def discover_and_register(limit: int = 25) -> Dict[str, Any]:
                 "discovery_score": cfg.get("discovery_score"),
                 "source_quality": quality,
                 "source_quality_score": cfg.get("source_quality_score", 0),
+                "source_last_modified": freshness,
             })
         except Exception as exc:
             results.append({"county_id": cid, "status": "error", "error": str(exc)[:300]})
