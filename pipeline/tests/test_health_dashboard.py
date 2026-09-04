@@ -36,10 +36,32 @@ def test_dashboard_uses_registry_state_without_recent_run():
     assert alpha["status"] == "active"
     assert alpha["tier"] == "tier_5"
     assert alpha["records"] == 17
-    assert alpha["published"] == 17
+    # Published count is deliberately unknown for legacy registry entries.
+    # Never infer published deals from the stored-record count.
+    assert alpha["published"] == 0
     assert alpha["last_run"] == "2026-09-04T10:00:00+00:00"
     assert beta["tier"] == "tier_2"
     assert beta["status"] == "not_implemented"
+
+
+def test_registry_published_count_is_used_when_explicitly_persisted():
+    payload = build_national_dashboard(
+        {
+            "counties": {
+                "alpha_01_001": {
+                    "county_id": "alpha_01_001",
+                    "county_name": "Alpha County",
+                    "state": "Alabama",
+                    "verification_status": "verified",
+                    "coverage_status": "tier_5",
+                    "last_record_count": 17,
+                    "last_published_count": 4,
+                }
+            }
+        },
+        [],
+    )
+    assert payload["counties"][0]["published"] == 4
 
 
 def test_recent_run_remains_authoritative_over_registry_fallback():
