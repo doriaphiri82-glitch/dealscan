@@ -12,7 +12,7 @@ def get_connection():
 def init_db():
     conn=get_connection(); conn.executescript('''
     CREATE TABLE IF NOT EXISTS properties (id INTEGER PRIMARY KEY AUTOINCREMENT, apn TEXT NOT NULL, county_id TEXT NOT NULL, address TEXT, lot_size_acres REAL, assessed_value REAL, market_value REAL, owner_name TEXT, owner_address TEXT, owner_state TEXT, tax_amount REAL, tax_delinquent_years INTEGER DEFAULT 0, year_acquired INTEGER, zoning TEXT, land_use TEXT, has_improvements INTEGER DEFAULT 0, legal_description TEXT, latitude REAL, longitude REAL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(apn, county_id));
-    CREATE TABLE IF NOT EXISTS deals (id INTEGER PRIMARY KEY AUTOINCREMENT, property_id INTEGER REFERENCES properties(id), deal_score INTEGER DEFAULT 0, asking_price REAL, estimated_arv_low REAL, estimated_arv_high REAL, estimated_costs REAL, estimated_profit_low REAL, estimated_profit_high REAL, recommended_offer_low REAL, recommended_offer_high REAL, motivation_signals TEXT, motivation_score REAL, market_velocity REAL, competition_level TEXT, status TEXT DEFAULT 'discovered', notes TEXT, source TEXT, discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, delivered_at TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS deals (id INTEGER PRIMARY KEY AUTOINCREMENT, property_id INTEGER REFERENCES properties(id), deal_score INTEGER DEFAULT 0, asking_price REAL, estimated_arv_low REAL, estimated_arv_high REAL, estimated_costs REAL, estimated_profit_low REAL, estimated_profit_high REAL, recommended_offer_low REAL, recommended_offer_high REAL, motivation_signals TEXT, motivation_score REAL, market_velocity REAL, competition_level TEXT, status TEXT DEFAULT 'discovered', notes TEXT, source TEXT, source_url TEXT, source_vendor TEXT, source_quality TEXT, verification_status TEXT, data_freshness TEXT, valuation_basis TEXT, valuation_confidence REAL, discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, delivered_at TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS comps (id INTEGER PRIMARY KEY AUTOINCREMENT, deal_id INTEGER REFERENCES deals(id), address TEXT, sale_price REAL, sale_date TIMESTAMP, distance_miles REAL, lot_size_acres REAL, price_per_acre REAL);
     CREATE TABLE IF NOT EXISTS subscribers (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE NOT NULL, name TEXT, tier TEXT DEFAULT 'free', budget_min REAL DEFAULT 5000, budget_max REAL DEFAULT 50000, target_states TEXT, target_counties TEXT, min_profit REAL DEFAULT 3000, joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, is_active INTEGER DEFAULT 1);
     CREATE TABLE IF NOT EXISTS deliveries (id INTEGER PRIMARY KEY AUTOINCREMENT, subscriber_id INTEGER REFERENCES subscribers(id), deal_id INTEGER REFERENCES deals(id), delivered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
@@ -20,7 +20,15 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_properties_county ON properties(county_id);
     CREATE INDEX IF NOT EXISTS idx_deals_status_score ON deals(status, deal_score DESC);
     CREATE INDEX IF NOT EXISTS idx_deals_property ON deals(property_id);
-    '''); conn.commit(); conn.close()
+    CREATE INDEX IF NOT EXISTS idx_deals_county_score ON deals(property_id, deal_score DESC);
+    ''')
+    for column, definition in {
+        'source_url':'TEXT','source_vendor':'TEXT','source_quality':'TEXT','verification_status':'TEXT',
+        'data_freshness':'TEXT','valuation_basis':'TEXT','valuation_confidence':'REAL'
+    }.items():
+        try: conn.execute(f'ALTER TABLE deals ADD COLUMN {column} {definition}')
+        except sqlite3.OperationalError: pass
+    conn.commit(); conn.close()
 
 def save_property(data: dict) -> int:
     conn=get_connection(); cur=conn.cursor()
@@ -30,11 +38,11 @@ def save_property(data: dict) -> int:
 def save_deal(data: dict) -> int:
     conn=get_connection(); cur=conn.cursor(); pid=data['property_id']
     cur.execute('SELECT id FROM deals WHERE property_id=? ORDER BY id DESC LIMIT 1',(pid,)); row=cur.fetchone()
-    vals=(data.get('deal_score',0),data.get('asking_price'),data.get('estimated_arv_low'),data.get('estimated_arv_high'),data.get('estimated_costs'),data.get('estimated_profit_low'),data.get('estimated_profit_high'),data.get('recommended_offer_low'),data.get('recommended_offer_high'),data.get('motivation_signals',''),data.get('motivation_score',0),data.get('market_velocity',0),data.get('competition_level','low'),data.get('status','discovered'),data.get('notes',''),data.get('source',''))
+    vals=(data.get('deal_score',0),data.get('asking_price'),data.get('estimated_arv_low'),data.get('estimated_arv_high'),data.get('estimated_costs'),data.get('estimated_profit_low'),data.get('estimated_profit_high'),data.get('recommended_offer_low'),data.get('recommended_offer_high'),data.get('motivation_signals',''),data.get('motivation_score',0),data.get('market_velocity',0),data.get('competition_level','low'),data.get('status','discovered'),data.get('notes',''),data.get('source',''),data.get('source_url'),data.get('source_vendor'),data.get('source_quality'),data.get('verification_status'),data.get('data_freshness'),data.get('valuation_basis'),data.get('valuation_confidence'))
     if row:
-        cur.execute('''UPDATE deals SET deal_score=?,asking_price=?,estimated_arv_low=?,estimated_arv_high=?,estimated_costs=?,estimated_profit_low=?,estimated_profit_high=?,recommended_offer_low=?,recommended_offer_high=?,motivation_signals=?,motivation_score=?,market_velocity=?,competition_level=?,status=?,notes=?,source=?,updated_at=CURRENT_TIMESTAMP WHERE id=?''',vals+(row[0],)); did=row[0]
+        cur.execute('''UPDATE deals SET deal_score=?,asking_price=?,estimated_arv_low=?,estimated_arv_high=?,estimated_costs=?,estimated_profit_low=?,estimated_profit_high=?,recommended_offer_low=?,recommended_offer_high=?,motivation_signals=?,motivation_score=?,market_velocity=?,competition_level=?,status=?,notes=?,source=?,source_url=?,source_vendor=?,source_quality=?,verification_status=?,data_freshness=?,valuation_basis=?,valuation_confidence=?,updated_at=CURRENT_TIMESTAMP WHERE id=?''',vals+(row[0],)); did=row[0]
     else:
-        cur.execute('''INSERT INTO deals (property_id,deal_score,asking_price,estimated_arv_low,estimated_arv_high,estimated_costs,estimated_profit_low,estimated_profit_high,recommended_offer_low,recommended_offer_high,motivation_signals,motivation_score,market_velocity,competition_level,status,notes,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(pid,)+vals); did=cur.lastrowid
+        cur.execute('''INSERT INTO deals (property_id,deal_score,asking_price,estimated_arv_low,estimated_arv_high,estimated_costs,estimated_profit_low,estimated_profit_high,recommended_offer_low,recommended_offer_high,motivation_signals,motivation_score,market_velocity,competition_level,status,notes,source,source_url,source_vendor,source_quality,verification_status,data_freshness,valuation_basis,valuation_confidence) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(pid,)+vals); did=cur.lastrowid
     conn.commit(); conn.close(); return int(did)
 
 def get_top_deals(limit=10,min_score=40,county_id: Optional[str]=None) -> List[dict]:
