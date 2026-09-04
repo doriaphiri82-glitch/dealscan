@@ -51,7 +51,6 @@ class BaseScraperAdapter(ABC):
         county_id = cfg.get("county_id")
 
         def get_value(src_field: Any) -> Any:
-            # A list of source fields is useful for county address components.
             if isinstance(src_field, (list, tuple)):
                 values = [get_value(part) for part in src_field]
                 values = [str(v).strip() for v in values if v not in (None, "") and str(v).strip()]
@@ -90,6 +89,13 @@ class BaseScraperAdapter(ABC):
                 normalized[key] = float(value)
             except (TypeError, ValueError):
                 normalized[key] = None
+
+        # Only infer improvement status from an actual source-derived
+        # improvement value. Missing values remain unknown rather than false.
+        if "has_improvements" not in normalized or normalized.get("has_improvements") in (None, "", " "):
+            improvement_value = normalized.get("improvement_value")
+            if improvement_value is not None:
+                normalized["has_improvements"] = improvement_value > 0
 
         for key in ("tax_delinquent_years", "year_acquired"):
             value = normalized.get(key)
