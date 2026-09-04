@@ -42,17 +42,10 @@ class BaseScraperAdapter(ABC):
 
     @abstractmethod
     def validate(self, record: Dict[str, Any]) -> bool:
-        """Return True if the record is valid enough to keep."""
+        """Return True if the normalized record is valid enough to keep."""
 
     def normalize(self, record: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
-        """Map county/source fields into DealScan's canonical Property shape.
-
-        County configs define ``fields`` as canonical_field -> source_field.
-        Previously the base adapter returned raw ArcGIS attributes unchanged,
-        which meant scoring could not see market_value, land_use, owner data,
-        etc. This normalization layer makes the adapter contract consistent
-        across all county sources while preserving unmapped source fields.
-        """
+        """Map county/source fields into DealScan's canonical Property shape."""
         field_map = cfg.get("fields") or {}
         defaults = dict(cfg.get("defaults") or {})
         county_id = cfg.get("county_id")
@@ -74,15 +67,12 @@ class BaseScraperAdapter(ABC):
         normalized.update(defaults)
         for canonical, source in field_map.items():
             value = get_value(source)
-            # Keep an existing canonical value when the configured source is
-            # absent, which helps adapters that already return normalized data.
             if value is not None or canonical not in normalized:
                 normalized[canonical] = value
 
         if county_id:
             normalized["county_id"] = county_id
 
-        # Canonical numeric fields used by scoring/filtering.
         for key in ("lot_size_acres", "assessed_value", "market_value", "tax_amount", "latitude", "longitude"):
             value = normalized.get(key)
             if value in (None, "", " "):
@@ -102,7 +92,7 @@ class BaseScraperAdapter(ABC):
 
         return normalized
 
-    def run(self, cfg: Dict[str, Any], max_records: int = 5000) -> ScrapeResult:
+    def run(self, cfg: Dict[str, Any], max_records: int = 5000):
         county_id = cfg.get("county_id", "unknown")
         result = ScrapeResult(county_id=county_id, source_type=self.__class__.__name__)
         raw: List[Dict[str, Any]] = []
@@ -113,6 +103,7 @@ class BaseScraperAdapter(ABC):
             return result, []
         result.discovered = len(raw)
         result.downloaded = len(raw)
+
         parsed: List[Dict[str, Any]] = []
         for item in raw:
             try:
@@ -123,20 +114,21 @@ class BaseScraperAdapter(ABC):
                 result.rejected += 1
                 result.rejection_reasons["parse_error"] = result.rejection_reasons.get("parse_error", 0) + 1
                 result.errors.append(f"parse_error: {exc}")
+
         normalized: List[Dict[str, Any]] = []
         for record in parsed:
-            if not self.validate(record):
-                result.rejected += 1
-                reason = "validation_failed"
-                result.rejection_reasons[reason] = result.rejection_reasons.get(reason, 0) + 1
-                continue
             try:
-                normalized.append(self.normalize(record, cfg))
+                canonical = self.normalize(record, cfg)
             except Exception as exc:
                 result.rejected += 1
-                reason = "normalize_error"
-                result.rejection_reasons[reason] = result.rejection_reasons.get(reason, 0) + 1
+                result.rejection_reasons["normalize_error"] = result.rejection_reasons.get("normalize_error", 0) + 1
                 result.errors.append(f"normalize_error: {exc}")
                 continue
-        result.normalized = len(normalized)
+            result.normalized += 1
+            if not self.validate(canonical):
+                result.rejected += 1
+                result.rejection_reasons["validation_failed"] = result.rejection_reasons.get("validation_failed", 0) + 1
+                continue
+            normalized.append(canonical)
+
         return result, normalized
