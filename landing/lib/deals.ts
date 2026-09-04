@@ -1,3 +1,13 @@
+export interface DealAIAnalysis {
+  verdict: 'strong_buy' | 'buy' | 'watch' | 'avoid'
+  summary: string
+  why_it_stands_out: string[]
+  risks: string[]
+  next_steps: string[]
+  risk_level: 'low' | 'medium' | 'high'
+  confidence: number
+}
+
 export interface Deal {
   apn: string
   address: string
@@ -17,6 +27,7 @@ export interface Deal {
   zoning?: string | null
   tax_delinquent_years?: number | null
   source?: string
+  ai_analysis?: DealAIAnalysis
 }
 
 export interface DealsResponse {
