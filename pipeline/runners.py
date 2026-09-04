@@ -1,7 +1,7 @@
 """DealScan - Per-county run runner."""
 from __future__ import annotations
 import traceback
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from config.counties.national_registry import PILOT_COUNTIES
 from config.counties.registry import get_county, mark_county_run
 from database import get_top_deals, save_deal, save_property
@@ -44,9 +44,7 @@ def fetch_parcels(cfg:Dict[str,Any],county_id:str,max_records:int=5000):
         result,normalized=adapter.run({**cfg,"county_id":county_id,"max_records":max_records},max_records=max_records)
         if result.errors:
             detail="; ".join(result.errors[:3])
-            if normalized:
-                raise RuntimeError(f"source returned partial data: {detail}")
-            raise RuntimeError(detail)
+            raise RuntimeError(f"source error after {len(normalized)} normalized records: {detail}")
         return normalized, result
     if cfg.get("data_mode")=="flatfile":
         from scrapers.flatfile import fetch_el_paso_properties
@@ -82,9 +80,15 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
     try:
         props, scrape_result=fetch_parcels(cfg,county_id,max_records=max_records) if not offline else ([],None)
         if scrape_result:
-            m.discovered=scrape_result.discovered; m.downloaded=scrape_result.downloaded; m.parsed=scrape_result.parsed; m.normalized=scrape_result.normalized; m.rejected=scrape_result.rejected; m.rejection_reasons.update(scrape_result.rejection_reasons)
+            m.discovered=scrape_result.discovered; m.downloaded=scrape_result.downloaded; m.parsed=scrape_result.parsed; m.normalized=scrape_result.normalized; m.rejected=scrape_result.rejected; m.rejection_reasons.update(scrape_result.rejection_reasons); m.errors.extend(scrape_result.errors)
         else:
             m.downloaded=m.discovered=m.parsed=len(props); m.normalized=len(props)
+        if offline:
+            summary.update(status='skipped',error='offline mode: source not queried',counts=m.to_counts())
+            record_run(county_id,'skipped',summary['counts'],summary['error'])
+            return summary
+        if cfg.get('arcgis_layer_url') and m.discovered == 0:
+            raise RuntimeError('source returned zero records; this is not treated as verified ETL success')
         vacant=[p for p in props if arcgis.is_vacant_residential(p,county_id)]
         if m.normalized and len(vacant)<m.normalized:
             m.rejected += m.normalized-len(vacant)
@@ -109,8 +113,8 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
         record_run(county_id,summary['status'],summary['counts'],summary['error'])
         if not dry_run: mark_county_run(county_id,record_count=len(props),qualified_count=m.qualified,published_count=m.published,status=summary['status'],error=summary['error'])
     except Exception as exc:
-        summary['status']='error'; summary['error']=f'{exc} | {traceback.format_exc(limit=2)}'; summary['counts']=m.to_counts(); record_run(county_id,'error',summary['counts'],summary['error'])
-        if not dry_run: mark_county_run(county_id,record_count=0,status='error',error=summary['error'])
+        summary['status']='error'; summary['error']=f'{exc}'; summary['counts']=m.to_counts(); record_run(county_id,'error',summary['counts'],summary['error'])
+        if not dry_run: mark_county_run(county_id,record_count=m.normalized,status='error',error=summary['error'])
     return summary
 
 class CountyRunner:
