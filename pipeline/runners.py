@@ -1,5 +1,4 @@
-"""
-DealScan - Per-county run runner.
+"""DealScan - Per-county run runner.
 
 Configured scrapers and dynamically discovered national ArcGIS sources both
 flow through the same ETL -> persistence -> scoring -> publishing pipeline.
@@ -8,7 +7,7 @@ from __future__ import annotations
 import traceback
 from typing import Any, Dict, List, Optional
 from config.counties.national_registry import PILOT_COUNTIES
-from config.counties.registry import get_county
+from config.counties.registry import get_county, mark_county_run
 from database import get_top_deals, save_deal, save_property
 from runregistry import record_run, write_bundle
 from scoring.deal_scorer import score_and_enrich_deal
@@ -33,21 +32,21 @@ def _adapter_for(cfg: Dict[str,Any])->Optional[BaseScraperAdapter]:
 
 def _county_config(county_id:str)->Dict[str,Any]:
     cfg=dict(COUNTY_SCRAPERS.get(county_id) or {})
-    if cfg:return cfg
-    pilot=PILOT_COUNTIES.get(county_id)
-    if pilot:return dict(pilot)
-    # Dynamically discovered national counties are persisted in registry.
-    reg=get_county(county_id)
-    if not reg:return {}
-    cfg=dict(reg)
-    if reg.get("arcgis_layer_url"):cfg["data_mode"]="arcgis"; cfg["scraper_type"]="arcgis"
-    if reg.get("field_mapping"):cfg["fields"]=reg["field_mapping"]
+    if not cfg:
+        pilot=PILOT_COUNTIES.get(county_id)
+        if pilot: cfg=dict(pilot)
+    if not cfg:
+        cfg=dict(get_county(county_id) or {})
+        if cfg.get("arcgis_layer_url"):cfg["data_mode"]="arcgis"; cfg["scraper_type"]="arcgis"
+        if cfg.get("field_mapping"):cfg["fields"]=cfg["field_mapping"]
+    if cfg: cfg["county_id"]=county_id
     return cfg
 
 def fetch_parcels(cfg:Dict[str,Any],county_id:str,max_records:int=5000)->List[Dict[str,Any]]:
     adapter=_adapter_for(cfg)
     if adapter:
-        result,normalized=adapter.run(cfg,max_records=max_records)
+        result,normalized=adapter.run({**cfg,"county_id":county_id,"max_records":max_records},max_records=max_records)
+        if result.errors and not normalized: raise RuntimeError("; ".join(result.errors[:3]))
         return normalized[:max_records]
     if cfg.get("data_mode")=="flatfile":
         from scrapers.flatfile import fetch_el_paso_properties
@@ -73,7 +72,7 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
     if not cfg:
         summary.update(status='skipped',error='County has no configured or discovered source'); record_run(county_id,'skipped',summary['counts'],summary['error']); return summary
     try:
-        props=fetch_parcels(cfg,county_id,max_records=max_records) if not offline else fetch_parcels({**cfg,'data_mode':'data_file'},county_id,max_records=max_records)
+        props=fetch_parcels(cfg,county_id,max_records=max_records) if not offline else []
         m.downloaded=m.discovered=m.parsed=len(props)
         vacant=[p for p in props if arcgis.is_vacant_residential(p,county_id)]; m.normalized=len(vacant)
         scored=[]
@@ -88,10 +87,12 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
             deal.update(apn=prop.get('apn'),address=prop.get('address'),county_id=county_id); scored.append(deal); m.scored+=1; m.qualified+=1
         publish_deals=[_shape_for_bundle(d) for d in (get_top_deals(limit=25,min_score=0) if mode=='publish' and not dry_run else scored[:25])]
         m.published=len(publish_deals)
-        if mode=='publish':summary['bundle_path']=write_bundle(publish_deals,[county_id],status='ok',error=summary['error'])
+        if mode=='publish' and not dry_run:summary['bundle_path']=write_bundle(publish_deals,[county_id],status='ok',error=summary['error'])
         summary['status']='degraded' if m.errors else 'ok'; summary['error']='; '.join(m.errors[:3]); summary['counts']=m.to_counts(); record_run(county_id,summary['status'],summary['counts'],summary['error'])
+        if not dry_run: mark_county_run(county_id,record_count=len(props),qualified_count=m.qualified,published_count=m.published,status=summary['status'],error=summary['error'])
     except Exception as exc:
         summary['status']='error'; summary['error']=f'{exc} | {traceback.format_exc(limit=2)}'; record_run(county_id,'error',summary['counts'],summary['error'])
+        if not dry_run: mark_county_run(county_id,record_count=0,status='error',error=summary['error'])
     return summary
 
 class CountyRunner:
