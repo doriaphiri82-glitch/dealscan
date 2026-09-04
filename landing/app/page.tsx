@@ -7,6 +7,7 @@ import Problem from '@/components/Problem'
 import Audience from '@/components/Audience'
 import Solution from '@/components/Solution'
 import HowItWorks from '@/components/HowItWorks'
+import AIInsight from '@/components/AIInsight'
 import SampleDeal from '@/components/SampleDeal'
 import Pricing from '@/components/Pricing'
 import FAQ from '@/components/FAQ'
@@ -24,6 +25,7 @@ export default function Home() {
         <Audience />
         <Solution />
         <HowItWorks />
+        <AIInsight />
         <SampleDeal />
         <Pricing />
         <FAQ />
