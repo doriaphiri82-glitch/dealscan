@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 KEY_TOP = "deals:top"
 KEY_DEAL_PREFIX = "deal:"
@@ -25,16 +26,17 @@ def _request(method: str, url: str, **kwargs):
 
 
 def _set_key(key: str, payload: str) -> bool:
+    encoded_key = quote(key, safe="")
     if KV_URL and KV_TOKEN:
         try:
-            r = _request("POST", f"{KV_URL}/set/{key}", headers={"Authorization": f"Bearer {KV_TOKEN}"}, json=payload)
+            r = _request("POST", f"{KV_URL}/set/{encoded_key}", headers={"Authorization": f"Bearer {KV_TOKEN}"}, json=payload)
             if r.ok:
                 return True
         except Exception:
             pass
     if _is_redis_rest():
         try:
-            r = _request("POST", f"{REDIS_URL}/set/{key}", json=payload)
+            r = _request("POST", f"{REDIS_URL}/set/{encoded_key}", json=payload)
             if r.ok:
                 return True
         except Exception:
@@ -84,14 +86,14 @@ def _decode_result(response_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def read_top() -> Optional[Dict[str, Any]]:
     if KV_URL and KV_TOKEN:
         try:
-            r = _request("GET", f"{KV_URL}/get/{KEY_TOP}", headers={"Authorization": f"Bearer {KV_TOKEN}"})
+            r = _request("GET", f"{KV_URL}/get/{quote(KEY_TOP, safe='')}", headers={"Authorization": f"Bearer {KV_TOKEN}"})
             if r.ok:
                 return _decode_result(r.json())
         except Exception:
             pass
     if _is_redis_rest():
         try:
-            r = _request("GET", f"{REDIS_URL}/get/{KEY_TOP}")
+            r = _request("GET", f"{REDIS_URL}/get/{quote(KEY_TOP, safe='')}")
             if r.ok:
                 return _decode_result(r.json())
         except Exception:
