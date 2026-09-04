@@ -163,3 +163,10 @@ def test_normalization_does_not_infer_improvements_when_value_missing():
     )
     assert normalized["improvement_value"] is None
     assert "has_improvements" not in normalized or normalized["has_improvements"] is None
+
+
+def test_mohave_arizona_vacant_code_0003_is_supported():
+    assert is_vacant_residential(
+        {"use_code": "0003", "land_use": "0003", "has_improvements": False},
+        "mohave_az",
+    )

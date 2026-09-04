@@ -190,7 +190,7 @@ def map_attributes(attrs: Dict[str, Any], field_map: Dict[str, Any],
 
 VACANT_LAND_USE_CODES = {
     "cochise_az": ["0011", "9700", "0012", "0013", "0014", "0001", "0002", "0003"],
-    "mohave_az": ["0011", "9700", "VAC", "VACANT"],
+    "mohave_az": ["0011", "9700", "VAC", "VACANT", "0001", "0002", "0003"],
     "el_paso_tx": ["0011", "9700", "VAC", "VACANT"],
     "hudson_co": ["0011", "9700", "VAC", "VACANT"],
     "socorro_nm": ["0011", "9700", "VAC", "VACANT"],
