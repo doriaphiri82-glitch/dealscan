@@ -76,11 +76,12 @@ def discover_and_register(limit: int = 25) -> Dict[str, Any]:
 
 
 def run_national_batch(limit: int = 10, max_records: int = 5000, mode: str = "publish") -> Dict[str, Any]:
-    """Run discovered counties through ETL, preferring never-successful counties."""
+    """Run discovered/configured counties through ETL, preferring never-successful counties."""
     ensure_national_counties()
     candidates = [
         c for c in list_counties()
-        if c.get("arcgis_layer_url") and c.get("coverage_status") != "tier_5"
+        if c.get("coverage_status") != "tier_5"
+        and (c.get("arcgis_layer_url") or c.get("parcel_source_url") or c.get("arcgis_root"))
     ]
     candidates.sort(key=lambda c: (c.get("last_successful_run") is not None, c.get("last_successful_run") or ""))
     results = []
