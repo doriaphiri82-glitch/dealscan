@@ -3,6 +3,7 @@ from scrapers.arcgis_adapter import ArcGISFeatureServerAdapter
 from scrapers.counties import COUNTY_SCRAPERS
 from scrapers.adapter import BaseScraperAdapter
 from runners import _vacancy_rejection_reason
+from scoring.deal_scorer import score_and_enrich_deal
 
 
 def test_unknown_improvement_status_is_not_treated_as_vacant():
@@ -170,3 +171,51 @@ def test_mohave_arizona_vacant_code_0003_is_supported():
         {"use_code": "0003", "land_use": "0003", "has_improvements": False},
         "mohave_az",
     )
+
+
+def test_normalized_source_pool_enables_real_comparables():
+    target = {
+        "apn": "TARGET",
+        "address": "Target",
+        "lot_size_acres": 2.0,
+        "market_value": 25000,
+        "latitude": 35.20,
+        "longitude": -114.00,
+        "has_improvements": False,
+        "land_use": "0003",
+    }
+    comp = {
+        "apn": "COMP-1",
+        "address": "Comp Road",
+        "lot_size_acres": 2.2,
+        "last_sale_price": 18000,
+        "last_sale_date": "2024-05-01",
+        "latitude": 35.205,
+        "longitude": -114.005,
+        "has_improvements": False,
+        "land_use": "0003",
+    }
+    pool = [target, comp]
+    target["_source_comp_pool"] = pool
+    result = score_and_enrich_deal(target, [], {"market_velocity": 0.5})
+    assert result is not None
+    assert result["valuation_basis"] == "comparable_sales"
+    assert result["comps"]
+    assert result["comps"][0]["source"] == "county_parcel_last_sale"
+    assert result["comps"][0]["source_apn"] == "COMP-1"
+
+
+def test_source_comparables_exclude_stale_sales_and_self():
+    target = {
+        "apn": "TARGET",
+        "lot_size_acres": 2.0,
+        "market_value": 25000,
+        "latitude": 35.20,
+        "longitude": -114.00,
+        "has_improvements": False,
+    }
+    stale = dict(target, apn="STALE", last_sale_price=18000, last_sale_date="2010-01-01", latitude=35.201, longitude=-114.001)
+    self_sale = dict(target, last_sale_price=19000, last_sale_date="2025-01-01")
+    target["_source_comp_pool"] = [target, stale, self_sale]
+    result = score_and_enrich_deal(target, [], {})
+    assert result["comps"] == []
