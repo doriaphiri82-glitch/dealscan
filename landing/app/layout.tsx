@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next'
 import './globals.css'
+import CommandPalette from '@/components/CommandPalette'
 
 export const metadata: Metadata = {
   title: 'DealScan — Land Deal Intelligence',
@@ -24,6 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="antialiased">
         <a href="#main-content" className="skip-link">Skip to content</a>
         {children}
+        <CommandPalette />
       </body>
     </html>
   )
