@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from scrapers.base import fetch, post_json
+from scrapers.base import post_json
 from scrapers.adapter import BaseScraperAdapter, ScrapeResult
 
 
@@ -24,9 +24,14 @@ def _to_int(v: Any) -> int:
 
 
 class ArcGISFeatureServerAdapter(BaseScraperAdapter):
+    def __init__(self) -> None:
+        self.last_error: Optional[str] = None
+
     def discover(self, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+        self.last_error = None
         layer_url = cfg.get("arcgis_layer_url")
         if not layer_url:
+            self.last_error = "missing arcgis_layer_url"
             return []
         where = cfg.get("where", "1=1")
         out_fields = cfg.get("out_fields", [])
@@ -45,12 +50,14 @@ class ArcGISFeatureServerAdapter(BaseScraperAdapter):
             }
             r = post_json(f"{layer_url}/query", payload)
             if not r.ok or not isinstance(r.body, dict):
+                self.last_error = f"query request failed: {r.error or 'unknown error'}"
                 break
             if r.body.get("error"):
+                self.last_error = f"ArcGIS error: {r.body['error']}"
                 break
             feats = r.body.get("features") or []
-            for f in feats:
-                attrs = f.get("attributes") or {}
+            for feature in feats:
+                attrs = feature.get("attributes") or {}
                 if attrs:
                     records.append(attrs)
             got = len(feats)
@@ -64,14 +71,20 @@ class ArcGISFeatureServerAdapter(BaseScraperAdapter):
 
     def validate(self, record: Dict[str, Any]) -> bool:
         apn = record.get("apn") or record.get("PARCEL_ID") or record.get("GEO_ID")
-        # County configs map source APN fields during normalize(), so accept
-        # common source identifiers here as well.
         if not apn:
             for key in ("TAXPIN", "PARCELNO", "PARCEL_ID", "APN", "ACCOUNT", "ACCOUNT_NO", "PROP_ID"):
                 apn = record.get(key)
                 if apn:
                     break
         return bool(apn and str(apn).strip())
+
+    def run(self, cfg: Dict[str, Any], max_records: int = 5000):
+        result, normalized = super().run(cfg, max_records=max_records)
+        if self.last_error:
+            result.errors.append(f"source_error: {self.last_error}")
+            result.metadata["partial_results"] = bool(normalized)
+        result.metadata["source_url"] = cfg.get("arcgis_layer_url")
+        return result, normalized
 
 
 class ArcGISMapServerAdapter(ArcGISFeatureServerAdapter):
@@ -80,8 +93,7 @@ class ArcGISMapServerAdapter(ArcGISFeatureServerAdapter):
 
 class ArcGISHubAdapter(BaseScraperAdapter):
     def discover(self, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
-        adapter = ArcGISFeatureServerAdapter()
-        return adapter.discover(cfg)
+        return ArcGISFeatureServerAdapter().discover(cfg)
 
     def parse(self, raw: Dict[str, Any]) -> List[Dict[str, Any]]:
         return [raw]
