@@ -32,27 +32,29 @@ def calculate_deal_score(deal_data: Dict) -> int:
     high_count = sum(1 for s in signals if s in high_value) if isinstance(signals, list) else 0
     scores['motivation_signals'] = min(100, (signal_count * 20) + (high_count * 15))
 
-    # 3. Market Velocity Score (0-100)
-    velocity = deal_data.get('market_velocity', 0.5)
+    # 3. Market Velocity Score (0-100). A missing value is neutral, not a
+    # fabricated market claim.
+    velocity = deal_data.get('market_velocity')
     try:
-        scores['market_velocity'] = max(0, min(100, int(float(velocity) * 100)))
+        scores['market_velocity'] = max(0, min(100, int(float(velocity) * 100))) if velocity is not None else 50
     except (TypeError, ValueError):
         scores['market_velocity'] = 50
 
-    # 4. Competition Score (inverse: less competition = higher)
+    # 4. Competition Score (inverse: less competition = higher). Without
+    # comparable-sale evidence, competition is unknown and therefore neutral.
     comp_map = {'low': 90, 'medium': 60, 'high': 30}
-    scores['competition'] = comp_map.get(deal_data.get('competition_level', 'medium'), 50)
+    competition = deal_data.get('competition_level')
+    scores['competition'] = comp_map.get(competition, 50)
 
-    # 5. Accessibility Score
+    # 5. Accessibility Score. Unknown access/utilities/buildability stay neutral
+    # rather than being treated as positive evidence.
     acc = 50
-    if deal_data.get('has_road_access'): acc += 20
-    if deal_data.get('utilities_nearby'): acc += 15
-    if deal_data.get('is_buildable'): acc += 15
+    if deal_data.get('has_road_access') is True: acc += 20
+    if deal_data.get('utilities_nearby') is True: acc += 15
+    if deal_data.get('is_buildable') is True: acc += 15
     scores['accessibility'] = min(100, acc)
 
     total = sum(scores.get(f, 0) * w for f, w in SCORING_WEIGHTS.items())
-    # Weak valuation evidence should reduce confidence in the headline score,
-    # rather than allowing an estimated ARV to look as reliable as comparable sales.
     confidence = deal_data.get('valuation_confidence', 1.0)
     try:
         confidence = max(0.5, min(1.0, float(confidence)))
@@ -90,21 +92,8 @@ def calculate_profit_estimate(comps: List[Dict], lot_size_acres: float,
                 'valuation_basis': 'market_value' if market_value and market_value > 0 else 'assessed_value',
                 'valuation_confidence': 0.75 if market_value and market_value > 0 else 0.65,
             }
-        if asking_price > 0:
-            arv_low = asking_price * 1.5
-            arv_high = asking_price * 2.0
-            estimated_costs = arv_low * 0.20
-            profit_low = max(0, arv_low - asking_price - estimated_costs)
-            profit_high = max(0, arv_high - asking_price - estimated_costs)
-            return {
-                'estimated_arv_low': round(arv_low),
-                'estimated_arv_high': round(arv_high),
-                'estimated_costs': round(estimated_costs),
-                'estimated_profit_low': round(profit_low),
-                'estimated_profit_high': round(profit_high),
-                'valuation_basis': 'asking_price_heuristic',
-                'valuation_confidence': 0.5,
-            }
+        # An asking price alone does not establish ARV. Do not manufacture an
+        # appreciation multiple merely to create a qualifying deal.
         return empty
 
     prices_per_acre = []
@@ -213,7 +202,7 @@ def score_and_enrich_deal(property_data: Dict, comps: List[Dict],
         profit_data['estimated_profit_high'])
 
     comp_count = len(comps)
-    competition = 'low' if comp_count <= 2 else 'medium' if comp_count <= 5 else 'high'
+    competition = 'low' if comp_count <= 2 and comp_count > 0 else 'medium' if comp_count <= 5 else 'high'
     valuation_confidence = profit_data.get('valuation_confidence', 0.5)
     if not value_is_official and not comps:
         valuation_confidence = min(valuation_confidence, 0.5)
@@ -223,11 +212,11 @@ def score_and_enrich_deal(property_data: Dict, comps: List[Dict],
         'asking_price_basis': asking_price_basis,
         'motivation_signals': signals,
         'motivation_score': len(signals) / 5.0,
-        'market_velocity': county_config.get('market_velocity', 0.5),
+        'market_velocity': county_config.get('market_velocity'),
         'competition_level': competition,
-        'has_road_access': True,
-        'utilities_nearby': False,
-        'is_buildable': 'residential' in str(property_data.get('zoning') or '').lower(),
+        'has_road_access': property_data.get('has_road_access'),
+        'utilities_nearby': property_data.get('utilities_nearby'),
+        'is_buildable': property_data.get('is_buildable'),
         'valuation_confidence': valuation_confidence,
         **profit_data,
         **offer_data,
