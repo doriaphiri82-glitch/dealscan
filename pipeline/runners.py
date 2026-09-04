@@ -37,13 +37,31 @@ def _county_config(county_id:str)->Dict[str,Any]:
     if cfg: cfg["county_id"]=county_id
     return cfg
 
+def _resolve_hub_layer(cfg:Dict[str,Any])->Dict[str,Any]:
+    """Resolve an ArcGIS Hub parcel dataset to a concrete REST layer at run time."""
+    if cfg.get("arcgis_layer_url"):
+        return cfg
+    root=cfg.get("arcgis_root") or cfg.get("gis_url")
+    if not root or "opendata.arcgis.com" not in root:
+        return cfg
+    layer=arcgis.find_layer_via_hub(root,["parcel","ownership","tax parcel","cadastral"])
+    if not layer:
+        return cfg
+    resolved=dict(cfg)
+    resolved["arcgis_layer_url"]=layer
+    resolved["data_mode"]="arcgis"
+    resolved["scraper_type"]="arcgis"
+    return resolved
+
 def fetch_parcels(cfg:Dict[str,Any],county_id:str,max_records:int=5000):
+    cfg=_resolve_hub_layer(cfg)
     adapter=_adapter_for(cfg)
     if adapter:
         result,normalized=adapter.run({**cfg,"county_id":county_id,"max_records":max_records},max_records=max_records)
         if result.errors:
             detail="; ".join(result.errors[:3])
             raise RuntimeError(f"source error after {len(normalized)} normalized records: {detail}")
+        result.metadata["resolved_layer_url"]=cfg.get("arcgis_layer_url")
         return normalized, result
     if cfg.get("data_mode")=="flatfile":
         from scrapers.flatfile import fetch_el_paso_properties
@@ -53,7 +71,15 @@ def fetch_parcels(cfg:Dict[str,Any],county_id:str,max_records:int=5000):
         layer=cfg["arcgis_layer_url"]
         available=arcgis.layer_fields(layer) or []
         configured=list(cfg.get("fields",{}).values())
-        out_fields=[f for f in configured if f in available]
+        out_fields=[]
+        for field in configured:
+            if isinstance(field,(list,tuple)):
+                out_fields.extend([f for f in field if f in available])
+            elif field in available:
+                out_fields.append(field)
+        out_fields=list(dict.fromkeys(out_fields))
+        if not out_fields:
+            raise RuntimeError("configured field mapping has no fields present in source layer")
         props=[arcgis.map_attributes(a,cfg.get("fields",{}),county_id,cfg.get("defaults",{})) for a in arcgis.query_layer(layer,cfg.get("where","1=1"),out_fields,max_records=max_records)]
         return props, None
     return [], None
