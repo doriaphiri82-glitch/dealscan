@@ -17,7 +17,7 @@ def test_score_returns_none_when_profit_threshold_is_not_met():
     result = score_and_enrich_deal(
         {
             "county_id": "test",
-            "market_value": 10000,
+            "market_value": 1000,
             "lot_size_acres": 1,
             "has_improvements": False,
         },
