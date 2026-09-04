@@ -57,3 +57,18 @@ def test_arcgis_adapter_surfaces_source_errors(monkeypatch):
     assert records == []
     assert result.errors
     assert any("timeout" in error for error in result.errors)
+
+
+def test_arcgis_adapter_rejects_empty_layer_metadata(monkeypatch):
+    monkeypatch.setattr("scrapers.arcgis_adapter.layer_fields", lambda *_: [])
+    adapter = ArcGISFeatureServerAdapter()
+    result, records = adapter.run(
+        {
+            "county_id": "test_county",
+            "arcgis_layer_url": "https://example.com/FeatureServer/0",
+            "fields": {"apn": "APN"},
+        },
+        max_records=10,
+    )
+    assert records == []
+    assert any("metadata contains no fields" in error for error in result.errors)
