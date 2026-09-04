@@ -31,41 +31,42 @@ async function getRedis(): Promise<{ get: (k: string) => Promise<string | null> 
 
 async function readFromRedis(key: string): Promise<unknown | null> {
   if (isRedisRest) {
-    const res = await fetch(`${REDIS_URL}/get/${key}`)
-    if (!res.ok) return null
-    const json = (await res.json()) as { result?: string | null }
-    return json.result ? JSON.parse(json.result) : null
+    try {
+      const headers = KV_TOKEN ? { Authorization: `Bearer ${KV_TOKEN}` } : undefined
+      const res = await fetch(`${REDIS_URL}/get/${encodeURIComponent(key)}`, { headers, cache: 'no-store' })
+      if (!res.ok) return null
+      const json = (await res.json()) as { result?: string | null }
+      return json.result ? JSON.parse(json.result) : null
+    } catch {
+      return null
+    }
   }
   if (isRedisProto) {
     const client = await getRedis()
-    const raw = client ? await client.get(key) : null
-    return raw ? JSON.parse(raw) : null
+    try {
+      const raw = client ? await client.get(key) : null
+      return raw ? JSON.parse(raw) : null
+    } catch {
+      return null
+    }
   }
   return null
 }
 
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: { apn: string } }
 ) {
   const apn = decodeURIComponent(params.apn)
-
   let report: unknown | null = null
 
-  // 1. Redis / KV by exact apn
   if (isRedisRest || isRedisProto) {
-    const cacheKey = `${KEY_PREFIX}${apn}`
-    const data = await readFromRedis(cacheKey)
-    if (data) {
-      report = data
-    } else if (isRedisRest) {
-      // try URL-encoded variant as a fallback (APNs sometimes include /)
-      report = await readFromRedis(`${KEY_PREFIX}${encodeURIComponent(apn)}`)
-    }
+    report = await readFromRedis(`${KEY_PREFIX}${apn}`)
   } else if (KV_URL && KV_TOKEN) {
     try {
-      const res = await fetch(`${KV_URL}/get/${KEY_PREFIX}${encodeURIComponent(apn)}`, {
+      const res = await fetch(`${KV_URL}/get/${encodeURIComponent(`${KEY_PREFIX}${apn}`)}`, {
         headers: { Authorization: `Bearer ${KV_TOKEN}` },
+        cache: 'no-store',
       })
       if (res.ok) {
         const json = (await res.json()) as { result?: string | null }
@@ -76,24 +77,15 @@ export async function GET(
     }
   }
 
-          // 2. Seed bundle fallback (statically imported, ships with deployment)
   if (!report) {
-    const deals = SEED_BUNDLE.deals
-    report = deals.find((d) => d.apn === apn) ?? null
+    report = SEED_BUNDLE.deals.find((d) => d.apn === apn) ?? null
   }
 
-  return _respond(report, apn)
-}
-
-function _respond(report: unknown, apn: string) {
   if (!report) {
     return NextResponse.json(
-      {
-        error: 'Deal not found',
-        meta: { status: 'no-data', apn },
-      },
-      { status: 404 }
+      { error: 'Deal not found', meta: { status: 'no-data', apn } },
+      { status: 404, headers: { 'Cache-Control': 'no-store' } }
     )
   }
-  return NextResponse.json({ deal: report, meta: { apn } })
+  return NextResponse.json({ deal: report, meta: { apn } }, { headers: { 'Cache-Control': 'no-store' } })
 }
