@@ -1,48 +1,48 @@
 """Publish and verify the generated DealScan bundle in the live store."""
 from __future__ import annotations
-
 import json
 import os
 import sys
 from pathlib import Path
-
 from publish import publish_top, read_top
 
 BUNDLE_PATH = Path(__file__).resolve().parent / "data" / "bundle.json"
 
 
 def main() -> int:
+    require_live = os.getenv("REQUIRE_LIVE_PUBLISH", "0").lower() in {"1", "true", "yes"}
     configured = bool(
         (os.getenv("KV_REST_API_URL") and os.getenv("KV_REST_API_TOKEN"))
         or os.getenv("REDIS_URL")
     )
     if not configured:
-        print("No live Redis/KV credentials configured; committed fallback bundle retained.")
-        return 0
+        msg = "No live Redis/KV credentials configured; committed fallback bundle retained."
+        print(msg, file=sys.stderr if require_live else sys.stdout)
+        return 1 if require_live else 0
 
     if not BUNDLE_PATH.exists():
         print(f"Bundle not found: {BUNDLE_PATH}; fallback remains unchanged.", file=sys.stderr)
-        return 0
+        return 1 if require_live else 0
 
     try:
         with BUNDLE_PATH.open(encoding="utf-8") as f:
             bundle = json.load(f)
     except Exception as exc:
         print(f"Could not read bundle: {exc}; fallback remains unchanged.", file=sys.stderr)
-        return 0
+        return 1 if require_live else 0
 
     if not isinstance(bundle, dict) or not isinstance(bundle.get("deals"), list):
         print("Invalid bundle format; fallback remains unchanged.", file=sys.stderr)
-        return 0
+        return 1 if require_live else 0
 
     if not publish_top(bundle):
         print("Live bundle publish unavailable; keeping committed fallback bundle.", file=sys.stderr)
-        return 0
+        return 1 if require_live else 0
 
     live = read_top()
     if not live or live.get("generated_at") != bundle.get("generated_at"):
-        print("Live bundle verification unavailable; keeping committed fallback bundle.", file=sys.stderr)
-        return 0
+        print("Live bundle verification failed; keeping committed fallback bundle.", file=sys.stderr)
+        return 1 if require_live else 0
 
     print(f"Published and verified {len(bundle['deals'])} deals.")
     return 0
