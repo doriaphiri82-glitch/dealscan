@@ -4,6 +4,7 @@ import SEED_BUNDLE from '../../../lib/seed-bundle'
 const KEY_TOP = 'deals:top'
 type DealsSource = 'redis' | 'redis-proto' | 'kv' | 'seed'
 const REDIS_URL = process.env.REDIS_URL || ''
+const REDIS_TOKEN = process.env.REDIS_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || ''
 const KV_URL = process.env.KV_REST_API_URL || ''
 const KV_TOKEN = process.env.KV_REST_API_TOKEN || ''
 const isRedisRest = /^https?:\/\//.test(REDIS_URL)
@@ -30,7 +31,8 @@ async function getRedis(): Promise<{ get: (k: string) => Promise<string | null> 
 async function readFromRedis(source: DealsSource): Promise<unknown | null> {
   try {
     if (source === 'redis') {
-      const res = await fetch(`${REDIS_URL}/get/${KEY_TOP}`, { cache: 'no-store' })
+      const headers = REDIS_TOKEN ? { Authorization: `Bearer ${REDIS_TOKEN}` } : undefined
+      const res = await fetch(`${REDIS_URL}/get/${KEY_TOP}`, { headers, cache: 'no-store' })
       if (!res.ok) return null
       const json = (await res.json()) as { result?: string | null }
       return json.result ? JSON.parse(json.result) : null
