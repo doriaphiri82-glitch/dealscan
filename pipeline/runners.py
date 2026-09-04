@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 from config.counties.national_registry import PILOT_COUNTIES
 from config.counties.registry import get_county, mark_county_run
-from database import get_top_deals, save_deal, save_property
+from database import get_top_deals, save_comps, save_deal, save_property
 from runregistry import record_run, write_bundle
 from scoring.deal_scorer import score_and_enrich_deal
 from scrapers import arcgis
@@ -50,10 +50,6 @@ def fetch_parcels(cfg:Dict[str,Any],county_id:str,max_records:int=5000):
     cfg=_resolve_hub_layer(cfg); adapter=_adapter_for(cfg)
     if adapter:
         result,normalized=adapter.run({**cfg,"county_id":county_id,"max_records":max_records},max_records=max_records)
-        # Adapters deliberately preserve usable partial results when a source
-        # fails after one or more pages. Do not throw those records away: the
-        # run is degraded, but the successfully acquired records remain useful
-        # for diagnostics and scoring.
         if result.errors and not normalized:
             raise RuntimeError(f"source error before usable records: {'; '.join(result.errors[:3])}")
         result.metadata["resolved_layer_url"]=cfg.get("arcgis_layer_url")
@@ -74,10 +70,10 @@ def fetch_parcels(cfg:Dict[str,Any],county_id:str,max_records:int=5000):
     return [],None
 
 class RunMetrics:
-    __slots__=('county_id','discovered','downloaded','parsed','normalized','rejected','rejection_reasons','stored','scored','qualified','published','errors','field_coverage','vacancy_rejection_reasons')
+    __slots__=('county_id','discovered','downloaded','parsed','normalized','rejected','rejection_reasons','stored','scored','qualified','published','errors','field_coverage','vacancy_rejection_reasons','comparable_count')
     def __init__(self,county_id:str)->None:
         self.county_id=county_id; self.discovered=self.downloaded=self.parsed=self.normalized=self.rejected=self.stored=self.scored=self.qualified=self.published=0
-        self.rejection_reasons={}; self.errors=[]; self.field_coverage={}; self.vacancy_rejection_reasons={}
+        self.rejection_reasons={}; self.errors=[]; self.field_coverage={}; self.vacancy_rejection_reasons={}; self.comparable_count=0
     def to_counts(self):return {'discovered':self.discovered,'downloaded':self.downloaded,'parsed':self.parsed,'normalized':self.normalized,'rejected':self.rejected,'stored':self.stored,'scored':self.scored,'qualified':self.qualified,'published':self.published}
     def record_rejection(self,reason):self.rejected+=1; self.rejection_reasons[reason]=self.rejection_reasons.get(reason,0)+1
     def record_vacancy_rejection(self,reason):self.rejected+=1; self.vacancy_rejection_reasons[reason]=self.vacancy_rejection_reasons.get(reason,0)+1; self.rejection_reasons[reason]=self.rejection_reasons.get(reason,0)+1
@@ -130,8 +126,7 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
         vacant=[]
         for p in props:
             reason=_vacancy_rejection_reason(p,county_id)
-            if reason:
-                m.record_vacancy_rejection(reason)
+            if reason:m.record_vacancy_rejection(reason)
             else:vacant.append(p)
         for prop in vacant:
             try:deal=score_and_enrich_deal(prop,[],cfg)
@@ -139,17 +134,35 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
             if deal is None:m.record_rejection(_qualification_rejection_reason(prop,[]));continue
             deal.update(apn=prop.get('apn'),address=prop.get('address'),county_id=county_id);deal.update(_provenance(cfg,county_id))
             if not dry_run:
-                try:deal['property_id']=save_property(prop);deal['source']='scrape';deal['motivation_signals']=','.join(deal.get('motivation_signals',[]));save_deal(deal);m.stored+=1
+                try:
+                    deal['property_id']=save_property(prop)
+                    deal['source']='scrape'
+                    deal['motivation_signals']=','.join(deal.get('motivation_signals',[]))
+                    deal_id=save_deal(deal)
+                    save_comps(deal_id,deal.get('comps',[]))
+                    m.comparable_count += len(deal.get('comps',[]))
+                    m.stored+=1
                 except Exception as exc:m.errors.append(f'save_error: {exc}');m.record_rejection('save_error');continue
+            else:m.comparable_count += len(deal.get('comps',[]))
             m.scored+=1;m.qualified+=1
         publish_rows=get_top_deals(limit=25,min_score=0,county_id=county_id) if mode=='publish' and not dry_run else []
-        publish_deals=[_shape_for_bundle(d) for d in publish_rows];m.published=len(publish_deals)
+        publish_deals=[]
+        for row in publish_rows:
+            shaped=_shape_for_bundle(row)
+            try:
+                from database import get_deal_comps
+                shaped['comps']=get_deal_comps(row['id'])
+            except Exception as exc:
+                m.errors.append(f'comps_read_error: {exc}')
+                shaped['comps']=[]
+            publish_deals.append(shaped)
+        m.published=len(publish_deals)
         if mode=='publish' and not dry_run:summary['bundle_path']=write_bundle(publish_deals,[county_id],status='ok',error='')
         if m.errors:summary['status']='degraded'
         elif m.normalized and m.qualified==0:summary['status']='degraded';summary['error']='No financially qualified candidates from the normalized source records'
         else:summary['status']='ok'
         if not summary['error']:summary['error']='; '.join(m.errors[:3])
-        summary['counts']=m.to_counts();summary['diagnostics']={'field_coverage':m.field_coverage,'vacancy':{'candidates':len(props),'accepted':len(vacant),'rejected':sum(m.vacancy_rejection_reasons.values()),'rejection_reasons':m.vacancy_rejection_reasons},'qualification':{'scored':m.scored,'qualified':m.qualified,'rejection_reasons':{k:v for k,v in m.rejection_reasons.items() if k not in m.vacancy_rejection_reasons}}}
+        summary['counts']=m.to_counts();summary['diagnostics']={'field_coverage':m.field_coverage,'vacancy':{'candidates':len(props),'accepted':len(vacant),'rejected':sum(m.vacancy_rejection_reasons.values()),'rejection_reasons':m.vacancy_rejection_reasons},'qualification':{'scored':m.scored,'qualified':m.qualified,'rejection_reasons':{k:v for k,v in m.rejection_reasons.items() if k not in m.vacancy_rejection_reasons}},'comparables':{'source_derived_rows':m.comparable_count}}
         if m.rejection_reasons:summary['rejection_reasons']=m.rejection_reasons
         record_run(county_id,summary['status'],summary['counts'],summary['error'])
         etl_status='ok' if m.normalized>0 and not m.errors else summary['status']
