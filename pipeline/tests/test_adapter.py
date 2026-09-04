@@ -13,6 +13,12 @@ class MappingAdapter(BaseScraperAdapter):
         return bool(record.get("apn"))
 
 
+class FailingArcGISAdapter(ArcGISFeatureServerAdapter):
+    def discover(self, cfg):
+        self.last_error = "HTTP 503"
+        return []
+
+
 def test_normalization_happens_before_validation():
     result, records = MappingAdapter().run(
         {
@@ -27,8 +33,8 @@ def test_normalization_happens_before_validation():
 
 
 def test_arcgis_adapter_records_source_errors():
-    adapter = ArcGISFeatureServerAdapter()
-    adapter.last_error = "HTTP 503"
-    result, _ = adapter.run({"county_id": "example", "arcgis_layer_url": "https://example.invalid/FeatureServer/0"})
+    result, _ = FailingArcGISAdapter().run(
+        {"county_id": "example", "arcgis_layer_url": "https://example.invalid/FeatureServer/0"}
+    )
     assert result.errors
     assert any("source_error" in error for error in result.errors)
