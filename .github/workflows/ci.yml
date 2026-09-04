@@ -33,6 +33,8 @@ jobs:
         run: python -m compileall -q pipeline
       - name: Run pipeline tests
         working-directory: pipeline
+        env:
+          PYTHONPATH: .
         run: pytest -q tests
 
   web:
