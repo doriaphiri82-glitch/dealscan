@@ -62,6 +62,29 @@ def test_map_attributes():
     assert prop["longitude"] == -109.9
 
 
+def test_map_attributes_supports_composite_address_and_improvement_value():
+    attrs = {
+        "PID": "TX-123",
+        "NUM": "100",
+        "STREET": "MAIN",
+        "CITY": "EL PASO",
+        "STATE": "TX",
+        "ZIP": "79901",
+        "ACRES": 1.25,
+        "IMPRV": 0,
+    }
+    field_map = {
+        "apn": "PID",
+        "address": ["NUM", "STREET", "CITY", "STATE", "ZIP"],
+        "lot_size_acres": "ACRES",
+        "improvement_value": "IMPRV",
+    }
+    prop = arcgis.map_attributes(attrs, field_map, "el_paso_tx", {"county_state": "Texas"})
+    assert prop["address"] == "100, MAIN, EL PASO, TX, 79901"
+    assert prop["improvement_value"] == 0.0
+    assert arcgis.is_vacant_residential(prop, "el_paso_tx")
+
+
 def test_to_float_handles_garbage():
     assert arcgis._to_float(None) is None
     assert arcgis._to_float("") is None
