@@ -18,7 +18,7 @@ export default function Home() {
     <>
       <ScrollReveal />
       <Navbar />
-      <main id="main-content" className="min-h-screen bg-[#0A0A0B] text-[#F4F4F5]">
+      <main id="main-content" className="min-h-screen bg-transparent text-[#17211b]">
         <Hero />
         <Problem />
         <Audience />
