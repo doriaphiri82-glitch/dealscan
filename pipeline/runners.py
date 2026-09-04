@@ -129,7 +129,9 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
             if reason:m.record_vacancy_rejection(reason)
             else:vacant.append(p)
         for prop in vacant:
-            try:deal=score_and_enrich_deal(prop,[],cfg)
+            try:
+                scoring_prop={**prop,'_source_comp_pool':props}
+                deal=score_and_enrich_deal(scoring_prop,[],cfg)
             except Exception as exc:m.record_rejection(f'score_error: {exc}');continue
             if deal is None:m.record_rejection(_qualification_rejection_reason(prop,[]));continue
             deal.update(apn=prop.get('apn'),address=prop.get('address'),county_id=county_id);deal.update(_provenance(cfg,county_id))
