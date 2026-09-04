@@ -73,9 +73,28 @@ class RunMetrics:
     def to_counts(self):return {'discovered':self.discovered,'downloaded':self.downloaded,'parsed':self.parsed,'normalized':self.normalized,'rejected':self.rejected,'stored':self.stored,'scored':self.scored,'qualified':self.qualified,'published':self.published}
     def record_rejection(self,reason):self.rejected+=1; self.rejection_reasons[reason]=self.rejection_reasons.get(reason,0)+1
 
-def _shape_for_bundle(row):return {k:row.get(k) for k in ('apn','address','county_id','lot_size_acres','asking_price','deal_score','estimated_arv_low','estimated_arv_high','estimated_profit_low','estimated_profit_high','recommended_offer_low','recommended_offer_high','market_velocity','competition_level','owner_state','zoning','tax_delinquent_years','valuation_basis','valuation_confidence','source','source_url','source_vendor','source_quality','verification_status','data_freshness')}
+def _shape_for_bundle(row):return {k:row.get(k) for k in ('apn','address','county_id','lot_size_acres','asking_price','asking_price_basis','deal_score','estimated_arv_low','estimated_arv_high','estimated_profit_low','estimated_profit_high','recommended_offer_low','recommended_offer_high','market_velocity','competition_level','owner_state','zoning','tax_delinquent_years','valuation_basis','valuation_confidence','source','source_url','source_vendor','source_quality','verification_status','data_freshness')}
 def _provenance(cfg,county_id):
     county=get_county(county_id) or {}; return {'source_url':cfg.get('arcgis_layer_url') or cfg.get('parcel_source_url') or cfg.get('data_url') or county.get('parcel_source_url'),'source_vendor':cfg.get('source_vendor') or county.get('source_vendor'),'source_quality':cfg.get('source_quality') or county.get('source_quality'),'verification_status':county.get('verification_status'),'data_freshness':cfg.get('source_last_modified') or county.get('data_freshness')}
+
+def _qualification_rejection_reason(prop: Dict[str,Any], comps: list)->str:
+    """Explain why scoring returned no deal without changing qualification rules."""
+    if not comps:
+        market_value=prop.get('market_value') or prop.get('assessed_value') or 0
+        asking=prop.get('asking_price')
+        try:
+            has_value=float(market_value)>0
+        except (TypeError,ValueError):
+            has_value=False
+        if not has_value and asking is None:
+            return 'missing_valuation_evidence'
+        if asking is not None:
+            try:
+                if float(asking)<=0 and not has_value:
+                    return 'missing_valuation_evidence'
+            except (TypeError,ValueError):
+                return 'invalid_asking_price'
+    return 'below_min_profit'
 
 def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False,offline:bool=False)->Dict[str,Any]:
     cfg=_county_config(county_id); m=RunMetrics(county_id); summary={'county_id':county_id,'counts':m.to_counts(),'status':'ok','error':''}
@@ -91,7 +110,7 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
         for prop in vacant:
             try:deal=score_and_enrich_deal(prop,[],cfg)
             except Exception as exc:m.record_rejection(f'score_error: {exc}');continue
-            if deal is None:m.record_rejection('below_min_profit');continue
+            if deal is None:m.record_rejection(_qualification_rejection_reason(prop,[]));continue
             deal.update(apn=prop.get('apn'),address=prop.get('address'),county_id=county_id);deal.update(_provenance(cfg,county_id))
             if not dry_run:
                 try:deal['property_id']=save_property(prop);deal['source']='scrape';deal['motivation_signals']=','.join(deal.get('motivation_signals',[]));save_deal(deal);m.stored+=1
@@ -100,7 +119,11 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
         publish_rows=get_top_deals(limit=25,min_score=0,county_id=county_id) if mode=='publish' and not dry_run else []
         publish_deals=[_shape_for_bundle(d) for d in publish_rows];m.published=len(publish_deals)
         if mode=='publish' and not dry_run:summary['bundle_path']=write_bundle(publish_deals,[county_id],status='ok',error='')
-        summary['status']='degraded' if m.errors else 'ok';summary['error']='; '.join(m.errors[:3]);summary['counts']=m.to_counts()
+        if m.errors:summary['status']='degraded'
+        elif m.normalized and m.qualified==0:summary['status']='degraded';summary['error']='No financially qualified candidates from the normalized source records'
+        else:summary['status']='ok'
+        if not summary['error']:summary['error']='; '.join(m.errors[:3])
+        summary['counts']=m.to_counts()
         if m.rejection_reasons:summary['rejection_reasons']=m.rejection_reasons
         record_run(county_id,summary['status'],summary['counts'],summary['error'])
         if not dry_run:mark_county_run(county_id,record_count=len(props),qualified_count=m.qualified,published_count=m.published,persisted_count=m.stored,status=summary['status'],error=summary['error'])
