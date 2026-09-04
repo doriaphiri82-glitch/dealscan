@@ -45,3 +45,26 @@ def test_profit_estimate_reports_unavailable_without_valuation_evidence():
     assert result["valuation_basis"] == "unavailable"
     assert result["estimated_profit_low"] == 0
     assert result["estimated_profit_high"] == 0
+
+
+def test_asking_price_alone_never_creates_synthetic_arv():
+    result = calculate_profit_estimate([], 5, 5000)
+    assert result["valuation_basis"] == "unavailable"
+    assert result["estimated_arv_low"] == 0
+    assert result["estimated_profit_low"] == 0
+
+
+def test_unknown_accessibility_and_competition_are_neutral():
+    result = score_and_enrich_deal(
+        {
+            "county_id": "test",
+            "market_value": 20000,
+            "lot_size_acres": 1,
+            "has_improvements": False,
+        },
+        [],
+        {},
+    )
+    assert result is not None
+    assert result["competition_level"] == "medium"
+    assert result["deal_score"] < 60
