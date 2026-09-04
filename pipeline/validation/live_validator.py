@@ -38,6 +38,15 @@ def _resolve_layer(cfg: Dict[str, Any]) -> str:
     return ""
 
 
+def _resolve_mapping_to_source_case(fields: Dict[str, Any], source_fields: List[str]) -> Dict[str, Any]:
+    lookup = {str(name).lower(): str(name) for name in source_fields}
+    def resolve(value: Any) -> Any:
+        if isinstance(value, (list, tuple)):
+            return [lookup.get(str(item).lower(), str(item)) for item in value]
+        return lookup.get(str(value).lower(), str(value)) if value else value
+    return {canonical: resolve(source) for canonical, source in fields.items()}
+
+
 def validate_county_live(county: Dict[str, Any]) -> Dict[str, Any]:
     cid = county["county_id"]
     cfg = _config(county)
@@ -51,20 +60,22 @@ def validate_county_live(county: Dict[str, Any]) -> Dict[str, Any]:
         if not source_fields:
             raise RuntimeError("layer metadata returned no fields")
         cfg["arcgis_layer_url"]=layer
+        cfg["fields"]=_resolve_mapping_to_source_case(cfg.get("fields") or {}, source_fields)
         mapped = cfg.get("fields") or {}
         out_fields=[]
         for value in mapped.values():
             vals=value if isinstance(value,(list,tuple)) else [value]
             out_fields.extend(str(v) for v in vals if v)
-        available={f.lower() for f in source_fields}
-        query_fields=list(dict.fromkeys(f for f in out_fields if f.lower() in available))
-        if not query_fields:
+        if not out_fields:
             raise RuntimeError("no configured mapping fields exist in live layer")
-        sample=list(arcgis.query_layer(layer,"1=1",query_fields,max_records=5,page_size=5))
+        sample=list(arcgis.query_layer(layer,"1=1",list(dict.fromkeys(out_fields)),max_records=5,page_size=5))
         report=validate_county_config(cid,cfg,source_fields=source_fields,sample_records=sample)
+        if not sample:
+            report["valid"] = False
+            report["errors"].append("live layer returned no sample records")
         status="valid" if report["valid"] else "invalid"
         mark_county_validation(cid,status=status,errors=report["errors"],warnings=report["warnings"],source_fields_checked=True,sample_checked=report["sample_checked"])
-        update_county(cid,arcgis_layer_url=layer,parcel_source_url=layer,verification_status="source_verified" if report["valid"] else "discovered_not_verified")
+        update_county(cid,arcgis_layer_url=layer,parcel_source_url=layer,verification_status="source_verified" if report["valid"] else "discovered_not_verified",field_mapping=cfg.get("fields") or {})
         return {"county_id":cid,"status":status,"layer":layer,"field_count":len(source_fields),"sample_count":len(sample),"errors":report["errors"],"warnings":report["warnings"]}
     except Exception as exc:
         error=str(exc)[:300]
