@@ -87,6 +87,31 @@ def layer_fields(layer_url: str) -> Optional[List[str]]:
             if f.get("name")]
 
 
+def resolve_field_mapping(field_map: Dict[str, Any],
+                          source_fields: Optional[List[str]]) -> Dict[str, Any]:
+    """Resolve configured ArcGIS field names to the source's actual casing.
+
+    ArcGIS schemas are frequently published with inconsistent capitalization.
+    Querying the configured spelling verbatim can therefore fail even when the
+    mapped field exists. Preserve nested/list mappings while resolving each
+    simple source field case-insensitively.
+    """
+    if not source_fields:
+        return dict(field_map)
+    actual = {str(name).strip().lower(): name for name in source_fields
+              if name not in (None, "")}
+
+    def resolve(value: Any) -> Any:
+        if isinstance(value, (list, tuple)):
+            return [resolve(part) for part in value]
+        if not isinstance(value, str) or not value or "." in value:
+            return value
+        return actual.get(value.strip().lower(), value)
+
+    return {pipeline_field: resolve(src_field)
+            for pipeline_field, src_field in field_map.items()}
+
+
 def query_layer(layer_url: str, where: str, out_fields: List[str],
                 max_records: int = 5000,
                 page_size: int = 1000) -> Iterator[Dict[str, Any]]:
@@ -125,6 +150,8 @@ def query_layer(layer_url: str, where: str, out_fields: List[str],
 def map_attributes(attrs: Dict[str, Any], field_map: Dict[str, Any],
                    county_id: str, defaults: Dict[str, Any]) -> Dict[str, Any]:
     """Map raw ArcGIS attributes to the pipeline Property dict shape."""
+    attr_index = {str(key).lower(): key for key in attrs}
+
     def get(src_field: Any) -> Any:
         if isinstance(src_field, (list, tuple)):
             values = [get(part) for part in src_field]
@@ -136,11 +163,14 @@ def map_attributes(attrs: Dict[str, Any], field_map: Dict[str, Any],
             cur: Any = attrs
             for part in str(src_field).split("."):
                 if isinstance(cur, dict):
-                    cur = cur.get(part)
+                    key = attr_index.get(part.lower()) if cur is attrs else next(
+                        (k for k in cur if str(k).lower() == part.lower()), None)
+                    cur = cur.get(key) if key is not None else None
                 else:
                     return None
             return cur
-        return attrs.get(src_field)
+        actual_key = attr_index.get(str(src_field).lower())
+        return attrs.get(actual_key) if actual_key is not None else None
 
     out = dict(defaults)
     for pipeline_field, src_field in field_map.items():
@@ -176,16 +206,6 @@ def is_vacant_residential(prop: Dict[str, Any], county_id: str) -> bool:
     improvement_value = prop.get("improvement_value")
     has_imp = imp is True or imp in (1, "1", "Y", "YES", "Yes", "true", "True")
     no_imp = imp is False or imp == 0 or imp in ("0", "N", "NO", "No", "NONE", "false", "False")
-    if improvement_value is not None:
-        try:
-            if float(improvement_value) > 0:
-                has_imp = True
-                no_imp = False
-            elif float(improvement_value) == 0:
-                no_imp = True
-        except (TypeError, ValueError):
-            pass
-
     if has_imp:
         return "vacant" in lu or "unimproved" in lu
     if no_imp:
