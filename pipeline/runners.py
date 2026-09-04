@@ -70,7 +70,7 @@ def _shape_for_bundle(row):
 
 def _provenance(cfg:Dict[str,Any],county_id:str)->Dict[str,Any]:
     county=get_county(county_id) or {}
-    return {'source_url':cfg.get('arcgis_layer_url') or cfg.get('parcel_source_url') or cfg.get('data_url') or county.get('parcel_source_url'),'source_vendor':cfg.get('source_vendor') or county.get('source_vendor'),'source_quality':cfg.get('source_quality') or county.get('source_quality'),'verification_status':county.get('verification_status'),'data_freshness':county.get('data_freshness')}
+    return {'source_url':cfg.get('arcgis_layer_url') or cfg.get('parcel_source_url') or cfg.get('data_url') or county.get('parcel_source_url'),'source_vendor':cfg.get('source_vendor') or county.get('source_vendor'),'source_quality':cfg.get('source_quality') or county.get('source_quality'),'verification_status':county.get('verification_status'),'data_freshness':cfg.get('source_last_modified') or county.get('data_freshness')}
 
 def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False,offline:bool=False)->Dict[str,Any]:
     cfg=_county_config(county_id); m=RunMetrics(county_id); summary={'county_id':county_id,'counts':m.to_counts(),'status':'ok','error':''}
