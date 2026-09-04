@@ -5,7 +5,8 @@ def test_national_validation_returns_all_registered_counties():
     report = validate_all_counties()
     assert report["counts"]["total"] == len(report["results"])
     assert report["counts"]["total"] >= 3
-    assert {"not_started", "invalid", "ready", "etl_verified"} >= set(report["counts"])
+    statuses={"not_started", "invalid", "ready", "etl_verified"}
+    assert statuses >= (set(report["counts"]) - {"total"})
 
 
 def test_national_validation_does_not_claim_etl_from_source_configuration():
