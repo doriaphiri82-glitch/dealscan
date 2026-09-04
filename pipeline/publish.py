@@ -5,32 +5,36 @@ import os
 from typing import Any, Dict, Optional
 
 KEY_TOP = "deals:top"
+KEY_DEAL_PREFIX = "deal:"
 KV_URL = os.getenv("KV_REST_API_URL", "").rstrip("/")
 KV_TOKEN = os.getenv("KV_REST_API_TOKEN", "")
 REDIS_URL = os.getenv("REDIS_URL", "").rstrip("/")
 
+
 def _is_redis_proto() -> bool:
     return REDIS_URL.startswith(("redis://", "rediss://"))
 
+
 def _is_redis_rest() -> bool:
     return REDIS_URL.startswith(("https://", "http://"))
+
 
 def _request(method: str, url: str, **kwargs):
     import requests
     return requests.request(method, url, timeout=20, **kwargs)
 
-def publish_top(bundle: Dict[str, Any]) -> bool:
-    payload = json.dumps(bundle, separators=(",", ":"))
+
+def _set_key(key: str, payload: str) -> bool:
     if KV_URL and KV_TOKEN:
         try:
-            r = _request("POST", f"{KV_URL}/set/{KEY_TOP}", headers={"Authorization": f"Bearer {KV_TOKEN}"}, json=payload)
+            r = _request("POST", f"{KV_URL}/set/{key}", headers={"Authorization": f"Bearer {KV_TOKEN}"}, json=payload)
             if r.ok:
                 return True
         except Exception:
             pass
     if _is_redis_rest():
         try:
-            r = _request("POST", f"{REDIS_URL}/set/{KEY_TOP}", json=payload)
+            r = _request("POST", f"{REDIS_URL}/set/{key}", json=payload)
             if r.ok:
                 return True
         except Exception:
@@ -39,12 +43,30 @@ def publish_top(bundle: Dict[str, Any]) -> bool:
         try:
             import redis
             client = redis.Redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=20)
-            client.set(KEY_TOP, payload)
+            client.set(key, payload)
             client.close()
             return True
         except Exception:
             pass
     return False
+
+
+def publish_top(bundle: Dict[str, Any]) -> bool:
+    payload = json.dumps(bundle, separators=(",", ":"))
+    top_ok = _set_key(KEY_TOP, payload)
+
+    # Keep exact deal lookups in sync with the published top bundle. These keys
+    # make detail pages cheap and avoid forcing the web app to scan the bundle.
+    deal_ok = True
+    for deal in bundle.get("deals") or []:
+        apn = str(deal.get("apn") or "").strip()
+        if not apn:
+            continue
+        if not _set_key(f"{KEY_DEAL_PREFIX}{apn}", json.dumps(deal, separators=(",", ":"))):
+            deal_ok = False
+            break
+    return top_ok and deal_ok
+
 
 def _decode_result(response_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     value = response_json.get("result")
@@ -57,6 +79,7 @@ def _decode_result(response_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         except json.JSONDecodeError:
             return None
     return None
+
 
 def read_top() -> Optional[Dict[str, Any]]:
     if KV_URL and KV_TOKEN:
@@ -83,6 +106,7 @@ def read_top() -> Optional[Dict[str, Any]]:
         except Exception:
             pass
     return None
+
 
 if __name__ == "__main__":
     store = "KV" if KV_URL and KV_TOKEN else "REDIS" if REDIS_URL else "NONE"
