@@ -80,18 +80,29 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
             try: deal=score_and_enrich_deal(prop,[],cfg)
             except Exception as exc: m.record_rejection(f'score_error: {exc}'); continue
             if deal is None:m.record_rejection('below_min_profit'); continue
+            deal.update(apn=prop.get('apn'),address=prop.get('address'),county_id=county_id)
             if not dry_run:
                 try:
                     deal['property_id']=save_property(prop); deal['source']='scrape'; deal['motivation_signals']=','.join(deal.get('motivation_signals',[])); save_deal(deal); m.stored+=1
                 except Exception as exc:m.errors.append(f'save_error: {exc}'); m.record_rejection('save_error'); continue
-            deal.update(apn=prop.get('apn'),address=prop.get('address'),county_id=county_id); scored.append(deal); m.scored+=1; m.qualified+=1
-        publish_deals=[_shape_for_bundle(d) for d in (get_top_deals(limit=25,min_score=0) if mode=='publish' and not dry_run else scored[:25])]
+            scored.append(deal); m.scored+=1; m.qualified+=1
+        # Only publish deals belonging to this county. This prevents a run for
+        # one county from making unrelated global deals count as its coverage.
+        if mode=='publish' and not dry_run:
+            publish_rows=get_top_deals(limit=25,min_score=0,county_id=county_id)
+        else:
+            publish_rows=scored[:25]
+        publish_deals=[_shape_for_bundle(d) for d in publish_rows]
         m.published=len(publish_deals)
-        if mode=='publish' and not dry_run:summary['bundle_path']=write_bundle(publish_deals,[county_id],status='ok',error=summary['error'])
-        summary['status']='degraded' if m.errors else 'ok'; summary['error']='; '.join(m.errors[:3]); summary['counts']=m.to_counts(); record_run(county_id,summary['status'],summary['counts'],summary['error'])
-        if not dry_run: mark_county_run(county_id,record_count=len(props),qualified_count=m.qualified,published_count=m.published,status=summary['status'],error=summary['error'])
+        if mode=='publish' and not dry_run:
+            summary['bundle_path']=write_bundle(publish_deals,[county_id],status='ok',error=summary['error'])
+        summary['status']='degraded' if m.errors else 'ok'; summary['error']='; '.join(m.errors[:3]); summary['counts']=m.to_counts()
+        if m.rejection_reasons: summary['rejection_reasons']=m.rejection_reasons
+        record_run(county_id,summary['status'],summary['counts'],summary['error'])
+        if not dry_run:
+            mark_county_run(county_id,record_count=len(props),qualified_count=m.qualified,published_count=m.published,status=summary['status'],error=summary['error'])
     except Exception as exc:
-        summary['status']='error'; summary['error']=f'{exc} | {traceback.format_exc(limit=2)}'; record_run(county_id,'error',summary['counts'],summary['error'])
+        summary['status']='error'; summary['error']=f'{exc} | {traceback.format_exc(limit=2)}'; summary['counts']=m.to_counts(); record_run(county_id,'error',summary['counts'],summary['error'])
         if not dry_run: mark_county_run(county_id,record_count=0,status='error',error=summary['error'])
     return summary
 
