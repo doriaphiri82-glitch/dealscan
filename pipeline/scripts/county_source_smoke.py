@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict
 
 from config.counties import COUNTY_SCRAPERS
@@ -96,8 +97,10 @@ def main() -> int:
         parser.error("--max-records must be between 1 and 250")
 
     counties = args.county or list(TARGETS)
-    results = [check_county(county_id, args.max_records) for county_id in counties]
-    print(json.dumps({"read_only": True, "results": results}, indent=2))
+    with ThreadPoolExecutor(max_workers=len(counties)) as executor:
+        futures = [executor.submit(check_county, county_id, args.max_records) for county_id in counties]
+        results = [future.result() for future in futures]
+    print(json.dumps({"read_only": True, "parallel": True, "results": results}, indent=2))
     return 0 if all(not item["errors"] and item["records"] > 0 for item in results) else 1
 
 
