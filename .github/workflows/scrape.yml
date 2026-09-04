@@ -37,6 +37,9 @@ jobs:
       - name: Install dependencies
         working-directory: pipeline
         run: pip install -r requirements.txt
+      - name: Run pipeline tests
+        working-directory: pipeline
+        run: pytest -q
       - name: Initialize database
         working-directory: pipeline
         run: python main.py --setup-db
@@ -55,12 +58,12 @@ jobs:
         run: python main.py --run-national "$RUN_LIMIT" --max-records 5000
       - name: Publish live bundle
         id: publish_live
-        continue-on-error: true
         working-directory: pipeline
         env:
           KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
           KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}
           REDIS_URL: ${{ secrets.REDIS_URL }}
+          REQUIRE_LIVE_PUBLISH: '1'
         run: python publish_live.py
       - name: Show coverage
         working-directory: pipeline
@@ -69,7 +72,7 @@ jobs:
         run: |
           mkdir -p landing/data
           cp -f pipeline/data/bundle.json landing/data/bundle.json
-          cp -f pipeline/data/registry.json landing/data/registry.json
+          cp -f pipeline/config/counties/registry.json landing/data/registry.json
       - name: Commit pipeline data artifacts
         run: |
           git config user.name "DealScan Pipeline"
