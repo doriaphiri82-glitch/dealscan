@@ -19,7 +19,7 @@ from config.counties.registry import (
     mark_county_run,
 )
 from config.counties.national_registry import ensure_pilot_counties, PILOT_COUNTIES
-from monitoring.health import build_county_health, coverage_tier_name
+from monitoring.health import build_county_health, coverage_tier_name, _registry_health
 
 REGTEST_PATH = os.path.join(os.path.dirname(__file__), "test_registry.json")
 
@@ -85,6 +85,7 @@ def test_empty_success_does_not_verify_county() -> None:
     assert entry["coverage_status"] == "tier_1"
     assert entry["verification_status"] == "discovered_not_verified"
     assert entry.get("last_successful_run") is None
+    assert entry.get("last_published_count") == 0
 
 
 def test_degraded_persistence_does_not_verify_county() -> None:
@@ -94,3 +95,27 @@ def test_degraded_persistence_does_not_verify_county() -> None:
     assert entry["coverage_status"] == "tier_1"
     assert entry["verification_status"] == "discovered_not_verified"
     assert entry.get("last_successful_run") is None
+    assert entry.get("last_published_count") == 5
+
+
+def test_registry_health_never_infers_published_from_stored_records() -> None:
+    health = _registry_health({
+        "county_id": "truth_aa",
+        "verification_status": "verified",
+        "coverage_status": "tier_5",
+        "last_record_count": 100,
+        "last_published_count": 7,
+    })
+    assert health.records_stored == 100
+    assert health.records_published == 7
+
+
+def test_registry_health_defaults_unknown_published_count_to_zero() -> None:
+    health = _registry_health({
+        "county_id": "legacy_aa",
+        "verification_status": "verified",
+        "coverage_status": "tier_5",
+        "last_record_count": 100,
+    })
+    assert health.records_stored == 100
+    assert health.records_published == 0
