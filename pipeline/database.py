@@ -45,6 +45,25 @@ def save_deal(data: dict) -> int:
         cur.execute('''INSERT INTO deals (property_id,deal_score,asking_price,estimated_arv_low,estimated_arv_high,estimated_costs,estimated_profit_low,estimated_profit_high,recommended_offer_low,recommended_offer_high,motivation_signals,motivation_score,market_velocity,competition_level,status,notes,source,source_url,source_vendor,source_quality,verification_status,data_freshness,valuation_basis,valuation_confidence) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(pid,)+vals); did=cur.lastrowid
     conn.commit(); conn.close(); return int(did)
 
+def save_comps(deal_id: int, comps: List[dict]) -> int:
+    """Persist only real source-derived comparable rows attached to a deal."""
+    if not comps: return 0
+    conn=get_connection(); cur=conn.cursor()
+    cur.execute('DELETE FROM comps WHERE deal_id=?',(deal_id,))
+    rows=[]
+    for comp in comps:
+        try:
+            rows.append((deal_id, comp.get('address'), float(comp.get('sale_price')), comp.get('sale_date'), float(comp.get('distance_miles')), float(comp.get('lot_size_acres')), float(comp.get('price_per_acre'))))
+        except (TypeError, ValueError):
+            continue
+    cur.executemany('INSERT INTO comps (deal_id,address,sale_price,sale_date,distance_miles,lot_size_acres,price_per_acre) VALUES (?,?,?,?,?,?,?)',rows)
+    conn.commit(); conn.close(); return len(rows)
+
+def get_deal_comps(deal_id: int) -> List[dict]:
+    conn=get_connection(); conn.row_factory=sqlite3.Row; cur=conn.cursor()
+    cur.execute('SELECT address,sale_price,sale_date,distance_miles,lot_size_acres,price_per_acre FROM comps WHERE deal_id=? ORDER BY distance_miles ASC',(deal_id,))
+    out=[dict(r) for r in cur.fetchall()]; conn.close(); return out
+
 def get_top_deals(limit=10,min_score=40,county_id: Optional[str]=None) -> List[dict]:
     conn=get_connection(); conn.row_factory=sqlite3.Row; cur=conn.cursor()
     sql='''SELECT d.*,p.apn,p.county_id,p.address,p.lot_size_acres,p.owner_name,p.owner_state,p.tax_delinquent_years,p.zoning FROM deals d JOIN properties p ON d.property_id=p.id WHERE d.status='discovered' AND d.deal_score>=?'''; args=[min_score]
