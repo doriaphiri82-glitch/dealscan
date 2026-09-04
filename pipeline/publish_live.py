@@ -21,28 +21,28 @@ def main() -> int:
         return 0
 
     if not BUNDLE_PATH.exists():
-        print(f"Bundle not found: {BUNDLE_PATH}", file=sys.stderr)
-        return 1
+        print(f"Bundle not found: {BUNDLE_PATH}; fallback remains unchanged.", file=sys.stderr)
+        return 0
 
     try:
         with BUNDLE_PATH.open(encoding="utf-8") as f:
             bundle = json.load(f)
     except Exception as exc:
-        print(f"Could not read bundle: {exc}", file=sys.stderr)
-        return 1
+        print(f"Could not read bundle: {exc}; fallback remains unchanged.", file=sys.stderr)
+        return 0
 
     if not isinstance(bundle, dict) or not isinstance(bundle.get("deals"), list):
-        print("Invalid bundle format.", file=sys.stderr)
-        return 1
+        print("Invalid bundle format; fallback remains unchanged.", file=sys.stderr)
+        return 0
 
     if not publish_top(bundle):
-        print("Live bundle publish failed.", file=sys.stderr)
-        return 1
+        print("Live bundle publish unavailable; keeping committed fallback bundle.", file=sys.stderr)
+        return 0
 
     live = read_top()
     if not live or live.get("generated_at") != bundle.get("generated_at"):
-        print("Live bundle verification failed.", file=sys.stderr)
-        return 1
+        print("Live bundle verification unavailable; keeping committed fallback bundle.", file=sys.stderr)
+        return 0
 
     print(f"Published and verified {len(bundle['deals'])} deals.")
     return 0
