@@ -1,5 +1,6 @@
 from scrapers.arcgis import is_vacant_residential
 from scrapers.arcgis_adapter import ArcGISFeatureServerAdapter
+from scrapers.counties import COUNTY_SCRAPERS
 from runners import _vacancy_rejection_reason
 
 
@@ -117,3 +118,25 @@ def test_arcgis_adapter_records_partial_result_state(monkeypatch):
     )
     assert records
     assert result.metadata["partial_results"] is False
+
+
+def test_cochise_mapping_targets_live_taxinfo_fields():
+    fields = COUNTY_SCRAPERS["cochise_az"]["fields"]
+    assert fields["apn"] == "apn"
+    assert fields["lot_size_acres"] == "acres"
+    assert fields["market_value"] == "fcv"
+    assert fields["land_use"] == "use_code"
+
+
+def test_mohave_mapping_targets_live_assessor_parcel_query_layer():
+    cfg = COUNTY_SCRAPERS["mohave_az"]
+    assert cfg["arcgis_layer_url"].endswith("/PARCELS/MapServer/14")
+    fields = cfg["fields"]
+    assert fields["apn"] == "TAXPIN"
+    assert fields["lot_size_acres"] == "PARCEL_SIZE"
+    assert fields["market_value"] == "FULL_CASH_VALUE"
+    assert fields["assessed_value"] == "ASSESSED_FULL_CASH_VALUE"
+    assert fields["land_use"] == "USE_CODE"
+    assert fields["improvement_value"] == "IMPVALUE"
+    assert fields["latitude"] == "LATITUDE"
+    assert fields["longitude"] == "LONGITUDE"
