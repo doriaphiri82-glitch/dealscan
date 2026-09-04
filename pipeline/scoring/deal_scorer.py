@@ -2,8 +2,12 @@
 DealScan AI - Deal Scoring Algorithm
 Scores each deal 1-100 based on multiple weighted factors.
 """
-from typing import List, Dict
+from datetime import datetime
+from math import asin, cos, radians, sin, sqrt
+from typing import List, Dict, Any, Optional
 from config.settings import SCORING_WEIGHTS, MIN_PROFIT_ESTIMATE
+
+_COMP_INDEX_CACHE: Dict[str, Any] = {}
 
 
 def calculate_deal_score(deal_data: Dict) -> int:
@@ -46,6 +50,112 @@ def calculate_deal_score(deal_data: Dict) -> int:
         confidence = 0.5
     total *= confidence
     return max(1, min(100, int(total)))
+
+
+def _number(value: Any) -> Optional[float]:
+    try:
+        result = float(value)
+        return result if result == result else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _sale_year(value: Any) -> Optional[int]:
+    if value in (None, '', ' '):
+        return None
+    if isinstance(value, datetime):
+        return value.year
+    text = str(value).strip()
+    for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%Y/%m/%d', '%m/%d/%y'):
+        try:
+            return datetime.strptime(text[:10], fmt).year
+        except ValueError:
+            pass
+    try:
+        year = int(float(text))
+        return year if 1900 <= year <= 2100 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _distance_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance for parcel coordinates."""
+    r = 3958.7613
+    p1, p2 = radians(lat1), radians(lat2)
+    dp, dl = radians(lat2 - lat1), radians(lon2 - lon1)
+    a = sin(dp / 2) ** 2 + cos(p1) * cos(p2) * sin(dl / 2) ** 2
+    return 2 * r * asin(min(1.0, sqrt(a)))
+
+
+def _source_comparables(property_data: Dict) -> List[Dict]:
+    """Build conservative comps from real sale fields in the same source pool.
+
+    These are explicitly *source-derived last-sale comparables*, not fabricated
+    comps and not a substitute for recorder-level transaction qualification.
+    A sale must have a positive price/acreage, usable coordinates, and a recent
+    sale year. Size and distance filters reduce obvious mismatches.
+    """
+    pool = property_data.get('_source_comp_pool')
+    if not isinstance(pool, list) or not pool:
+        return []
+    target_lat = _number(property_data.get('latitude'))
+    target_lon = _number(property_data.get('longitude'))
+    target_acres = _number(property_data.get('lot_size_acres'))
+    if target_lat is None or target_lon is None or target_acres is None or target_acres <= 0:
+        return []
+
+    cache_key = str(id(pool))
+    index = _COMP_INDEX_CACHE.get(cache_key)
+    if index is None:
+        bins: Dict[int, List[Dict]] = {}
+        for row in pool:
+            lat = _number(row.get('latitude'))
+            if lat is None:
+                continue
+            bins.setdefault(int(lat * 10), []).append(row)
+        index = bins
+        _COMP_INDEX_CACHE.clear()
+        _COMP_INDEX_CACHE[cache_key] = index
+
+    target_apn = str(property_data.get('apn') or '').strip()
+    current_year = datetime.now().year
+    min_year = current_year - 7
+    target_bin = int(target_lat * 10)
+    candidates: List[Dict] = []
+    for bucket in range(target_bin - 2, target_bin + 3):
+        for row in index.get(bucket, []):
+            if row is property_data:
+                continue
+            row_apn = str(row.get('apn') or '').strip()
+            if target_apn and row_apn and target_apn == row_apn:
+                continue
+            acres = _number(row.get('lot_size_acres'))
+            sale_price = _number(row.get('last_sale_price'))
+            lat = _number(row.get('latitude'))
+            lon = _number(row.get('longitude'))
+            sale_year = _sale_year(row.get('last_sale_date'))
+            if acres is None or acres <= 0 or sale_price is None or sale_price <= 0:
+                continue
+            if lat is None or lon is None or sale_year is None or sale_year < min_year:
+                continue
+            if acres < target_acres * 0.25 or acres > target_acres * 4:
+                continue
+            distance = _distance_miles(target_lat, target_lon, lat, lon)
+            if distance > 10:
+                continue
+            candidates.append({
+                'address': row.get('address') or row.get('apn') or 'Unknown parcel',
+                'sale_price': sale_price,
+                'sale_date': row.get('last_sale_date'),
+                'distance_miles': round(distance, 2),
+                'lot_size_acres': acres,
+                'price_per_acre': round(sale_price / acres, 2),
+                'source': 'county_parcel_last_sale',
+                'source_apn': row.get('apn'),
+            })
+
+    candidates.sort(key=lambda c: (c['distance_miles'], abs(c['lot_size_acres'] - target_acres)))
+    return candidates[:8]
 
 
 def calculate_profit_estimate(comps: List[Dict], lot_size_acres: float, asking_price: float,
@@ -109,8 +219,8 @@ def detect_motivation_signals(property_data: Dict) -> List[str]:
     owner_state = property_data.get('owner_state', '')
     county_state = property_data.get('county_state', '')
     if owner_state and county_state and owner_state != county_state: signals.append('absentee_owner')
-    year_acq = property_data.get('year_acquired', 2026)
-    if year_acq and (2026 - year_acq) >= 10: signals.append('long_ownership')
+    year_acq = property_data.get('year_acquired')
+    if year_acq and (datetime.now().year - year_acq) >= 10: signals.append('long_ownership')
     if not property_data.get('has_improvements', False): signals.append('no_improvements')
     land_use = str(property_data.get('land_use') or '').lower()
     if 'vacant' in land_use or 'unimproved' in land_use: signals.append('vacant_land')
@@ -121,6 +231,8 @@ def detect_motivation_signals(property_data: Dict) -> List[str]:
 
 def score_and_enrich_deal(property_data: Dict, comps: List[Dict], county_config: Dict) -> Dict:
     """Full pipeline: detect signals, calculate profit, score the deal."""
+    if not comps:
+        comps = _source_comparables(property_data)
     signals = detect_motivation_signals(property_data)
     raw_market = property_data.get('market_value')
     raw_assessed = property_data.get('assessed_value')
@@ -155,6 +267,7 @@ def score_and_enrich_deal(property_data: Dict, comps: List[Dict], county_config:
         'market_velocity': county_config.get('market_velocity'), 'competition_level': competition,
         'has_road_access': property_data.get('has_road_access'), 'utilities_nearby': property_data.get('utilities_nearby'),
         'is_buildable': property_data.get('is_buildable'), 'valuation_confidence': valuation_confidence,
+        'comps': comps,
         **profit_data, **offer_data,
     }
     deal_data['deal_score'] = calculate_deal_score(deal_data)
