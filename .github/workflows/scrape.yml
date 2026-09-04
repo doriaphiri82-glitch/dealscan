@@ -10,15 +10,15 @@ on:
       discover_limit:
         description: 'Maximum new counties to discover'
         required: false
-        default: '25'
+        default: '50'
       validate_live_limit:
         description: 'Maximum counties to live-validate'
         required: false
-        default: '25'
+        default: '50'
       run_limit:
         description: 'Maximum discovered counties to ETL'
         required: false
-        default: '10'
+        default: '20'
 
 permissions:
   contents: write
@@ -53,17 +53,17 @@ jobs:
       - name: Discover national sources
         working-directory: pipeline
         env:
-          DISCOVER_LIMIT: ${{ github.event.inputs.discover_limit || '25' }}
+          DISCOVER_LIMIT: ${{ github.event.inputs.discover_limit || '50' }}
         run: python main.py --discover-national "$DISCOVER_LIMIT"
       - name: Live-validate national sources
         working-directory: pipeline
         env:
-          VALIDATE_LIVE_LIMIT: ${{ github.event.inputs.validate_live_limit || '25' }}
+          VALIDATE_LIVE_LIMIT: ${{ github.event.inputs.validate_live_limit || '50' }}
         run: python main.py --validate-live "$VALIDATE_LIVE_LIMIT"
       - name: Run national ETL batch
         working-directory: pipeline
         env:
-          RUN_LIMIT: ${{ github.event.inputs.run_limit || '10' }}
+          RUN_LIMIT: ${{ github.event.inputs.run_limit || '20' }}
           KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
           KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}
           REDIS_URL: ${{ secrets.REDIS_URL }}
