@@ -5,6 +5,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from scrapers import arcgis  # noqa: E402
+from scrapers import arcgis_adapter  # noqa: E402
 
 FIXTURE = {
     "attributes": {
@@ -86,6 +87,25 @@ def test_map_attributes_supports_composite_address_and_improvement_value():
     assert prop["address"] == "100, MAIN, EL PASO, TX, 79901"
     assert prop["improvement_value"] == 0.0
     assert arcgis.is_vacant_residential(prop, "el_paso_tx")
+
+
+def test_arcgis_out_fields_flatten_composite_mappings():
+    fields = arcgis_adapter.ArcGISFeatureServerAdapter._out_fields({
+        "fields": {
+            "apn": "prop_id_text",
+            "address": ["situs_num", "situs_street", "situs_city"],
+            "lot_size_acres": "legal_acreage",
+            "owner_name": "file_as_name",
+        }
+    })
+    assert fields == [
+        "prop_id_text",
+        "situs_num",
+        "situs_street",
+        "situs_city",
+        "legal_acreage",
+        "file_as_name",
+    ]
 
 
 def test_to_float_handles_garbage():
