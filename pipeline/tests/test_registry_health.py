@@ -50,6 +50,21 @@ def test_pilot_counties_present() -> None:
         assert entry["state_fips"] == PILOT_COUNTIES[cid]["state_fips"]
 
 
+def test_pilot_source_metadata_overwrites_stale_registry_values() -> None:
+    stale = dict(PILOT_COUNTIES["mohave_az"])
+    stale.update(
+        parcel_source_url="https://mcgis.mohave.gov/arcgis/rest/services/PARCELS/MapServer/38",
+        arcgis_layer_url="https://mcgis.mohave.gov/arcgis/rest/services/PARCELS/MapServer/38",
+        notes="stale endpoint metadata",
+    )
+    register_county(county_id="mohave_az", **stale)
+    ensure_pilot_counties()
+    entry = get_county("mohave_az")
+    assert entry["parcel_source_url"].endswith("MapServer/14")
+    assert entry["arcgis_layer_url"].endswith("MapServer/14")
+    assert "/MapServer/38" not in entry["notes"]
+
+
 def test_update_county() -> None:
     register_county(county_id="update_aa", county_name="Update County", state="Arizona", state_fips="04", county_fips="998", geoid="04998")
     updated = update_county("update_aa", coverage_status="tier_5", population=5000)
