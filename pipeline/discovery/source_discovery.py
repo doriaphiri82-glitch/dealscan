@@ -64,13 +64,12 @@ def _field_map(meta: Dict[str,Any]) -> Dict[str,str]:
       "land_use":[r"land.?use",r"use.?code",r"property.?class",r"class.?code"],
       "has_improvements":[r"improvement",r"imprv"],
       "legal_description":[r"legal",r"description"],
-      "latitude":[r"latitude",r"lat($|_)"] , "longitude":[r"longitude",r"long($|_")]}
+      "latitude":[r"latitude",r"lat($|_)"] ,
+      "longitude":[r"longitude",r"long($|_)"]}
     return {dest:f for dest,ps in pairs.items() if (f:=_pick(fields,ps))}
 
 def _source_quality(field_map: Dict[str,str], meta: Dict[str,Any]) -> Dict[str,Any]:
     """Classify discovered parcel sources without confusing discovery with verification."""
-    # APN-like identity is sufficient to ingest a parcel layer; address is useful
-    # but not mandatory because some official GIS layers expose geometry/IDs only.
     required = ("apn",)
     useful = ("address","lot_size_acres","assessed_value","market_value","land_use","zoning","has_improvements")
     id_ok = all(k in field_map for k in required)
