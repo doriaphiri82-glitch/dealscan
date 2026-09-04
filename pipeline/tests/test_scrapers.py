@@ -79,7 +79,10 @@ def test_map_attributes_supports_composite_address_and_improvement_value():
         "lot_size_acres": "ACRES",
         "improvement_value": "IMPRV",
     }
-    prop = arcgis.map_attributes(attrs, field_map, "el_paso_tx", {"county_state": "Texas"})
+    prop = arcgis.map_attributes(
+        attrs, field_map, "el_paso_tx",
+        {"county_state": "Texas", "land_use": "VACANT"},
+    )
     assert prop["address"] == "100, MAIN, EL PASO, TX, 79901"
     assert prop["improvement_value"] == 0.0
     assert arcgis.is_vacant_residential(prop, "el_paso_tx")
