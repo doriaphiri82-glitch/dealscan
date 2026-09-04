@@ -171,7 +171,10 @@ export default function DealsPage() {
 
                 <div className="mt-5 flex items-center justify-between border-t border-black/5 pt-4 text-xs text-black/40">
                   <span className="truncate pr-3">APN {deal.apn ?? '—'}</span>
-                  {deal.source_url ? <a href={deal.source_url} target="_blank" rel="noreferrer" className="shrink-0 font-semibold text-emerald-700 hover:underline">Source ↗</a> : null}
+                  <div className="flex shrink-0 items-center gap-3">
+                    {deal.apn ? <a href={`/deals/${encodeURIComponent(deal.apn)}`} className="font-bold text-black transition group-hover:text-emerald-700 hover:underline">View evidence →</a> : null}
+                    {deal.source_url ? <a href={deal.source_url} target="_blank" rel="noreferrer" className="font-semibold text-emerald-700 hover:underline">Source ↗</a> : null}
+                  </div>
                 </div>
               </article>
             ))}
