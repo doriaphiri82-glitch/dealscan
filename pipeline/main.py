@@ -7,7 +7,7 @@ from runners import run as run_county
 from runregistry import load_bundle
 from cli.county_commands import add_county_commands
 from config.counties.national_registry import ensure_national_counties
-from config.counties.registry import county_summary
+from config.counties.registry import county_summary, list_counties
 
 
 def _print_run_summary(summary):
@@ -51,9 +51,20 @@ def cmd_validate_live(args):
         detail='; '.join(row.get('errors',[])[:2]); print(f"  {row['county_id']:28} {row['status']:12} {detail}")
 
 def cmd_coverage():
-    ensure_national_counties(); s=county_summary(); total=s['total'] or 1
-    covered=sum(v for k,v in s['by_coverage_status'].items() if k in ('tier_4','tier_5')); verified=sum(v for k,v in s['by_coverage_status'].items() if k in ('tier_3','tier_4','tier_5')); discovered=sum(v for k,v in s['by_coverage_status'].items() if k in ('tier_1','tier_3','tier_4','tier_5'))
-    print(f"National counties: {s['total']}"); print(f"Sources discovered: {discovered} ({discovered/total:.1%})"); print(f"Sources ETL-verified: {verified} ({verified/total:.1%})"); print(f"Actually covered with persisted ETL data: {covered} ({covered/total:.1%})"); print(f"By status: {s['by_coverage_status']}")
+    ensure_national_counties(); s=county_summary(); counties=list_counties(); total=s['total'] or 1
+    discovered=sum(1 for c in counties if c.get('data_source_type') or c.get('arcgis_layer_url') or c.get('parcel_source_url'))
+    source_verified=sum(1 for c in counties if c.get('verification_status') in ('source_verified','verified'))
+    live_verified=sum(1 for c in counties if c.get('validation_status')=='valid')
+    etl_verified=sum(1 for c in counties if c.get('verification_status')=='verified')
+    covered=sum(1 for c in counties if c.get('coverage_status') in ('tier_4','tier_5') and c.get('last_successful_run'))
+    published=sum(1 for c in counties if c.get('coverage_status')=='tier_5' and c.get('last_successful_run'))
+    print(f"National counties: {s['total']}")
+    print(f"Sources discovered: {discovered} ({discovered/total:.1%})")
+    print(f"Sources field/sample live-validated: {live_verified} ({live_verified/total:.1%})")
+    print(f"Sources verified by successful ETL: {etl_verified} ({etl_verified/total:.1%})")
+    print(f"Actually covered with persisted ETL data: {covered} ({covered/total:.1%})")
+    print(f"Counties with published deals: {published} ({published/total:.1%})")
+    print(f"By status: {s['by_coverage_status']}")
 
 def cmd_bundle():
     bundle=load_bundle()
