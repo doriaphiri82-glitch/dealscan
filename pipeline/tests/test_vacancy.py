@@ -16,7 +16,7 @@ def test_explicit_vacant_land_use_is_candidate():
 
 def test_explicit_no_improvements_with_residential_zoning_is_candidate():
     assert is_vacant_residential(
-        {"apn": "A1", "has_improvements": False, "zoning": "R-1"},
+        {"apn": "A1", "has_improvements": False, "zoning": "Residential R-1"},
         "unknown_county",
     )
 
