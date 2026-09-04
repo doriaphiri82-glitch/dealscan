@@ -15,12 +15,13 @@ def _limit(value: int, default: int = 25) -> int:
 
 
 def discover_and_register(limit: int = 25) -> Dict[str, Any]:
-    """Discover public ArcGIS sources for a bounded batch of uncovered counties."""
+    """Discover public ArcGIS sources for a bounded batch of counties without a known parcel source."""
     ensure_national_counties()
     candidates = [
         c for c in list_counties()
-        if c.get("coverage_status", "tier_0") in ("tier_0", "tier_1", "not_covered")
+        if c.get("coverage_status", "tier_0") != "tier_5"
         and not c.get("arcgis_layer_url")
+        and not c.get("parcel_source_url")
     ]
     results = []
     found = 0
@@ -33,8 +34,6 @@ def discover_and_register(limit: int = 25) -> Dict[str, Any]:
                 continue
             fields = cfg.get("fields", {})
             quality = cfg.get("source_quality", "partial")
-            # Discovery is intentionally not verification. A discovered source
-            # is registered as tier_1 until a real ETL run produces evidence.
             update_county(
                 cid,
                 data_source_type="arcgis",
@@ -75,7 +74,10 @@ def discover_and_register(limit: int = 25) -> Dict[str, Any]:
 def run_national_batch(limit: int = 10, max_records: int = 5000, mode: str = "publish") -> Dict[str, Any]:
     """Run discovered counties through ETL, preferring never-successful counties."""
     ensure_national_counties()
-    candidates = [c for c in list_counties() if c.get("arcgis_layer_url") and c.get("coverage_status") not in ("tier_5",)]
+    candidates = [
+        c for c in list_counties()
+        if c.get("arcgis_layer_url") and c.get("coverage_status") != "tier_5"
+    ]
     candidates.sort(key=lambda c: (c.get("last_successful_run") is not None, c.get("last_successful_run") or ""))
     results = []
     for county in candidates[:_limit(limit, 10)]:
