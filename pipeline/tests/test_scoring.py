@@ -25,3 +25,23 @@ def test_score_returns_none_when_profit_threshold_is_not_met():
         {},
     )
     assert result is None
+
+
+def test_score_does_not_invent_county_market_value_when_source_value_is_missing():
+    result = score_and_enrich_deal(
+        {
+            "county_id": "cochise_az",
+            "lot_size_acres": 10,
+            "has_improvements": False,
+        },
+        [],
+        {},
+    )
+    assert result is None
+
+
+def test_profit_estimate_reports_unavailable_without_valuation_evidence():
+    result = calculate_profit_estimate([], 10, 0)
+    assert result["valuation_basis"] == "unavailable"
+    assert result["estimated_profit_low"] == 0
+    assert result["estimated_profit_high"] == 0
