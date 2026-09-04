@@ -51,7 +51,6 @@ class BaseScraperAdapter(ABC):
         county_id = cfg.get("county_id")
 
         def get_value(src_field: Any) -> Any:
-            # A list of source fields is useful for county address components.
             if isinstance(src_field, (list, tuple)):
                 values = [get_value(part) for part in src_field]
                 values = [str(v).strip() for v in values if v not in (None, "") and str(v).strip()]
@@ -91,9 +90,7 @@ class BaseScraperAdapter(ABC):
             except (TypeError, ValueError):
                 normalized[key] = None
 
-        # Many county parcel layers expose an improvement value rather than a
-        # boolean improvement flag. Derive the boolean only from that actual
-        # source value; never infer improvements (or vacancy) from missing data.
+        # Derive improvement status only from an actual source value.
         if "has_improvements" not in normalized or normalized.get("has_improvements") in (None, "", " "):
             improvement_value = normalized.get("improvement_value")
             if improvement_value is not None:
@@ -146,5 +143,11 @@ class BaseScraperAdapter(ABC):
                 result.rejection_reasons["validation_failed"] = result.rejection_reasons.get("validation_failed", 0) + 1
                 continue
             normalized.append(canonical)
+
+        # Keep the in-memory source pool available to the scorer so it can build
+        # real same-source sale comparables without making another network call.
+        # It is deliberately an internal key and is ignored by persistence.
+        for canonical in normalized:
+            canonical["_source_comp_pool"] = normalized
 
         return result, normalized
