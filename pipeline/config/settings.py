@@ -42,10 +42,15 @@ ABSENTEE_OWNER = True           # Flag if owner lives in different state
 MIN_OWNERSHIP_YEARS = 10        # Years owned (long-term = more motivated)
 
 # County data
+# Production-enabled counties. New sources are added here only after their
+# scraper has passed field validation and a live sample run.
 DEFAULT_COUNTIES = [
     'cochise_az',
     'mohave_az',
     'el_paso_tx',
+    'yavapai_az',
+    'washoe_nv',
+    'pinal_az',
     'hudson_co',
     'socorro_nm',
 ]

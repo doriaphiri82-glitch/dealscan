@@ -12,7 +12,7 @@ on:
         required: false
         default: '25'
       run_limit:
-        description: 'Maximum discovered counties to ETL'
+        description: 'Maximum configured/discovered counties to ETL'
         required: false
         default: '10'
 
@@ -45,7 +45,7 @@ jobs:
         env:
           DISCOVER_LIMIT: ${{ github.event.inputs.discover_limit || '25' }}
         run: python main.py --discover-national "$DISCOVER_LIMIT"
-      - name: Run national ETL batch
+      - name: Run every configured county first
         working-directory: pipeline
         env:
           RUN_LIMIT: ${{ github.event.inputs.run_limit || '10' }}

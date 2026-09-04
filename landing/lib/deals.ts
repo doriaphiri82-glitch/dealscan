@@ -1,3 +1,13 @@
+export interface DealAIAnalysis {
+  verdict: 'strong_buy' | 'buy' | 'watch' | 'avoid'
+  summary: string
+  why_it_stands_out: string[]
+  risks: string[]
+  next_steps: string[]
+  risk_level: 'low' | 'medium' | 'high'
+  confidence: number
+}
+
 export interface Deal {
   apn: string
   address: string
@@ -10,13 +20,23 @@ export interface Deal {
   estimated_arv_high: number | null
   estimated_profit_low: number | null
   estimated_profit_high: number | null
+  recommended_offer_low?: number | null
+  recommended_offer_high?: number | null
   motivation_signals?: string[]
   market_velocity?: number | null
   competition_level?: string
   owner_state?: string | null
   zoning?: string | null
   tax_delinquent_years?: number | null
+  valuation_basis?: string | null
+  valuation_confidence?: number | null
   source?: string
+  source_url?: string | null
+  source_vendor?: string | null
+  source_quality?: string | null
+  verification_status?: string | null
+  data_freshness?: string | null
+  ai_analysis?: DealAIAnalysis
 }
 
 export interface DealsResponse {
@@ -37,16 +57,10 @@ const FALLBACK_DEALS: DealsResponse = {
   meta: { status: 'no-data', scraped_counties: [] },
 }
 
-/**
- * Fetch top deals from the pipeline. Never throws — returns an empty
- * response when no real data has been published yet (the consumer decides
- * whether to render the labeled demo section or an empty state).
- */
+/** Fetch published pipeline deals. Never substitutes fabricated inventory. */
 export async function fetchTopDeals(limit = 25): Promise<DealsResponse> {
   try {
-    const res = await fetch(`/api/deals?limit=${limit}`, {
-      headers: { Accept: 'application/json' },
-    })
+    const res = await fetch(`/api/deals?limit=${limit}`, { headers: { Accept: 'application/json' } })
     if (!res.ok) return FALLBACK_DEALS
     const data = (await res.json()) as DealsResponse
     return { ...FALLBACK_DEALS, ...data }
@@ -57,9 +71,7 @@ export async function fetchTopDeals(limit = 25): Promise<DealsResponse> {
 
 export async function fetchDealByApn(apn: string): Promise<{ deal: Deal } | null> {
   try {
-    const res = await fetch(`/api/deals/${encodeURIComponent(apn)}`, {
-      headers: { Accept: 'application/json' },
-    })
+    const res = await fetch(`/api/deals/${encodeURIComponent(apn)}`, { headers: { Accept: 'application/json' } })
     if (!res.ok) return null
     const data = (await res.json()) as { deal: Deal }
     return data.deal ? data : null

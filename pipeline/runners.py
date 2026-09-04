@@ -1,11 +1,14 @@
 """DealScan - Per-county run runner."""
 from __future__ import annotations
 from typing import Any, Dict, Optional
+import json
+import os
 from config.counties.national_registry import PILOT_COUNTIES
 from config.counties.registry import get_county, mark_county_run
 from database import get_top_deals, save_deal, save_property
 from runregistry import record_run, write_bundle
 from scoring.deal_scorer import score_and_enrich_deal
+from ai.deal_intelligence import attach_ai_analysis
 from scrapers import arcgis
 from scrapers.adapter import BaseScraperAdapter
 from scrapers.arcgis_adapter import ArcGISFeatureServerAdapter, ArcGISHubAdapter
@@ -13,8 +16,9 @@ from scrapers.counties import COUNTY_SCRAPERS
 from scrapers.flatfile_adapter import FlatFileAdapter, CSVAdapter, ExcelAdapter
 
 ADAPTER_MAP={"arcgis":ArcGISFeatureServerAdapter,"arcgis_hub":ArcGISHubAdapter,"flatfile":FlatFileAdapter,"csv":CSVAdapter,"excel":ExcelAdapter,"state_parcel":ArcGISFeatureServerAdapter}
+AI_SCORE_THRESHOLD=int(os.getenv("OPENAI_AI_SCORE_THRESHOLD", "70"))
 
-def _adapter_for(cfg: Dict[str,Any])->Optional[BaseScraperAdapter]:
+def _adapter_for(cfg:Dict[str,Any])->Optional[BaseScraperAdapter]:
     scraper_type=cfg.get("scraper_type"); data_mode=cfg.get("data_mode","arcgis")
     if scraper_type:
         cls=ADAPTER_MAP.get(scraper_type)
@@ -24,6 +28,43 @@ def _adapter_for(cfg: Dict[str,Any])->Optional[BaseScraperAdapter]:
     if data_mode in ("flatfile","csv","excel"):return ADAPTER_MAP.get(data_mode,FlatFileAdapter)()
     if data_mode in ("arcgis","arcgis_hub","state_parcel") and cfg.get("arcgis_layer_url"):return ADAPTER_MAP.get(data_mode,ArcGISFeatureServerAdapter)()
     return None
+
+def _map_enrichment(attrs:Dict[str,Any], field_map:Dict[str,Any])->Dict[str,Any]:
+    def get(src):
+        if isinstance(src,(list,tuple)):
+            vals=[get(x) for x in src]; vals=[str(v).strip() for v in vals if v not in (None,"") and str(v).strip()]
+            return ", ".join(vals) if vals else None
+        return attrs.get(src) if src else None
+    return {target:get(src) for target,src in field_map.items()}
+
+def _enrich_arcgis_candidates(props:List[Dict[str,Any]],cfg:Dict[str,Any],county_id:str)->List[Dict[str,Any]]:
+    """Join a candidate layer to a county parcel layer using a stable parcel identifier."""
+    enrich=cfg.get("enrichment") or {}; layer=enrich.get("layer_url")
+    source=enrich.get("join_source"); target=enrich.get("join_target")
+    if not (layer and source and target and props): return props
+    ids=[str(p.get("apn") or "").strip() for p in props if p.get("apn") not in (None,"")]
+    ids=list(dict.fromkeys(x for x in ids if x))
+    if not ids:return props
+    available=arcgis.layer_fields(layer) or []
+    requested=[target]+[v for v in (enrich.get("fields") or {}).values() if isinstance(v,str)]
+    out_fields=[f for f in dict.fromkeys(requested) if f in available]
+    if target not in out_fields:return props
+    lookup={}
+    # Keep query sizes bounded and escape apostrophes for ArcGIS SQL string literals.
+    for i in range(0,len(ids),200):
+        batch=ids[i:i+200]
+        quoted=",".join("'"+x.replace("'","''")+"'" for x in batch)
+        where=f"{target} IN ({quoted})"
+        for attrs in arcgis.query_layer(layer,where,out_fields,max_records=len(batch)):
+            key=str(attrs.get(target) or "").strip()
+            if key: lookup[key]=attrs
+    mapping=enrich.get("fields") or {}
+    for prop in props:
+        key=str(prop.get("apn") or "").strip(); attrs=lookup.get(key)
+        if not attrs: continue
+        prop.update({k:v for k,v in _map_enrichment(attrs,mapping).items() if v not in (None,"")})
+        prop["county_id"]=county_id
+    return props
 
 def _county_config(county_id:str)->Dict[str,Any]:
     cfg=dict(COUNTY_SCRAPERS.get(county_id) or {})
@@ -44,18 +85,16 @@ def fetch_parcels(cfg:Dict[str,Any],county_id:str,max_records:int=5000):
         if result.errors:
             detail="; ".join(result.errors[:3])
             raise RuntimeError(f"source error after {len(normalized)} normalized records: {detail}")
-        return normalized, result
+        return _enrich_arcgis_candidates(normalized,cfg,county_id), result
     if cfg.get("data_mode")=="flatfile":
         from scrapers.flatfile import fetch_el_paso_properties
         props=fetch_el_paso_properties(county_id,max_records=max_records)
         return props, None
     if cfg.get("data_mode")=="arcgis" and cfg.get("arcgis_layer_url"):
-        layer=cfg["arcgis_layer_url"]
-        available=arcgis.layer_fields(layer) or []
-        configured=list(cfg.get("fields",{}).values())
-        out_fields=[f for f in configured if f in available]
+        layer=cfg["arcgis_layer_url"]; available=arcgis.layer_fields(layer) or []
+        configured=list(cfg.get("fields",{}).values()); out_fields=[f for f in configured if f in available]
         props=[arcgis.map_attributes(a,cfg.get("fields",{}),county_id,cfg.get("defaults",{})) for a in arcgis.query_layer(layer,cfg.get("where","1=1"),out_fields,max_records=max_records)]
-        return props, None
+        return _enrich_arcgis_candidates(props,cfg,county_id), None
     return [], None
 
 class RunMetrics:
@@ -66,7 +105,14 @@ class RunMetrics:
     def record_rejection(self,reason):self.rejected+=1; self.rejection_reasons[reason]=self.rejection_reasons.get(reason,0)+1
 
 def _shape_for_bundle(row):
-    return {k:row.get(k) for k in ('apn','address','county_id','lot_size_acres','asking_price','deal_score','estimated_arv_low','estimated_arv_high','estimated_profit_low','estimated_profit_high','recommended_offer_low','recommended_offer_high','market_velocity','competition_level','owner_state','zoning','tax_delinquent_years','valuation_basis','valuation_confidence','source','source_url','source_vendor','source_quality','verification_status','data_freshness')}
+    out={k:row.get(k) for k in ('apn','address','county_id','lot_size_acres','asking_price','deal_score','estimated_arv_low','estimated_arv_high','estimated_profit_low','estimated_profit_high','recommended_offer_low','recommended_offer_high','market_velocity','competition_level','owner_state','zoning','tax_delinquent_years','valuation_basis','valuation_confidence','source','source_url','source_vendor','source_quality','verification_status','data_freshness')}
+    notes=row.get('notes')
+    if notes:
+        try:
+            parsed=json.loads(notes)
+            if isinstance(parsed,dict) and parsed.get('ai'): out['ai_analysis']=parsed['ai']
+        except (TypeError, ValueError): pass
+    return out
 
 def _provenance(cfg:Dict[str,Any],county_id:str)->Dict[str,Any]:
     county=get_county(county_id) or {}
@@ -80,24 +126,20 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
         props, scrape_result=fetch_parcels(cfg,county_id,max_records=max_records) if not offline else ([],None)
         if scrape_result:
             m.discovered=scrape_result.discovered; m.downloaded=scrape_result.downloaded; m.parsed=scrape_result.parsed; m.normalized=scrape_result.normalized; m.rejected=scrape_result.rejected; m.rejection_reasons.update(scrape_result.rejection_reasons); m.errors.extend(scrape_result.errors)
-        else:
-            m.downloaded=m.discovered=m.parsed=len(props); m.normalized=len(props)
+        else: m.downloaded=m.discovered=m.parsed=len(props); m.normalized=len(props)
         if offline:
-            summary.update(status='skipped',error='offline mode: source not queried',counts=m.to_counts())
-            record_run(county_id,'skipped',summary['counts'],summary['error'])
-            return summary
-        if cfg.get('arcgis_layer_url') and m.discovered == 0:
-            raise RuntimeError('source returned zero records; this is not treated as verified ETL success')
+            summary.update(status='skipped',error='offline mode: source not queried',counts=m.to_counts()); record_run(county_id,'skipped',summary['counts'],summary['error']); return summary
+        if cfg.get('arcgis_layer_url') and m.discovered == 0: raise RuntimeError('source returned zero records; this is not treated as verified ETL success')
         vacant=[p for p in props if arcgis.is_vacant_residential(p,county_id)]
         if m.normalized and len(vacant)<m.normalized:
-            m.rejected += m.normalized-len(vacant)
-            m.rejection_reasons['not_vacant_residential']=m.normalized-len(vacant)
+            m.rejected += m.normalized-len(vacant); m.rejection_reasons['not_vacant_residential']=m.normalized-len(vacant)
         scored=[]
         for prop in vacant:
             try: deal=score_and_enrich_deal(prop,[],cfg)
             except Exception as exc: m.record_rejection(f'score_error: {exc}'); continue
             if deal is None:m.record_rejection('below_min_profit'); continue
             deal.update(apn=prop.get('apn'),address=prop.get('address'),county_id=county_id); deal.update(_provenance(cfg,county_id))
+            if deal.get('deal_score', 0) >= AI_SCORE_THRESHOLD: deal = attach_ai_analysis(deal, prop, [])
             if not dry_run:
                 try:
                     deal['property_id']=save_property(prop); deal['source']='scrape'; deal['motivation_signals']=','.join(deal.get('motivation_signals',[])); save_deal(deal); m.stored+=1

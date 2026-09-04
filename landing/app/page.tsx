@@ -7,6 +7,8 @@ import Problem from '@/components/Problem'
 import Audience from '@/components/Audience'
 import Solution from '@/components/Solution'
 import HowItWorks from '@/components/HowItWorks'
+import AIInsight from '@/components/AIInsight'
+import DealInventory from '@/components/DealInventory'
 import SampleDeal from '@/components/SampleDeal'
 import Pricing from '@/components/Pricing'
 import FAQ from '@/components/FAQ'
@@ -18,12 +20,14 @@ export default function Home() {
     <>
       <ScrollReveal />
       <Navbar />
-      <main id="main-content" className="min-h-screen bg-[#0A0A0B] text-[#F4F4F5]">
+      <main id="main-content" className="min-h-screen bg-transparent text-[#17211b]">
         <Hero />
         <Problem />
         <Audience />
         <Solution />
         <HowItWorks />
+        <DealInventory />
+        <AIInsight />
         <SampleDeal />
         <Pricing />
         <FAQ />
