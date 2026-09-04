@@ -72,9 +72,8 @@ def calculate_profit_estimate(comps: List[Dict], lot_size_acres: float,
              'estimated_profit_high': 0, 'valuation_basis': 'unavailable',
              'valuation_confidence': 0.5}
     if not comps:
-        # Prefer an official market value, then assessed value, before using the
-        # asking-price heuristic. This prevents an arbitrary 1.5-2x multiplier
-        # from being presented as equivalent to county valuation evidence.
+        # Prefer an official market value, then assessed value. If neither is
+        # available, there is not enough evidence for a defensible valuation.
         source_value = market_value if market_value and market_value > 0 else assessed_value
         if source_value and source_value > 0:
             arv_low = source_value * 0.85
@@ -184,20 +183,8 @@ def score_and_enrich_deal(property_data: Dict, comps: List[Dict],
         market_value = 0.0
 
     value_is_official = bool(market_value > 0)
-    if not market_value:
-        lot_size = property_data.get('lot_size_acres', 0) or 0
-        county_id = property_data.get('county_id', '')
-        avg_prices = {
-            'cochise_az': 3500,
-            'mohave_az': 2800,
-            'el_paso_tx': 25000,
-            'hudson_co': 5500,
-            'socorro_nm': 2200,
-        }
-        avg_ppa = avg_prices.get(county_id, 3000)
-        market_value = float(lot_size * avg_ppa * 0.8)
-
     asking_price = property_data.get('asking_price')
+    asking_price_basis = 'source' if asking_price is not None else 'screening_assumption'
     if asking_price is None:
         asking_price = market_value * 0.6 if market_value and market_value > 0 else 0
     else:
@@ -205,9 +192,15 @@ def score_and_enrich_deal(property_data: Dict, comps: List[Dict],
             asking_price = float(asking_price)
         except (TypeError, ValueError):
             asking_price = 0.0
-    lot_size = property_data.get('lot_size_acres', 1) or 1
+            asking_price_basis = 'invalid_source_value'
+
+    lot_size = property_data.get('lot_size_acres', 0) or 0
+    try:
+        lot_size = float(lot_size)
+    except (TypeError, ValueError):
+        lot_size = 0.0
     profit_data = calculate_profit_estimate(
-        comps, float(lot_size), float(asking_price),
+        comps, lot_size, float(asking_price),
         assessed_value=float(property_data.get('assessed_value', 0) or 0),
         market_value=float(property_data.get('market_value', 0) or 0)
     )
@@ -227,6 +220,7 @@ def score_and_enrich_deal(property_data: Dict, comps: List[Dict],
 
     deal_data = {
         'asking_price': asking_price,
+        'asking_price_basis': asking_price_basis,
         'motivation_signals': signals,
         'motivation_score': len(signals) / 5.0,
         'market_velocity': county_config.get('market_velocity', 0.5),
