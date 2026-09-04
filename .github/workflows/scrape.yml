@@ -43,6 +43,9 @@ jobs:
       - name: Initialize database
         working-directory: pipeline
         run: python main.py --setup-db
+      - name: Validate every registered county
+        working-directory: pipeline
+        run: python main.py --validate
       - name: Discover national sources
         working-directory: pipeline
         env:
