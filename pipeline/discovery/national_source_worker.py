@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict
 from config.counties.national_registry import ensure_national_counties
 from config.counties.registry import list_counties, update_county
+from config.settings import DEFAULT_COUNTIES
 from discovery.source_discovery import discover_arcgis_county_config
 from runners import run as run_county
 
@@ -15,7 +16,7 @@ def _limit(value: int, default: int = 25) -> int:
 
 
 def discover_and_register(limit: int = 25) -> Dict[str, Any]:
-    """Discover public ArcGIS sources for a bounded batch of counties without a known parcel source."""
+    """Discover public ArcGIS sources for counties that do not already have one."""
     ensure_national_counties()
     candidates = [
         c for c in list_counties()
@@ -60,31 +61,29 @@ def discover_and_register(limit: int = 25) -> Dict[str, Any]:
                 },
             )
             found += 1
-            results.append({
-                "county_id": cid,
-                "status": "discovered",
-                "url": cfg.get("arcgis_layer_url"),
-                "field_count": len(fields),
-                "discovery_score": cfg.get("discovery_score"),
-                "source_quality": quality,
-                "source_quality_score": cfg.get("source_quality_score", 0),
-                "source_last_modified": freshness,
-            })
+            results.append({"county_id": cid, "status": "discovered", "url": cfg.get("arcgis_layer_url"), "field_count": len(fields), "discovery_score": cfg.get("discovery_score"), "source_quality": quality, "source_quality_score": cfg.get("source_quality_score", 0), "source_last_modified": freshness})
         except Exception as exc:
             results.append({"county_id": cid, "status": "error", "error": str(exc)[:300]})
     return {"attempted": min(len(candidates), _limit(limit)), "found": found, "results": results}
 
 
 def run_national_batch(limit: int = 10, max_records: int = 5000, mode: str = "publish") -> Dict[str, Any]:
-    """Run discovered counties through ETL, preferring never-successful counties."""
+    """Run configured/validated counties first; only then expand to discovered counties.
+
+    Persistence and bundle publication are intentionally sequential because the
+    SQLite database and durable JSON bundle are shared resources. Source probing
+    remains parallel in the dedicated smoke workflow.
+    """
     ensure_national_counties()
-    candidates = [
-        c for c in list_counties()
-        if c.get("arcgis_layer_url") and c.get("coverage_status") != "tier_5"
-    ]
-    candidates.sort(key=lambda c: (c.get("last_successful_run") is not None, c.get("last_successful_run") or ""))
+    registry = {c["county_id"]: c for c in list_counties()}
+    configured = [registry[cid] for cid in DEFAULT_COUNTIES if cid in registry]
+    discovered = [c for c in list_counties() if c not in configured and c.get("arcgis_layer_url") and c.get("coverage_status") != "tier_5"]
+    candidates = configured + discovered
+    candidates = [c for c in candidates if c.get("arcgis_layer_url") or c.get("parcel_source_url")]
+    candidates = candidates[:_limit(limit, 10)]
+
     results = []
-    for county in candidates[:_limit(limit, 10)]:
+    for county in candidates:
         try:
             results.append(run_county(county["county_id"], mode=mode, max_records=max(1, min(int(max_records), 10000))))
         except Exception as exc:
