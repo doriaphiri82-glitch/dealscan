@@ -50,12 +50,17 @@ class BaseScraperAdapter(ABC):
         defaults = dict(cfg.get("defaults") or {})
         county_id = cfg.get("county_id")
 
-        def get_value(src_field: str) -> Any:
+        def get_value(src_field: Any) -> Any:
+            # A list of source fields is useful for county address components.
+            if isinstance(src_field, (list, tuple)):
+                values = [get_value(part) for part in src_field]
+                values = [str(v).strip() for v in values if v not in (None, "") and str(v).strip()]
+                return ", ".join(values) if values else None
             if not src_field:
                 return None
-            if "." in src_field:
+            if "." in str(src_field):
                 cur: Any = record
-                for part in src_field.split("."):
+                for part in str(src_field).split("."):
                     if isinstance(cur, dict):
                         cur = cur.get(part)
                     else:
@@ -73,7 +78,10 @@ class BaseScraperAdapter(ABC):
         if county_id:
             normalized["county_id"] = county_id
 
-        for key in ("lot_size_acres", "assessed_value", "market_value", "tax_amount", "latitude", "longitude"):
+        for key in (
+            "lot_size_acres", "assessed_value", "market_value", "tax_amount",
+            "latitude", "longitude", "improvement_value",
+        ):
             value = normalized.get(key)
             if value in (None, "", " "):
                 normalized[key] = None
