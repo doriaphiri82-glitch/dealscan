@@ -8,19 +8,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from scrapers.base import post_json
-from scrapers.adapter import BaseScraperAdapter, ScrapeResult
-
-
-def _to_float(v: Any) -> Optional[float]:
-    try:
-        return float(v) if v not in (None, "", " ") else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _to_int(v: Any) -> int:
-    f = _to_float(v)
-    return int(f) if f is not None else 0
+from scrapers.adapter import BaseScraperAdapter
 
 
 class ArcGISFeatureServerAdapter(BaseScraperAdapter):
@@ -34,8 +22,9 @@ class ArcGISFeatureServerAdapter(BaseScraperAdapter):
             self.last_error = "missing arcgis_layer_url"
             return []
         where = cfg.get("where", "1=1")
-        out_fields = cfg.get("out_fields", [])
-        max_records = int(cfg.get("max_records", 5000))
+        out_fields = cfg.get("out_fields") or list((cfg.get("fields") or {}).values())
+        out_fields = [str(f) for f in out_fields if f]
+        max_records = max(1, int(cfg.get("max_records", 5000)))
         records: List[Dict[str, Any]] = []
         offset = 0
         page_size = min(1000, max_records)
@@ -46,7 +35,7 @@ class ArcGISFeatureServerAdapter(BaseScraperAdapter):
                 "returnGeometry": "false",
                 "f": "json",
                 "resultOffset": offset,
-                "resultRecordCount": page_size,
+                "resultRecordCount": min(page_size, max_records - offset),
             }
             r = post_json(f"{layer_url}/query", payload)
             if not r.ok or not isinstance(r.body, dict):
@@ -61,7 +50,7 @@ class ArcGISFeatureServerAdapter(BaseScraperAdapter):
                 if attrs:
                     records.append(attrs)
             got = len(feats)
-            if got < page_size:
+            if got == 0 or got < min(page_size, max_records - offset):
                 break
             offset += got
         return records
@@ -91,16 +80,6 @@ class ArcGISMapServerAdapter(ArcGISFeatureServerAdapter):
     pass
 
 
-class ArcGISHubAdapter(BaseScraperAdapter):
-    def discover(self, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
-        return ArcGISFeatureServerAdapter().discover(cfg)
-
-    def parse(self, raw: Dict[str, Any]) -> List[Dict[str, Any]]:
-        return [raw]
-
-    def validate(self, record: Dict[str, Any]) -> bool:
-        apn = record.get("apn") or record.get("PARCEL_ID") or record.get("GEO_ID")
-        for key in ("TAXPIN", "PARCELNO", "ACCOUNT", "ACCOUNT_NO", "PROP_ID"):
-            if not apn:
-                apn = record.get(key)
-        return bool(apn and str(apn).strip())
+class ArcGISHubAdapter(ArcGISFeatureServerAdapter):
+    """ArcGIS Hub sources use the same FeatureServer REST query contract."""
+    pass
