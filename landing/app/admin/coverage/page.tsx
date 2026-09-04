@@ -6,7 +6,7 @@ type County = {
   county_id: string
   county_name: string
   state: string
-  tier: number | null
+  tier: string | null
   tier_name: string | null
   status: string
   records: number
@@ -20,7 +20,8 @@ type County = {
 }
 
 type Summary = {
-  total_counties: number
+  total: number
+  total_counties?: number
   active: number
   degraded: number
   failed: number
@@ -54,7 +55,7 @@ export default function CoveragePage() {
       .finally(() => setLoading(false))
   }, [])
 
-  const states = useMemo(() => [...new Set(data?.counties.map((c) => c.state).filter(Boolean) ?? [])].sort(), [data])
+  const states = useMemo(() => Array.from(new Set(data?.counties.map((c) => c.state).filter(Boolean) ?? [])).sort(), [data])
   const filteredCounties = useMemo(() => {
     const q = query.trim().toLowerCase()
     return (data?.counties ?? []).filter((c) => {
@@ -68,6 +69,7 @@ export default function CoveragePage() {
   if (!data) return <div className="min-h-screen bg-[#f6f8f7] p-8">No coverage data.</div>
 
   const stats = data.coverage_summary
+  const totalCounties = stats.total_counties ?? stats.total
   return (
     <main className="min-h-screen bg-[#f6f8f7] p-6 text-[#13221c] md:p-10">
       <div className="mx-auto max-w-7xl">
@@ -82,7 +84,7 @@ export default function CoveragePage() {
 
         <div className="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {[
-            ['Total Counties', stats.total_counties, 'text-[#13221c]'],
+            ['Total Counties', totalCounties, 'text-[#13221c]'],
             ['Active', stats.active, 'text-emerald-700'],
             ['Degraded', stats.degraded, 'text-amber-700'],
             ['Failed', stats.failed, 'text-red-700'],
