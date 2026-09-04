@@ -5,7 +5,7 @@ from config.counties.national_registry import PILOT_COUNTIES
 from config.counties.registry import get_county, mark_county_run
 from database import get_top_deals, save_comps, save_deal, save_property
 from runregistry import record_run, write_bundle
-from scoring.deal_scorer import score_and_enrich_deal
+from scoring.deal_scorer import score_and_enrich_deal, _source_comparables
 from scrapers import arcgis
 from scrapers.adapter import BaseScraperAdapter
 from scrapers.arcgis_adapter import ArcGISFeatureServerAdapter, ArcGISHubAdapter
@@ -50,8 +50,7 @@ def fetch_parcels(cfg:Dict[str,Any],county_id:str,max_records:int=5000):
     cfg=_resolve_hub_layer(cfg); adapter=_adapter_for(cfg)
     if adapter:
         result,normalized=adapter.run({**cfg,"county_id":county_id,"max_records":max_records},max_records=max_records)
-        if result.errors and not normalized:
-            raise RuntimeError(f"source error before usable records: {'; '.join(result.errors[:3])}")
+        if result.errors and not normalized: raise RuntimeError(f"source error before usable records: {'; '.join(result.errors[:3])}")
         result.metadata["resolved_layer_url"]=cfg.get("arcgis_layer_url")
         return normalized,result
     if cfg.get("data_mode")=="flatfile":
@@ -94,6 +93,7 @@ def _qualification_rejection_reason(prop: Dict[str,Any], comps: list)->str:
             try:
                 if float(asking)<=0 and not has_value:return 'missing_valuation_evidence'
             except (TypeError,ValueError):return 'invalid_asking_price'
+        if prop.get('_source_comp_pool') is not None:return 'below_min_profit'
     return 'below_min_profit'
 
 def _vacancy_rejection_reason(prop:Dict[str,Any],county_id:str)->str:
@@ -129,21 +129,16 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
             if reason:m.record_vacancy_rejection(reason)
             else:vacant.append(p)
         for prop in vacant:
-            try:
-                scoring_prop={**prop,'_source_comp_pool':props}
-                deal=score_and_enrich_deal(scoring_prop,[],cfg)
+            scoring_prop={**prop,'_source_comp_pool':props}
+            try: deal=score_and_enrich_deal(scoring_prop,[],cfg)
             except Exception as exc:m.record_rejection(f'score_error: {exc}');continue
-            if deal is None:m.record_rejection(_qualification_rejection_reason(prop,[]));continue
+            if deal is None:
+                comps=_source_comparables(scoring_prop)
+                m.record_rejection(_qualification_rejection_reason(scoring_prop,comps));continue
             deal.update(apn=prop.get('apn'),address=prop.get('address'),county_id=county_id);deal.update(_provenance(cfg,county_id))
             if not dry_run:
                 try:
-                    deal['property_id']=save_property(prop)
-                    deal['source']='scrape'
-                    deal['motivation_signals']=','.join(deal.get('motivation_signals',[]))
-                    deal_id=save_deal(deal)
-                    save_comps(deal_id,deal.get('comps',[]))
-                    m.comparable_count += len(deal.get('comps',[]))
-                    m.stored+=1
+                    deal['property_id']=save_property(prop); deal['source']='scrape'; deal['motivation_signals']=','.join(deal.get('motivation_signals',[])); deal_id=save_deal(deal); save_comps(deal_id,deal.get('comps',[])); m.comparable_count += len(deal.get('comps',[])); m.stored+=1
                 except Exception as exc:m.errors.append(f'save_error: {exc}');m.record_rejection('save_error');continue
             else:m.comparable_count += len(deal.get('comps',[]))
             m.scored+=1;m.qualified+=1
@@ -154,9 +149,7 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
             try:
                 from database import get_deal_comps
                 shaped['comps']=get_deal_comps(row['id'])
-            except Exception as exc:
-                m.errors.append(f'comps_read_error: {exc}')
-                shaped['comps']=[]
+            except Exception as exc:m.errors.append(f'comps_read_error: {exc}');shaped['comps']=[]
             publish_deals.append(shaped)
         m.published=len(publish_deals)
         if mode=='publish' and not dry_run:summary['bundle_path']=write_bundle(publish_deals,[county_id],status='ok',error='')
