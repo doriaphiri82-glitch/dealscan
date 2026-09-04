@@ -2,79 +2,22 @@
 
 import { useEffect, useState } from 'react'
 
-interface Deal {
-  apn?: string
-  address?: string
-  county_id?: string
-  lot_size_acres?: number
-  asking_price?: number
-  deal_score?: number
-  estimated_arv_low?: number
-  estimated_arv_high?: number
-  estimated_profit_low?: number
-  estimated_profit_high?: number
-  recommended_offer_low?: number
-  recommended_offer_high?: number
-  valuation_basis?: string
-  valuation_confidence?: number
-  source_url?: string
-  source_quality?: string
-  verification_status?: string
-  data_freshness?: string
-  motivation_signals?: string[]
-}
+interface Deal { apn?: string; address?: string; county_id?: string; lot_size_acres?: number; asking_price?: number; deal_score?: number; estimated_arv_low?: number; estimated_arv_high?: number; estimated_profit_low?: number; estimated_profit_high?: number; recommended_offer_low?: number; recommended_offer_high?: number; valuation_basis?: string; valuation_confidence?: number; source_url?: string; source_quality?: string; verification_status?: string; data_freshness?: string; motivation_signals?: string[] }
+const money = (value?: number) => typeof value === 'number' ? new Intl.NumberFormat('en-US', {style:'currency',currency:'USD',maximumFractionDigits:0}).format(value) : '—'
+const label = (value?: string) => value ? value.replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase()) : '—'
+function ScoreRing({score}:{score?:number}) { const value=typeof score==='number'?Math.max(0,Math.min(100,score)):0; return <div className="relative grid h-28 w-28 shrink-0 place-items-center rounded-full" style={{background:`conic-gradient(#176b45 ${value*3.6}deg,#e3ebe6 0deg)`}}><div className="grid h-22 w-22 place-items-center rounded-full bg-white" style={{width:88,height:88}}><div className="text-center"><div className="text-3xl font-black text-[#153025]">{score??'—'}</div><div className="text-[9px] font-black uppercase tracking-[0.15em] text-[#8a958f]">DealScore</div></div></div></div> }
+function Stat({label:caption,value,accent=false}:{label:string;value:string;accent?:boolean}) { return <div className="rounded-2xl border border-[#e4ebe7] bg-white p-4"><p className="text-[10px] font-black uppercase tracking-[0.14em] text-[#8b9690]">{caption}</p><p className={`mt-2 text-lg font-black tracking-tight ${accent?'text-[#176b45]':'text-[#18251f]'}`}>{value}</p></div> }
 
-const money = (value?: number) => typeof value === 'number'
-  ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value)
-  : '—'
-
-const label = (value?: string) => value ? value.replaceAll('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : '—'
-
-export default function DealDetailPage({ params }: { params: { apn: string } }) {
-  const [deal, setDeal] = useState<Deal | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [missing, setMissing] = useState(false)
-
-  useEffect(() => {
-    fetch(`/api/deals/${encodeURIComponent(params.apn)}`, { cache: 'no-store' })
-      .then(async (res) => {
-        if (res.status === 404) { setMissing(true); return }
-        if (!res.ok) throw new Error('feed error')
-        const json = await res.json() as { deal?: Deal }
-        setDeal(json.deal ?? null)
-      })
-      .catch(() => setMissing(true))
-      .finally(() => setLoading(false))
-  }, [params.apn])
-
-  if (loading) return <main className="min-h-screen bg-[#f6f8f7] p-6"><div className="mx-auto mt-20 h-96 max-w-4xl animate-pulse rounded-3xl bg-white" /></main>
-  if (missing || !deal) return <main className="min-h-screen bg-[#f6f8f7] px-6 py-20 text-center text-[#13221c]"><h1 className="text-3xl font-black">Deal not found</h1><p className="mt-2 text-black/55">This parcel is not currently in the published DealScan feed.</p><a href="/deals" className="mt-6 inline-flex rounded-full bg-black px-5 py-3 font-semibold text-white">Back to deals</a></main>
-
-  return (
-    <main className="min-h-screen bg-[#f6f8f7] text-[#13221c]">
-      <header className="border-b border-black/5 bg-white/90 backdrop-blur-xl"><div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4"><a href="/deals" className="font-black">← DealScan</a><a href="/" className="text-sm font-semibold text-black/55 hover:text-black">Home</a></div></header>
-      <section className="mx-auto max-w-5xl px-6 py-10 sm:py-14">
-        <div className="rounded-[2rem] border border-black/5 bg-white p-6 shadow-[0_20px_80px_rgba(0,0,0,0.07)] sm:p-10">
-          <div className="flex flex-col justify-between gap-6 sm:flex-row">
-            <div><p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-700">{label(deal.county_id)}</p><h1 className="mt-3 text-3xl font-black tracking-tight sm:text-5xl">{deal.address || 'Parcel opportunity'}</h1><p className="mt-3 text-sm text-black/45">APN {deal.apn || params.apn}</p></div>
-            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-3xl bg-emerald-50 text-3xl font-black text-emerald-700">{deal.deal_score ?? '—'}</div>
-          </div>
-
-          <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="rounded-2xl bg-[#f7f9f8] p-4"><p className="text-xs text-black/40">Asking price</p><p className="mt-1 text-xl font-black">{money(deal.asking_price)}</p></div>
-            <div className="rounded-2xl bg-[#f7f9f8] p-4"><p className="text-xs text-black/40">Estimated ARV</p><p className="mt-1 text-xl font-black">{money(deal.estimated_arv_low)}–{money(deal.estimated_arv_high)}</p></div>
-            <div className="rounded-2xl bg-[#f7f9f8] p-4"><p className="text-xs text-black/40">Estimated profit</p><p className="mt-1 text-xl font-black text-emerald-700">{money(deal.estimated_profit_low)}–{money(deal.estimated_profit_high)}</p></div>
-            <div className="rounded-2xl bg-[#f7f9f8] p-4"><p className="text-xs text-black/40">Recommended offer</p><p className="mt-1 text-xl font-black">{money(deal.recommended_offer_low)}–{money(deal.recommended_offer_high)}</p></div>
-          </div>
-
-          <div className="mt-8 grid gap-8 lg:grid-cols-[1.3fr_1fr]">
-            <div><h2 className="text-xl font-black">Why this deal scored</h2><div className="mt-4 flex flex-wrap gap-2">{(deal.motivation_signals || []).map((signal) => <span key={signal} className="rounded-full bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">{label(signal)}</span>)}</div></div>
-            <div className="rounded-3xl border border-black/5 bg-[#fafcfb] p-5"><h2 className="font-black">Evidence & provenance</h2><dl className="mt-4 space-y-3 text-sm"><div className="flex justify-between gap-4"><dt className="text-black/45">Valuation basis</dt><dd className="font-semibold">{label(deal.valuation_basis)}</dd></div><div className="flex justify-between gap-4"><dt className="text-black/45">Confidence</dt><dd className="font-semibold">{typeof deal.valuation_confidence === 'number' ? `${Math.round(deal.valuation_confidence * 100)}%` : '—'}</dd></div><div className="flex justify-between gap-4"><dt className="text-black/45">Verification</dt><dd className="font-semibold text-emerald-700">{label(deal.verification_status)}</dd></div><div className="flex justify-between gap-4"><dt className="text-black/45">Source quality</dt><dd className="font-semibold">{label(deal.source_quality)}</dd></div><div className="flex justify-between gap-4"><dt className="text-black/45">Freshness</dt><dd className="font-semibold">{deal.data_freshness || '—'}</dd></div></dl>{deal.source_url && <a href={deal.source_url} target="_blank" rel="noreferrer" className="mt-5 inline-flex rounded-full bg-black px-4 py-2.5 text-sm font-semibold text-white">Open source ↗</a>}</div>
-          </div>
-
-          <p className="mt-8 border-t border-black/5 pt-5 text-xs leading-5 text-black/40">DealScan scores are screening signals, not guarantees of value, title, buildability, or profit. Verify the parcel and source records before acting.</p>
-        </div>
-      </section>
-    </main>
-  )
+export default function DealDetailPage({params}:{params:{apn:string}}) {
+ const [deal,setDeal]=useState<Deal|null>(null); const [loading,setLoading]=useState(true); const [missing,setMissing]=useState(false)
+ useEffect(()=>{fetch(`/api/deals/${encodeURIComponent(params.apn)}`,{cache:'no-store'}).then(async res=>{if(res.status===404){setMissing(true);return}if(!res.ok)throw new Error();setDeal((await res.json() as {deal?:Deal}).deal??null)}).catch(()=>setMissing(true)).finally(()=>setLoading(false))},[params.apn])
+ if(loading)return <main className="min-h-screen bg-[#f7f9f7] px-4 py-8 sm:px-6"><div className="mx-auto max-w-6xl animate-pulse space-y-5"><div className="h-16 rounded-2xl bg-white"/><div className="h-80 rounded-[2rem] bg-white"/></div></main>
+ if(missing||!deal)return <main className="grid min-h-screen place-items-center bg-[#f7f9f7] px-6 text-center text-[#15211b]"><div><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#eef4f0]">⌕</div><h1 className="mt-5 text-3xl font-black">Deal not found</h1><p className="mt-2 text-[#718078]">This parcel is not currently in the published DealScan feed.</p><a href="/deals" className="mt-6 inline-flex rounded-xl bg-[#153025] px-5 py-3 text-sm font-bold text-white">Return to explorer</a></div></main>
+ const confidence=typeof deal.valuation_confidence==='number'?Math.round(deal.valuation_confidence*100):null
+ return <main className="min-h-screen bg-[#f7f9f7] text-[#15211b]"><header className="sticky top-0 z-30 border-b border-[#e5ebe7] bg-white/85 backdrop-blur-2xl"><div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6"><a href="/deals" className="text-[15px] font-black">Deal<span className="text-[#176b45]">Scan</span><span className="ml-2 font-semibold text-[#8b9690]">/ Explorer</span></a><a href="/" className="text-sm font-bold text-[#68756e] hover:text-[#153025]">Home</a></div></header>
+ <section className="border-b border-[#e5ebe7] bg-white"><div className="mx-auto max-w-6xl px-4 py-9 sm:px-6 sm:py-12"><div className="flex flex-col gap-7 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#e8f4ec] px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-[#176b45]">{label(deal.county_id)}</span>{deal.verification_status&&<span className="rounded-full bg-[#f1f4f2] px-3 py-1.5 text-[10px] font-bold text-[#69766f]">{label(deal.verification_status)}</span>}</div><h1 className="mt-4 max-w-3xl text-3xl font-black tracking-[-0.035em] sm:text-5xl">{deal.address||'Parcel opportunity'}</h1><p className="mt-3 font-mono text-xs text-[#8b9690]">APN {deal.apn||params.apn}</p></div><ScoreRing score={deal.deal_score}/></div>
+ <div className="mt-9 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Stat label="Asking price" value={money(deal.asking_price)}/><Stat label="Estimated ARV" value={`${money(deal.estimated_arv_low)}–${money(deal.estimated_arv_high)}`}/><Stat label="Estimated profit" value={`${money(deal.estimated_profit_low)}–${money(deal.estimated_profit_high)}`} accent/><Stat label="Recommended offer" value={`${money(deal.recommended_offer_low)}–${money(deal.recommended_offer_high)}`}/></div></div></section>
+ <section className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10"><div className="grid gap-5 lg:grid-cols-[1.35fr_.65fr]"><div className="space-y-5"><article className="rounded-[1.75rem] border border-[#e2e9e4] bg-white p-6 shadow-[0_14px_55px_rgba(23,42,32,.045)] sm:p-7"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-black uppercase tracking-[.16em] text-[#8b9690]">Investment readout</p><h2 className="mt-2 text-2xl font-black">Why this deal stands out</h2></div><span className="rounded-xl bg-[#edf5f0] px-3 py-2 text-xs font-black text-[#176b45]">{deal.deal_score!=null?`${deal.deal_score}/100`: 'Unscored'}</span></div><p className="mt-4 max-w-2xl text-sm leading-7 text-[#65726b]">DealScan combines the published record with available valuation and motivation signals to prioritize what deserves human review. The score is a screening aid—not a promise of returns.</p><div className="mt-6 grid gap-3 sm:grid-cols-2">{(deal.motivation_signals||[]).map(signal=><div key={signal} className="flex items-center gap-3 rounded-2xl border border-[#e7ece9] bg-[#f8faf9] p-4"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-[#e5f2ea] text-[#176b45]">✓</span><span className="text-sm font-bold text-[#33423a]">{label(signal)}</span></div>)}</div>{!(deal.motivation_signals||[]).length&&<div className="mt-5 rounded-2xl bg-[#f7f9f8] p-4 text-sm text-[#7a8780]">No motivation signals are published for this record.</div>}</article>
+ <article className="rounded-[1.75rem] border border-[#e2e9e4] bg-white p-6 sm:p-7"><p className="text-xs font-black uppercase tracking-[.16em] text-[#8b9690]">Verification checklist</p><h2 className="mt-2 text-2xl font-black">Things to verify before acting</h2><div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="rounded-2xl border border-[#eadfca] bg-[#fffaf1] p-4"><p className="text-sm font-black text-[#6e5122]">Property records</p><p className="mt-1 text-xs leading-5 text-[#806c4a]">Confirm parcel identity, ownership, title status and current source records.</p></div><div className="rounded-2xl border border-[#eadfca] bg-[#fffaf1] p-4"><p className="text-sm font-black text-[#6e5122]">Physical & planning</p><p className="mt-1 text-xs leading-5 text-[#806c4a]">Confirm access, zoning, utilities, flood/buildability constraints and local requirements.</p></div><div className="rounded-2xl border border-[#eadfca] bg-[#fffaf1] p-4"><p className="text-sm font-black text-[#6e5122]">Valuation assumptions</p><p className="mt-1 text-xs leading-5 text-[#806c4a]">Review the valuation basis and comparable evidence before relying on ARV or profit estimates.</p></div><div className="rounded-2xl border border-[#eadfca] bg-[#fffaf1] p-4"><p className="text-sm font-black text-[#6e5122]">Economics</p><p className="mt-1 text-xs leading-5 text-[#806c4a]">Recalculate closing, holding, improvement, transaction and resale costs for your situation.</p></div></div></article></div>
+ <aside className="space-y-5"><article className="rounded-[1.75rem] border border-[#dce6df] bg-[#153025] p-6 text-white shadow-[0_20px_60px_rgba(21,48,37,.16)]"><p className="text-[10px] font-black uppercase tracking-[.16em] text-[#a9c7b7]">Evidence quality</p><h2 className="mt-2 text-xl font-black">How much should you trust the signal?</h2><div className="mt-6 space-y-4 text-sm"><div className="flex justify-between gap-4"><span className="text-white/55">Valuation basis</span><strong>{label(deal.valuation_basis)}</strong></div><div className="flex justify-between gap-4"><span className="text-white/55">Confidence</span><strong>{confidence!=null?`${confidence}%`:'—'}</strong></div><div className="flex justify-between gap-4"><span className="text-white/55">Verification</span><strong>{label(deal.verification_status)}</strong></div><div className="flex justify-between gap-4"><span className="text-white/55">Source quality</span><strong>{label(deal.source_quality)}</strong></div><div className="flex justify-between gap-4"><span className="text-white/55">Freshness</span><strong>{deal.data_freshness||'—'}</strong></div></div>{confidence!=null&&<div className="mt-6 h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-[#8fc3a6]" style={{width:`${Math.max(0,Math.min(100,confidence))}%`}}/></div>}{deal.source_url&&<a href={deal.source_url} target="_blank" rel="noreferrer" className="mt-6 flex items-center justify-center rounded-xl bg-white px-4 py-3 text-sm font-black text-[#153025] transition hover:bg-[#e8f4ec]">Open source record ↗</a>}</article><article className="rounded-[1.75rem] border border-[#e2e9e4] bg-white p-6"><p className="text-xs font-black uppercase tracking-[.16em] text-[#8b9690]">Parcel snapshot</p><div className="mt-5 space-y-4"><div className="flex justify-between gap-4 text-sm"><span className="text-[#7b8780]">Lot size</span><strong>{deal.lot_size_acres?`${deal.lot_size_acres.toLocaleString()} acres`:'—'}</strong></div><div className="flex justify-between gap-4 text-sm"><span className="text-[#7b8780]">County</span><strong>{label(deal.county_id)}</strong></div><div className="flex justify-between gap-4 text-sm"><span className="text-[#7b8780]">APN</span><strong className="font-mono text-xs">{deal.apn||params.apn}</strong></div></div></article></aside></div><div className="mt-8 border-t border-[#e1e8e4] pt-5 text-xs leading-5 text-[#87928c]">DealScan scores are screening signals, not guarantees of value, title, buildability, or profit. Verify the parcel and source records before making an offer or other investment decision.</div></section></main>
 }
