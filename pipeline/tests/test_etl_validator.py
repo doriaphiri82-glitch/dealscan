@@ -27,6 +27,18 @@ def test_valid_config_and_sample():
     assert report["sample_invalid"] == 0
 
 
+def test_case_insensitive_sample_fields_are_valid():
+    cfg=_cfg()
+    report=validate_county_config(
+        "test_aa",
+        cfg,
+        source_fields=["APN", "SITUS_ADDR", "LAND_ACRES", "FULL_CASH_VALUE", "OWNER_NAME"],
+        sample_records=[{"apn": "123", "situs_addr": "123 Main", "land_acres": 2.5, "full_cash_value": 10000, "owner_name": "Owner"}],
+    )
+    assert report["valid"] is True
+    assert report["sample_invalid"] == 0
+
+
 def test_missing_source_field_is_rejected():
     report = validate_county_config(
         "test_aa",
