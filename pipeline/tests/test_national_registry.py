@@ -29,7 +29,7 @@ def test_national_sync_preserves_existing_when_census_unavailable(monkeypatch, t
 
     path=tmp_path/"registry.json"
     existing={"counties":{"custom_99_001":{
-        "county_id":"custom_99_001","county_name":"Custom County","state":"Test State","state_fips":"99","county_fips":"001","geoid":"99001",
+        "county_id":"custom_99_001","county_name":"Custom County","state":"Test State","state_fips":"99","county_fips":"001","geoid":"99001","population":12345,
         "data_source_type":"arcgis","verification_status":"source_verified","coverage_status":"tier_3","arcgis_layer_url":"https://example.test/FeatureServer/0"
     }},"meta":{}}
     path.write_text(json.dumps(existing),encoding="utf-8")
@@ -39,6 +39,7 @@ def test_national_sync_preserves_existing_when_census_unavailable(monkeypatch, t
     nr.ensure_national_counties()
     saved=json.loads(path.read_text(encoding="utf-8"))
     county=saved["counties"]["custom_99_001"]
+    assert county["population"]==12345
     assert county["verification_status"]=="source_verified"
     assert county["coverage_status"]=="tier_3"
     assert county["arcgis_layer_url"]=="https://example.test/FeatureServer/0"
