@@ -26,6 +26,23 @@ def _numeric(value: Any) -> bool:
         return False
 
 
+def _record_value(record: Mapping[str, Any], source_fields: Any) -> Any:
+    """Read mapped fields case-insensitively from source samples."""
+    sources = source_fields if isinstance(source_fields, (list, tuple)) else [source_fields]
+    folded = {str(k).lower(): v for k, v in record.items()}
+    for source in sources:
+        if not _nonempty(source):
+            continue
+        key = str(source)
+        value = record.get(key)
+        if _nonempty(value):
+            return value
+        value = folded.get(key.lower())
+        if _nonempty(value):
+            return value
+    return None
+
+
 def validate_county_config(county_id: str, cfg: Mapping[str, Any], source_fields: Optional[Iterable[str]] = None, sample_records: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Return a machine-readable ETL preflight report.
 
@@ -79,8 +96,7 @@ def validate_county_config(county_id: str, cfg: Mapping[str, Any], source_fields
             source = fields.get(field)
             if not source:
                 continue
-            source_fields_for_value = source if isinstance(source, (list, tuple)) else [source]
-            value = next((record.get(s) for s in source_fields_for_value if _nonempty(record.get(s))), None)
+            value = _record_value(record, source)
             if field in ("apn", "address", "owner_name") and not _nonempty(value):
                 issues.append(f"{field} missing")
             if field == "lot_size_acres" and _nonempty(value) and not _numeric(value):
@@ -91,8 +107,7 @@ def validate_county_config(county_id: str, cfg: Mapping[str, Any], source_fields
             source = fields.get(field)
             if not source:
                 continue
-            sources = source if isinstance(source, (list, tuple)) else [source]
-            value = next((record.get(s) for s in sources if _nonempty(record.get(s))), None)
+            value = _record_value(record, source)
             if not _numeric(value):
                 issues.append(f"{field} not numeric")
         if issues:
