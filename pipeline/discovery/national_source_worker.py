@@ -33,10 +33,10 @@ def discover_and_register(limit:int=25)->Dict[str,Any]:
 
 
 def run_national_batch(limit:int=10,max_records:int=5000,mode:str="publish")->Dict[str,Any]:
-    """Run only currently live-validated sources; repeated batches process the eligible universe."""
+    """Run live-validated counties in oldest-success-first rotation, including published counties."""
     ensure_national_counties()
-    candidates=[c for c in list_counties() if c.get("coverage_status")!="tier_5" and c.get("validation_status")=="valid" and (c.get("arcgis_layer_url") or c.get("parcel_source_url") or c.get("arcgis_root"))]
-    candidates.sort(key=lambda c:(c.get("last_successful_run") is not None,c.get("last_successful_run") or ""))
+    candidates=[c for c in list_counties() if c.get("validation_status")=="valid" and (c.get("arcgis_layer_url") or c.get("parcel_source_url") or c.get("arcgis_root"))]
+    candidates.sort(key=lambda c:(c.get("last_successful_run") is not None,c.get("last_successful_run") or "",c.get("state",""),c.get("county_name","")))
     results=[]
     for county in candidates[:_limit(limit,10)]:
         try:results.append(run_county(county["county_id"],mode=mode,max_records=max(1,min(int(max_records),10000))))
