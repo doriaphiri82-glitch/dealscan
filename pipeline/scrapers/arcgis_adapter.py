@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from scrapers.base import post_json
+from scrapers.arcgis import layer_fields
 from scrapers.adapter import BaseScraperAdapter
 
 
@@ -28,11 +29,35 @@ class ArcGISFeatureServerAdapter(BaseScraperAdapter):
                     fields.append(str(item).strip())
         return fields
 
+    @staticmethod
+    def _resolve_field_names(cfg: Dict[str, Any], actual_fields: Optional[List[str]]) -> None:
+        """Translate configured field names to the exact casing exposed by ArcGIS."""
+        if not actual_fields:
+            return
+        lookup = {str(name).lower(): str(name) for name in actual_fields}
+
+        def resolve(value: Any) -> Any:
+            if isinstance(value, (list, tuple)):
+                return [lookup.get(str(item).lower(), str(item)) for item in value]
+            if not value:
+                return value
+            return lookup.get(str(value).lower(), str(value))
+
+        if cfg.get("fields"):
+            cfg["fields"] = {canonical: resolve(source) for canonical, source in cfg["fields"].items()}
+        if cfg.get("out_fields") is not None:
+            cfg["out_fields"] = [resolve(value) for value in cfg["out_fields"]]
+
     def discover(self, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         self.last_error = None
         layer_url = cfg.get("arcgis_layer_url")
         if not layer_url:
             self.last_error = "missing arcgis_layer_url"
+            return []
+        try:
+            self._resolve_field_names(cfg, layer_fields(str(layer_url).rstrip("/")))
+        except Exception as exc:
+            self.last_error = f"layer metadata lookup failed: {exc}"
             return []
         where = cfg.get("where", "1=1")
         out_fields = self._out_fields(cfg)
