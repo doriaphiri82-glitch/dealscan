@@ -49,7 +49,7 @@ def _pick(fields: List[Dict[str,Any]], patterns: List[str]) -> Optional[str]:
 def _field_map(meta: Dict[str,Any]) -> Dict[str,str]:
     fields=meta.get("fields") or []
     pairs={
-      "apn":[r"(^|_)apn($|_)",r"parcel.?id",r"parcel.?number",r"property.?id",r"prop.?id",r"tax.?pin",r"account.?number"],
+      "apn":[r"(^|_)apn($|_)",r"parcel.?id",r"parcel.?number",r"property.?id",r"prop.?id",r"tax.?pin",r"account.?number",r"account($|_)",r"geo.?id"],
       "address":[r"situs",r"site.?address",r"property.?address",r"street.?address",r"address"],
       "lot_size_acres":[r"acre",r"land.?area",r"lot.?size",r"parcel.?area"],
       "assessed_value":[r"assess.*value",r"assessed",r"assessment"],
@@ -66,6 +66,20 @@ def _field_map(meta: Dict[str,Any]) -> Dict[str,str]:
       "legal_description":[r"legal",r"description"],
       "latitude":[r"latitude",r"lat($|_)"] , "longitude":[r"longitude",r"long($|_")]}
     return {dest:f for dest,ps in pairs.items() if (f:=_pick(fields,ps))}
+
+def _source_quality(field_map: Dict[str,str], meta: Dict[str,Any]) -> Dict[str,Any]:
+    """Classify discovered parcel sources without confusing discovery with verification."""
+    # APN-like identity is sufficient to ingest a parcel layer; address is useful
+    # but not mandatory because some official GIS layers expose geometry/IDs only.
+    required = ("apn",)
+    useful = ("address","lot_size_acres","assessed_value","market_value","land_use","zoning","has_improvements")
+    id_ok = all(k in field_map for k in required)
+    useful_count = sum(k in field_map for k in useful)
+    score = (50 if id_ok else 0) + round(50 * useful_count / len(useful))
+    if not id_ok and (meta.get("objectIdField") or meta.get("geometryType")):
+        score = max(score, 25)
+    tier = "strong" if score >= 80 else "usable" if score >= 55 else "partial"
+    return {"source_quality":tier,"source_quality_score":score,"useful_field_count":useful_count,"missing_useful_fields":[k for k in useful if k not in field_map]}
 
 def discover_arcgis_county_config(county_id: str, county_name: str, state: str) -> Optional[Dict[str,Any]]:
     """Discover a public ArcGIS parcel layer for one county on demand."""
@@ -93,13 +107,13 @@ def discover_arcgis_county_config(county_id: str, county_name: str, state: str) 
         else:
             for lyr in meta.body.get("layers") or []:
                 name=_norm(str(lyr.get("name") or ""))
-                if any(k in name for k in ("parcel","property","tax")):
+                if any(k in name for k in ("parcel","property","tax","assess")):
                     u=f"{root}/{lyr.get('id')}"; lm=fetch(u+"?f=json",ttl=6*3600,as_json=True,respect_robots=False)
                     if lm.ok and isinstance(lm.body,dict): candidates.append((u,lm.body))
         for layer,lm in candidates:
-            fm=_field_map(lm)
-            if "apn" in fm and "address" in fm:
-                return {"name":f"{county_name}, {state}","data_mode":"arcgis","arcgis_layer_url":layer,"arcgis_root":layer,"fields":fm,"defaults":{"county_state":state},"where":"1=1","verified":False,"discovery_source":"arcgis_online","discovery_score":score,"status":"DISCOVERED_NOT_VERIFIED"}
+            fm=_field_map(lm); quality=_source_quality(fm,lm)
+            if "apn" in fm or lm.get("objectIdField") or lm.get("geometryType"):
+                return {"name":f"{county_name}, {state}","data_mode":"arcgis","arcgis_layer_url":layer,"arcgis_root":root,"fields":fm,"defaults":{"county_state":state},"where":"1=1","verified":False,"discovery_source":"arcgis_online","discovery_score":score,"status":"DISCOVERED_NOT_VERIFIED",**quality}
     return None
 
 def probe_county_sources(county_id: str, cfg: Dict[str,Any]) -> List[Dict[str,Any]]:
