@@ -1,6 +1,7 @@
 """DealScan - Per-county run runner."""
 from __future__ import annotations
 from typing import Any, Dict, Optional
+import json
 import os
 from config.counties.national_registry import PILOT_COUNTIES
 from config.counties.registry import get_county, mark_county_run
@@ -69,7 +70,16 @@ class RunMetrics:
     def record_rejection(self,reason):self.rejected+=1; self.rejection_reasons[reason]=self.rejection_reasons.get(reason,0)+1
 
 def _shape_for_bundle(row):
-    return {k:row.get(k) for k in ('apn','address','county_id','lot_size_acres','asking_price','deal_score','estimated_arv_low','estimated_arv_high','estimated_profit_low','estimated_profit_high','recommended_offer_low','recommended_offer_high','market_velocity','competition_level','owner_state','zoning','tax_delinquent_years','valuation_basis','valuation_confidence','source','source_url','source_vendor','source_quality','verification_status','data_freshness')}
+    out={k:row.get(k) for k in ('apn','address','county_id','lot_size_acres','asking_price','deal_score','estimated_arv_low','estimated_arv_high','estimated_profit_low','estimated_profit_high','recommended_offer_low','recommended_offer_high','market_velocity','competition_level','owner_state','zoning','tax_delinquent_years','valuation_basis','valuation_confidence','source','source_url','source_vendor','source_quality','verification_status','data_freshness')}
+    notes=row.get('notes')
+    if notes:
+        try:
+            parsed=json.loads(notes)
+            if isinstance(parsed,dict) and parsed.get('ai'):
+                out['ai_analysis']=parsed['ai']
+        except (TypeError, ValueError):
+            pass
+    return out
 
 def _provenance(cfg:Dict[str,Any],county_id:str)->Dict[str,Any]:
     county=get_county(county_id) or {}
