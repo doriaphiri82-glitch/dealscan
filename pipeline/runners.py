@@ -1,11 +1,13 @@
 """DealScan - Per-county run runner."""
 from __future__ import annotations
 from typing import Any, Dict, Optional
+import os
 from config.counties.national_registry import PILOT_COUNTIES
 from config.counties.registry import get_county, mark_county_run
 from database import get_top_deals, save_deal, save_property
 from runregistry import record_run, write_bundle
 from scoring.deal_scorer import score_and_enrich_deal
+from ai.deal_intelligence import attach_ai_analysis
 from scrapers import arcgis
 from scrapers.adapter import BaseScraperAdapter
 from scrapers.arcgis_adapter import ArcGISFeatureServerAdapter, ArcGISHubAdapter
@@ -13,8 +15,9 @@ from scrapers.counties import COUNTY_SCRAPERS
 from scrapers.flatfile_adapter import FlatFileAdapter, CSVAdapter, ExcelAdapter
 
 ADAPTER_MAP={"arcgis":ArcGISFeatureServerAdapter,"arcgis_hub":ArcGISHubAdapter,"flatfile":FlatFileAdapter,"csv":CSVAdapter,"excel":ExcelAdapter,"state_parcel":ArcGISFeatureServerAdapter}
+AI_SCORE_THRESHOLD=int(os.getenv("OPENAI_AI_SCORE_THRESHOLD", "70"))
 
-def _adapter_for(cfg: Dict[str,Any])->Optional[BaseScraperAdapter]:
+def _adapter_for(cfg:Dict[str,Any])->Optional[BaseScraperAdapter]:
     scraper_type=cfg.get("scraper_type"); data_mode=cfg.get("data_mode","arcgis")
     if scraper_type:
         cls=ADAPTER_MAP.get(scraper_type)
@@ -98,6 +101,10 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
             except Exception as exc: m.record_rejection(f'score_error: {exc}'); continue
             if deal is None:m.record_rejection('below_min_profit'); continue
             deal.update(apn=prop.get('apn'),address=prop.get('address'),county_id=county_id); deal.update(_provenance(cfg,county_id))
+            # Deterministic scoring remains authoritative. Use OpenAI only to enrich
+            # high-quality candidates with a conservative explanation and next steps.
+            if deal.get('deal_score', 0) >= AI_SCORE_THRESHOLD:
+                deal = attach_ai_analysis(deal, prop, [])
             if not dry_run:
                 try:
                     deal['property_id']=save_property(prop); deal['source']='scrape'; deal['motivation_signals']=','.join(deal.get('motivation_signals',[])); save_deal(deal); m.stored+=1
