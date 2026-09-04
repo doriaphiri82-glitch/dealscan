@@ -65,7 +65,17 @@ class RunMetrics:
     def record_rejection(self,reason):self.rejected+=1; self.rejection_reasons[reason]=self.rejection_reasons.get(reason,0)+1
 
 def _shape_for_bundle(row):
-    return {k:row.get(k) for k in ('apn','address','county_id','lot_size_acres','asking_price','deal_score','estimated_arv_low','estimated_arv_high','estimated_profit_low','estimated_profit_high','market_velocity','competition_level','owner_state','zoning','tax_delinquent_years','source')}
+    return {k:row.get(k) for k in ('apn','address','county_id','lot_size_acres','asking_price','deal_score','estimated_arv_low','estimated_arv_high','estimated_profit_low','estimated_profit_high','recommended_offer_low','recommended_offer_high','market_velocity','competition_level','owner_state','zoning','tax_delinquent_years','valuation_basis','valuation_confidence','source','source_url','source_vendor','source_quality','verification_status','data_freshness')}
+
+def _provenance(cfg:Dict[str,Any],county_id:str)->Dict[str,Any]:
+    county=get_county(county_id) or {}
+    return {
+        'source_url':cfg.get('arcgis_layer_url') or cfg.get('parcel_source_url') or cfg.get('data_url') or county.get('parcel_source_url'),
+        'source_vendor':cfg.get('source_vendor') or county.get('source_vendor'),
+        'source_quality':cfg.get('source_quality') or county.get('source_quality'),
+        'verification_status':county.get('verification_status'),
+        'data_freshness':county.get('data_freshness'),
+    }
 
 def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False,offline:bool=False)->Dict[str,Any]:
     cfg=_county_config(county_id); m=RunMetrics(county_id); summary={'county_id':county_id,'counts':m.to_counts(),'status':'ok','error':''}
@@ -81,13 +91,12 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
             except Exception as exc: m.record_rejection(f'score_error: {exc}'); continue
             if deal is None:m.record_rejection('below_min_profit'); continue
             deal.update(apn=prop.get('apn'),address=prop.get('address'),county_id=county_id)
+            deal.update(_provenance(cfg,county_id))
             if not dry_run:
                 try:
                     deal['property_id']=save_property(prop); deal['source']='scrape'; deal['motivation_signals']=','.join(deal.get('motivation_signals',[])); save_deal(deal); m.stored+=1
                 except Exception as exc:m.errors.append(f'save_error: {exc}'); m.record_rejection('save_error'); continue
             scored.append(deal); m.scored+=1; m.qualified+=1
-        # Only publish deals belonging to this county. This prevents a run for
-        # one county from making unrelated global deals count as its coverage.
         if mode=='publish' and not dry_run:
             publish_rows=get_top_deals(limit=25,min_score=0,county_id=county_id)
         else:
