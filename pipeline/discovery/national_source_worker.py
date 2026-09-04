@@ -32,6 +32,7 @@ def discover_and_register(limit: int = 25) -> Dict[str, Any]:
                 results.append({"county_id": cid, "status": "not_found"})
                 continue
             fields = cfg.get("fields", {})
+            quality = cfg.get("source_quality", "partial")
             # Discovery is intentionally not verification. A discovered source
             # is registered as tier_1 until a real ETL run produces evidence.
             update_county(
@@ -44,16 +45,28 @@ def discover_and_register(limit: int = 25) -> Dict[str, Any]:
                 verification_status="discovered_not_verified",
                 coverage_status="tier_1",
                 field_mapping=fields,
-                notes="Public ArcGIS source discovered; ETL verification pending",
+                notes=f"Public ArcGIS source discovered; ETL verification pending; source quality={quality}",
                 extra={
                     "arcgis_layer_url": cfg.get("arcgis_layer_url"),
                     "discovery_source": cfg.get("discovery_source"),
                     "discovery_score": cfg.get("discovery_score"),
                     "field_count": len(fields),
+                    "source_quality": quality,
+                    "source_quality_score": cfg.get("source_quality_score", 0),
+                    "useful_field_count": cfg.get("useful_field_count", 0),
+                    "missing_useful_fields": cfg.get("missing_useful_fields", []),
                 },
             )
             found += 1
-            results.append({"county_id": cid, "status": "discovered", "url": cfg.get("arcgis_layer_url"), "field_count": len(fields), "discovery_score": cfg.get("discovery_score")})
+            results.append({
+                "county_id": cid,
+                "status": "discovered",
+                "url": cfg.get("arcgis_layer_url"),
+                "field_count": len(fields),
+                "discovery_score": cfg.get("discovery_score"),
+                "source_quality": quality,
+                "source_quality_score": cfg.get("source_quality_score", 0),
+            })
         except Exception as exc:
             results.append({"county_id": cid, "status": "error", "error": str(exc)[:300]})
     return {"attempted": min(len(candidates), _limit(limit)), "found": found, "results": results}
