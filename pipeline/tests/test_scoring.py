@@ -58,7 +58,7 @@ def test_unknown_accessibility_and_competition_are_neutral():
     result = score_and_enrich_deal(
         {
             "county_id": "test",
-            "market_value": 20000,
+            "market_value": 40000,
             "lot_size_acres": 1,
             "has_improvements": False,
         },
