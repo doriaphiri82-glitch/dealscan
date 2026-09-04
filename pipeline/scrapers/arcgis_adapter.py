@@ -1,12 +1,6 @@
-"""
-DealScan - ArcGIS FeatureServer / MapServer adapter.
-
-Handles counties whose parcel data is exposed via ArcGIS REST.
-"""
+"""ArcGIS FeatureServer / MapServer adapter for DealScan."""
 from __future__ import annotations
-
 from typing import Any, Dict, List, Optional
-
 from scrapers.base import post_json
 from scrapers.arcgis import layer_fields
 from scrapers.adapter import BaseScraperAdapter
@@ -15,6 +9,8 @@ from scrapers.adapter import BaseScraperAdapter
 class ArcGISFeatureServerAdapter(BaseScraperAdapter):
     def __init__(self) -> None:
         self.last_error: Optional[str] = None
+        self.source_fields: List[str] = []
+        self.resolved_fields: Dict[str, Any] = {}
 
     @staticmethod
     def _out_fields(cfg: Dict[str, Any]) -> List[str]:
@@ -25,13 +21,13 @@ class ArcGISFeatureServerAdapter(BaseScraperAdapter):
         for value in configured:
             values = value if isinstance(value, (list, tuple)) else [value]
             for item in values:
-                if item and str(item).strip() and str(item).strip() not in fields:
-                    fields.append(str(item).strip())
+                item = str(item).strip() if item is not None else ""
+                if item and item not in fields:
+                    fields.append(item)
         return fields
 
     @staticmethod
     def _resolve_field_names(cfg: Dict[str, Any], actual_fields: Optional[List[str]]) -> None:
-        """Translate configured field names to the exact casing exposed by ArcGIS."""
         if not actual_fields:
             return
         lookup = {str(name).lower(): str(name) for name in actual_fields}
@@ -50,6 +46,8 @@ class ArcGISFeatureServerAdapter(BaseScraperAdapter):
 
     def discover(self, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         self.last_error = None
+        self.source_fields = []
+        self.resolved_fields = {}
         layer_url = cfg.get("arcgis_layer_url")
         if not layer_url:
             self.last_error = "missing arcgis_layer_url"
@@ -62,7 +60,9 @@ class ArcGISFeatureServerAdapter(BaseScraperAdapter):
             if not actual_fields:
                 self.last_error = "layer metadata contains no fields"
                 return []
+            self.source_fields = [str(name) for name in actual_fields]
             self._resolve_field_names(cfg, actual_fields)
+            self.resolved_fields = dict(cfg.get("fields") or {})
         except Exception as exc:
             self.last_error = f"layer metadata lookup failed: {exc}"
             return []
@@ -73,14 +73,7 @@ class ArcGISFeatureServerAdapter(BaseScraperAdapter):
         offset = 0
         page_size = min(1000, max_records)
         while offset < max_records:
-            payload = {
-                "where": where,
-                "outFields": ",".join(out_fields) if out_fields else "*",
-                "returnGeometry": "false",
-                "f": "json",
-                "resultOffset": offset,
-                "resultRecordCount": min(page_size, max_records - offset),
-            }
+            payload = {"where": where, "outFields": ",".join(out_fields) if out_fields else "*", "returnGeometry": "false", "f": "json", "resultOffset": offset, "resultRecordCount": min(page_size, max_records - offset)}
             r = post_json(f"{layer_url}/query", payload)
             if not r.ok or not isinstance(r.body, dict):
                 self.last_error = f"query request failed: {r.error or 'unknown error'}"
@@ -113,10 +106,12 @@ class ArcGISFeatureServerAdapter(BaseScraperAdapter):
 
     def run(self, cfg: Dict[str, Any], max_records: int = 5000):
         result, normalized = super().run(cfg, max_records=max_records)
+        result.metadata["source_url"] = cfg.get("arcgis_layer_url")
+        result.metadata["source_fields"] = self.source_fields
+        result.metadata["resolved_fields"] = self.resolved_fields
+        result.metadata["partial_results"] = bool(self.last_error and normalized)
         if self.last_error:
             result.errors.append(f"source_error: {self.last_error}")
-            result.metadata["partial_results"] = bool(normalized)
-        result.metadata["source_url"] = cfg.get("arcgis_layer_url")
         return result, normalized
 
 
