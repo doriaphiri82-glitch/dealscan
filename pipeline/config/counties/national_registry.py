@@ -2,7 +2,7 @@
 from __future__ import annotations
 import json, urllib.request
 from typing import Any, Dict
-from .registry import register_county, get_county
+from .registry import register_county, get_county, list_counties
 
 PILOT_COUNTIES: Dict[str, Dict[str, Any]] = {
     "cochise_az": {"county_name":"Cochise County","state":"Arizona","state_fips":"04","county_fips":"003","geoid":"04003","population":125447,"data_source_type":"arcgis","assessor_url":"https://www.cochise.az.gov/departments/assessor","gis_url":"https://gis-cochise.opendata.arcgis.com","parcel_source_url":"https://gis-cochise.opendata.arcgis.com/datasets/Cad_Parcel_TaxInfo","source_vendor":"esri","scraper_type":"arcgis","verification_status":"source_verified","coverage_status":"tier_3","notes":"ArcGIS Hub -> Cad_Parcel_TaxInfo; source fields verified 2026-09-03; ETL run pending"},
@@ -24,13 +24,17 @@ def discover_national_counties()->Dict[str,Dict[str,Any]]:
     except Exception:return {}
 
 def ensure_national_counties()->Dict[str,Dict[str,Any]]:
-    combined=discover_national_counties(); combined.update(PILOT_COUNTIES)
+    discovered=discover_national_counties()
+    existing={c["county_id"]:c for c in list_counties()}
+    combined=dict(existing)
+    combined.update(discovered)
+    combined.update(PILOT_COUNTIES)
     for cid,meta in combined.items():
-        existing=get_county(cid) or {}; payload=dict(meta)
-        if existing:
+        existing_entry=existing.get(cid) or get_county(cid) or {}; payload=dict(meta)
+        if existing_entry:
             for key in _PRESERVE_KEYS:
-                if existing.get(key) not in (None,""): payload[key]=existing[key]
-        register_county(county_id=cid,county_name=payload["county_name"],state=payload["state"],state_fips=payload["state_fips"],county_fips=payload["county_fips"],geoid=payload["geoid"],population=payload.get("population",existing.get("population")),data_source_type=payload.get("data_source_type"),assessor_url=payload.get("assessor_url"),gis_url=payload.get("gis_url"),parcel_source_url=payload.get("parcel_source_url"),tax_source_url=payload.get("tax_source_url"),delinquent_tax_source_url=payload.get("delinquent_tax_source_url"),zoning_source_url=payload.get("zoning_source_url"),source_vendor=payload.get("source_vendor"),scraper_type=payload.get("scraper_type"),verification_status=payload.get("verification_status","not_started"),coverage_status=payload.get("coverage_status","not_covered"),last_successful_run=payload.get("last_successful_run"),last_record_count=payload.get("last_record_count"),data_freshness=payload.get("data_freshness"),field_mapping=payload.get("field_mapping",{}),notes=payload.get("notes","") ,extra={k:payload[k] for k in _PRESERVE_KEYS if k not in {"data_source_type","assessor_url","gis_url","parcel_source_url","tax_source_url","delinquent_tax_source_url","zoning_source_url","source_vendor","scraper_type","verification_status","coverage_status","last_successful_run","last_record_count","data_freshness","field_mapping","notes"} and k in payload})
+                if existing_entry.get(key) not in (None,""): payload[key]=existing_entry[key]
+        register_county(county_id=cid,county_name=payload["county_name"],state=payload["state"],state_fips=payload["state_fips"],county_fips=payload["county_fips"],geoid=payload["geoid"],population=payload.get("population",existing_entry.get("population")),data_source_type=payload.get("data_source_type"),assessor_url=payload.get("assessor_url"),gis_url=payload.get("gis_url"),parcel_source_url=payload.get("parcel_source_url"),tax_source_url=payload.get("tax_source_url"),delinquent_tax_source_url=payload.get("delinquent_tax_source_url"),zoning_source_url=payload.get("zoning_source_url"),source_vendor=payload.get("source_vendor"),scraper_type=payload.get("scraper_type"),verification_status=payload.get("verification_status","not_started"),coverage_status=payload.get("coverage_status","not_covered"),last_successful_run=payload.get("last_successful_run"),last_record_count=payload.get("last_record_count"),data_freshness=payload.get("data_freshness"),field_mapping=payload.get("field_mapping",{}),notes=payload.get("notes","") ,extra={k:payload[k] for k in _PRESERVE_KEYS if k not in {"data_source_type","assessor_url","gis_url","parcel_source_url","tax_source_url","delinquent_tax_source_url","zoning_source_url","source_vendor","scraper_type","verification_status","coverage_status","last_successful_run","last_record_count","data_freshness","field_mapping","notes"} and k in payload})
     return combined
 
 def ensure_pilot_counties():
