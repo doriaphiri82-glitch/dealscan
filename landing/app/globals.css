@@ -36,7 +36,10 @@ html { scroll-behavior: smooth; }
 body {
   margin: 0;
   color: var(--foreground);
-  background: var(--background);
+  background:
+    radial-gradient(circle at 12% -8%, rgba(23,107,69,.075), transparent 30rem),
+    radial-gradient(circle at 92% 6%, rgba(141,169,149,.10), transparent 26rem),
+    var(--background);
   font-family: 'DM Sans', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -50,32 +53,45 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: #aeb9b1; }
 
 h1, h2, h3, h4, h5, h6 { font-family: 'Manrope', 'DM Sans', system-ui, sans-serif; letter-spacing: -0.025em; }
-
 .font-mono { font-family: 'JetBrains Mono', 'SF Mono', monospace; }
 .tabular-nums { font-variant-numeric: tabular-nums; }
 
-/* Premium shared surfaces */
-.dealscan-glass {
-  background: rgba(255,255,255,0.78);
-  border: 1px solid rgba(255,255,255,0.9);
-  box-shadow: 0 18px 55px rgba(31, 52, 42, 0.08);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+@layer components {
+  .dealscan-glass {
+    background: rgba(255,255,255,.78);
+    border: 1px solid rgba(255,255,255,.9);
+    box-shadow: 0 18px 55px rgba(31,52,42,.08);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+  }
+
+  .dealscan-card {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: 0 8px 30px rgba(31,52,42,.045);
+    transition: transform var(--dur-component) var(--ease-out), box-shadow var(--dur-component) var(--ease-out), border-color var(--dur-component) var(--ease-out);
+  }
+
+  .dealscan-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(23,107,69,.16);
+    box-shadow: 0 18px 45px rgba(31,52,42,.09);
+  }
+
+  .dealscan-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: .5rem;
+    border-radius: .8rem;
+    font-weight: 700;
+    transition: transform var(--dur-micro) var(--ease-out), background-color var(--dur-micro) ease, box-shadow var(--dur-micro) ease;
+  }
+
+  .dealscan-button:hover { transform: translateY(-1px); }
+  .dealscan-button:active { transform: translateY(0); }
 }
 
-.dealscan-card {
-  border: 1px solid var(--border);
-  background: var(--surface);
-  box-shadow: 0 8px 30px rgba(31, 52, 42, 0.045);
-  transition: transform var(--dur-component) var(--ease-out), box-shadow var(--dur-component) var(--ease-out), border-color var(--dur-component) var(--ease-out);
-}
-.dealscan-card:hover {
-  transform: translateY(-2px);
-  border-color: rgba(23,107,69,0.16);
-  box-shadow: 0 18px 45px rgba(31, 52, 42, 0.09);
-}
-
-/* Motion */
 @keyframes fadeInUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes navIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes pulseSoft { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
@@ -92,25 +108,18 @@ h1, h2, h3, h4, h5, h6 { font-family: 'Manrope', 'DM Sans', system-ui, sans-seri
 .js .hero-stage.stage-in { animation: fadeInUp .65s var(--ease-out) forwards; }
 .js .hero-card { opacity: 0; transform: translateY(16px); transition: opacity .65s var(--ease-out), transform .65s var(--ease-out); }
 .js .hero-card.settled { opacity: 1; transform: translateY(0); }
-
 .js [data-reveal] { opacity: 0; transform: translateY(18px); transition: opacity var(--dur-section) var(--ease-out), transform var(--dur-section) var(--ease-out); transition-delay: var(--reveal-delay, 0ms); will-change: opacity, transform; }
 .js [data-reveal].revealed { opacity: 1; transform: translateY(0); }
 
-/* Focus */
 a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
   border-radius: 6px;
 }
 
-.skip-link {
-  position: absolute; left: -9999px; top: 0; z-index: 100;
-  background: var(--foreground); color: white; padding: 10px 16px;
-  border-radius: 0 0 8px 0; font-size: 13px; font-weight: 700;
-}
+.skip-link { position: absolute; left: -9999px; top: 0; z-index: 100; background: var(--foreground); color: white; padding: 10px 16px; border-radius: 0 0 8px 0; font-size: 13px; font-weight: 700; }
 .skip-link:focus { left: 0; }
 
-/* Data visualization */
 .mini-bar-row { display:flex; align-items:center; gap:8px; padding:3px 0; }
 .mini-bar-label { width:52px; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--text-tertiary); font-family:'JetBrains Mono',monospace; }
 .mini-bar-track { flex:1; height:4px; background:#e7ece8; border-radius:999px; overflow:hidden; }
@@ -134,7 +143,6 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .comps-table th, .comps-table td { font-variant-numeric:tabular-nums; }
 .comps-table td.num, .comps-table th.num { text-align:right; }
 
-/* Gentle geographic texture for large surfaces */
 .parcel-texture {
   background-image: linear-gradient(120deg, rgba(23,107,69,.035) 1px, transparent 1px), linear-gradient(30deg, rgba(23,107,69,.025) 1px, transparent 1px);
   background-size: 34px 34px, 34px 34px;
