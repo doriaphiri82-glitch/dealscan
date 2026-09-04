@@ -54,6 +54,8 @@ jobs:
           REDIS_URL: ${{ secrets.REDIS_URL }}
         run: python main.py --run-national "$RUN_LIMIT" --max-records 5000
       - name: Publish live bundle
+        id: publish_live
+        continue-on-error: true
         working-directory: pipeline
         env:
           KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
