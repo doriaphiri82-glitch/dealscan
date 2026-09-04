@@ -1,12 +1,11 @@
 'use client'
 
 import { FormEvent, useEffect, useState } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 
 export default function AuthPage() {
   const router = useRouter()
-  const searchParams = useSearchParams()
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -15,8 +14,10 @@ export default function AuthPage() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    if (searchParams.get('error')) setError('We could not complete that sign-in. Please try again.')
-  }, [searchParams])
+    if (new URLSearchParams(window.location.search).get('error')) {
+      setError('We could not complete that sign-in. Please try again.')
+    }
+  }, [])
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -28,7 +29,6 @@ export default function AuthPage() {
       const result = mode === 'signin'
         ? await supabase.auth.signInWithPassword({ email, password })
         : await supabase.auth.signUp({ email, password, options: { emailRedirectTo: `${window.location.origin}/auth/callback` } })
-
       if (result.error) throw result.error
       if (mode === 'signup' && !result.data.session) {
         setMessage('Check your email to confirm your account, then come back to DealScan.')
