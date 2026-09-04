@@ -49,7 +49,7 @@ def update_county(county_id,**fields):
     entry.update({k:v for k,v in fields.items() if v is not None}); _recompute_meta(reg); _save_registry(reg); return entry
 
 
-def mark_county_run(county_id:str, *, record_count:int, qualified_count:int=0, published_count:int=0, status:str="ok", error:str=""):
+def mark_county_run(county_id:str, *, record_count:int, qualified_count:int=0, published_count:int=0, persisted_count:int=0, status:str="ok", error:str=""):
     """Promote coverage only from evidence produced by a real ETL run.
 
     tier_0: no source/extraction
@@ -61,17 +61,17 @@ def mark_county_run(county_id:str, *, record_count:int, qualified_count:int=0, p
     entry=get_county(county_id)
     if not entry:return None
     now=datetime.now(timezone.utc).isoformat()
-    fields={"last_successful_run":now,"last_record_count":int(record_count),"data_freshness":now}
-    if status in ("ok","degraded") and record_count>0:
-        fields["verification_status"]="verified"
-        fields["coverage_status"]="tier_5" if published_count>0 else "tier_4"
+    fields={"last_record_count":int(record_count)}
+    if status in ("ok","degraded") and persisted_count>0:
+        fields.update({"last_successful_run":now,"data_freshness":now,"verification_status":"verified","coverage_status":"tier_5" if published_count>0 else "tier_4"})
+    elif status=="ok" and record_count>0:
+        fields.update({"last_successful_run":now,"data_freshness":now,"verification_status":"source_verified","coverage_status":"tier_3"})
     elif status=="ok" and record_count==0:
-        fields["verification_status"]="source_verified"
-        fields["coverage_status"]="tier_3"
+        fields.update({"last_successful_run":now,"data_freshness":now,"verification_status":"source_verified","coverage_status":"tier_3"})
     else:
         fields["verification_status"]="discovered_not_verified" if entry.get("data_source_type") else "not_started"
         fields["coverage_status"]=entry.get("coverage_status") or "tier_0"
-    note=f"Last ETL: records={record_count}, qualified={qualified_count}, published={published_count}, status={status}."
+    note=f"Last ETL: records={record_count}, persisted={persisted_count}, qualified={qualified_count}, published={published_count}, status={status}."
     if error: note+=f" Error: {error[:300]}"
     fields["notes"]=(entry.get("notes","").split(" | Last ETL:")[0].strip()+" | "+note).strip(" |")
     return update_county(county_id,**fields)
