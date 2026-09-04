@@ -1,6 +1,7 @@
 from scrapers.arcgis import is_vacant_residential
 from scrapers.arcgis_adapter import ArcGISFeatureServerAdapter
 from scrapers.counties import COUNTY_SCRAPERS
+from scrapers.adapter import BaseScraperAdapter
 from runners import _vacancy_rejection_reason
 
 
@@ -140,3 +141,25 @@ def test_mohave_mapping_targets_live_assessor_parcel_query_layer():
     assert fields["improvement_value"] == "IMPVALUE"
     assert fields["latitude"] == "LATITUDE"
     assert fields["longitude"] == "LONGITUDE"
+
+
+def test_normalization_derives_improvement_boolean_from_real_value():
+    adapter = object.__new__(ArcGISFeatureServerAdapter)
+    normalized = BaseScraperAdapter.normalize(
+        adapter,
+        {"APN": "123", "IMPVALUE": 0},
+        {"county_id": "mohave_az", "fields": {"apn": "APN", "improvement_value": "IMPVALUE"}},
+    )
+    assert normalized["improvement_value"] == 0.0
+    assert normalized["has_improvements"] is False
+
+
+def test_normalization_does_not_infer_improvements_when_value_missing():
+    adapter = object.__new__(ArcGISFeatureServerAdapter)
+    normalized = BaseScraperAdapter.normalize(
+        adapter,
+        {"APN": "123"},
+        {"county_id": "mohave_az", "fields": {"apn": "APN", "improvement_value": "IMPVALUE"}},
+    )
+    assert normalized["improvement_value"] is None
+    assert "has_improvements" not in normalized or normalized["has_improvements"] is None
