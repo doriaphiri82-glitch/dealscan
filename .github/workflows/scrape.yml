@@ -11,6 +11,10 @@ on:
         description: 'Maximum new counties to discover'
         required: false
         default: '25'
+      validate_live_limit:
+        description: 'Maximum counties to live-validate'
+        required: false
+        default: '25'
       run_limit:
         description: 'Maximum discovered counties to ETL'
         required: false
@@ -43,7 +47,7 @@ jobs:
       - name: Initialize database
         working-directory: pipeline
         run: python main.py --setup-db
-      - name: Validate every registered county
+      - name: Validate every registered county configuration
         working-directory: pipeline
         run: python main.py --validate
       - name: Discover national sources
@@ -51,6 +55,11 @@ jobs:
         env:
           DISCOVER_LIMIT: ${{ github.event.inputs.discover_limit || '25' }}
         run: python main.py --discover-national "$DISCOVER_LIMIT"
+      - name: Live-validate national sources
+        working-directory: pipeline
+        env:
+          VALIDATE_LIVE_LIMIT: ${{ github.event.inputs.validate_live_limit || '25' }}
+        run: python main.py --validate-live "$VALIDATE_LIVE_LIMIT"
       - name: Run national ETL batch
         working-directory: pipeline
         env:
@@ -76,11 +85,11 @@ jobs:
           mkdir -p landing/data
           cp -f pipeline/data/bundle.json landing/data/bundle.json
           cp -f pipeline/config/counties/registry.json landing/data/registry.json
-      - name: Commit pipeline data artifacts
+      - name: Commit pipeline data and national registry artifacts
         run: |
           git config user.name "DealScan Pipeline"
           git config user.email "pipeline@dealscan.app"
-          git add -f pipeline/data/registry.json pipeline/data/bundle.json landing/data/bundle.json landing/data/registry.json
+          git add -f pipeline/data/registry.json pipeline/data/bundle.json pipeline/config/counties/registry.json landing/data/bundle.json landing/data/registry.json
           if git diff --cached --quiet; then
             echo "No pipeline data changes to commit."
           else
