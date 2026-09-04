@@ -23,6 +23,7 @@
   --danger: #b4534b;
   --danger-soft: #fdf0ee;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
   --dur-micro: 160ms;
   --dur-component: 320ms;
   --dur-section: 600ms;
@@ -53,11 +54,11 @@ h1,h2,h3,h4,h5,h6 { font-family:'Manrope','DM Sans',system-ui,sans-serif; letter
 
 @layer components {
   .dealscan-glass {
-    background: rgba(255,255,255,.78);
-    border: 1px solid rgba(255,255,255,.9);
-    box-shadow: 0 18px 55px rgba(31,52,42,.08);
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
+    background: linear-gradient(135deg, rgba(255,255,255,.88), rgba(248,251,249,.72));
+    border: 1px solid rgba(255,255,255,.92);
+    box-shadow: 0 18px 55px rgba(31,52,42,.08), inset 0 1px 0 rgba(255,255,255,.75);
+    backdrop-filter: blur(18px) saturate(115%);
+    -webkit-backdrop-filter: blur(18px) saturate(115%);
   }
   .dealscan-card {
     border:1px solid var(--border);
@@ -69,13 +70,26 @@ h1,h2,h3,h4,h5,h6 { font-family:'Manrope','DM Sans',system-ui,sans-serif; letter
   .dealscan-button { display:inline-flex; align-items:center; justify-content:center; gap:.5rem; border-radius:.8rem; font-weight:700; transition:transform var(--dur-micro) var(--ease-out),background-color var(--dur-micro) ease,box-shadow var(--dur-micro) ease; }
   .dealscan-button:hover { transform:translateY(-1px); }
   .dealscan-button:active { transform:translateY(0); }
+  .dealscan-control { border:1px solid var(--border-strong); background:rgba(255,255,255,.86); box-shadow:0 4px 18px rgba(31,52,42,.035); transition:border-color var(--dur-micro) ease,box-shadow var(--dur-micro) ease,background-color var(--dur-micro) ease; }
+  .dealscan-control:hover { border-color:rgba(23,107,69,.24); background:#fff; }
+  .dealscan-control:focus-within { border-color:rgba(23,107,69,.38); box-shadow:0 0 0 4px rgba(23,107,69,.08),0 8px 24px rgba(31,52,42,.05); }
+  .dealscan-grid {
+    background-image: linear-gradient(rgba(23,107,69,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(23,107,69,.035) 1px, transparent 1px);
+    background-size:32px 32px;
+    mask-image:linear-gradient(to bottom,black,transparent 78%);
+  }
+  .dealscan-glow { position:relative; }
+  .dealscan-glow::after { content:''; position:absolute; inset:12% 8% auto; height:35%; border-radius:999px; background:rgba(23,107,69,.09); filter:blur(45px); pointer-events:none; z-index:-1; }
 }
 
 @keyframes fadeInUp { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
 @keyframes navIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }
 @keyframes pulseSoft { 0%,100% { opacity:.55; } 50% { opacity:1; } }
+@keyframes floatSoft { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-5px); } }
+@keyframes shimmer { from { background-position:200% 0; } to { background-position:-200% 0; } }
 .animate-fade-in-up { animation:fadeInUp .65s var(--ease-out) forwards; }
 .animate-nav-in { animation:navIn .5s var(--ease-out) both; }
+.animate-float-soft { animation:floatSoft 4s ease-in-out infinite; }
 .delay-100 { animation-delay:.1s; } .delay-200 { animation-delay:.2s; } .delay-300 { animation-delay:.3s; } .delay-400 { animation-delay:.4s; } .delay-500 { animation-delay:.5s; }
 .js .hero-stage { opacity:0; }
 .js .hero-stage.stage-in { animation:fadeInUp .65s var(--ease-out) forwards; }
@@ -97,7 +111,6 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .score-bar-label { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--text-secondary); font-family:'JetBrains Mono',monospace; }
 .score-bar-track { height:5px; background:#e7ece8; border-radius:999px; overflow:hidden; }
 .score-bar-fill { height:100%; background:var(--accent); border-radius:999px; width:0%; transition:width 1s var(--ease-out); }
-.score-bar-val { font-size:12px; font-weight:700; color:var(--foreground); text-align:right; font-variant-numeric:tabular-nums; }
 .parcel-outline { stroke-dasharray:300; stroke-dashoffset:300; transition:stroke-dashoffset 1.2s var(--ease-out); }
 .parcel-outline.drawn { stroke-dashoffset:0; }
 .comp-marker { opacity:0; transform:scale(.5); transition:opacity .4s var(--ease-out),transform .4s var(--ease-out); }
@@ -109,6 +122,11 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .comps-table th,.comps-table td { font-variant-numeric:tabular-nums; }
 .comps-table td.num,.comps-table th.num { text-align:right; }
 .parcel-texture { background-image:linear-gradient(120deg,rgba(23,107,69,.035) 1px,transparent 1px),linear-gradient(30deg,rgba(23,107,69,.025) 1px,transparent 1px); background-size:34px 34px,34px 34px; }
+.skeleton-shimmer { background:linear-gradient(100deg,#eef2ef 25%,#f7f9f7 40%,#eef2ef 55%); background-size:200% 100%; animation:shimmer 1.4s linear infinite; }
+
+@media (max-width: 639px) {
+  .dealscan-grid { background-size:24px 24px; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; }
