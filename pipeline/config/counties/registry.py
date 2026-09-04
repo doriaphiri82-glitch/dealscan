@@ -37,19 +37,22 @@ def update_county(county_id,**fields):
     if not entry:return None
     entry.update({k:v for k,v in fields.items() if v is not None}); _recompute_meta(reg); _save_registry(reg); return entry
 
+def mark_county_validation(county_id:str, *, status:str, errors:Optional[List[str]]=None, warnings:Optional[List[str]]=None, source_fields_checked:bool=False, sample_checked:int=0):
+    """Persist validation evidence separately from ETL coverage."""
+    entry=get_county(county_id)
+    if not entry:return None
+    now=datetime.now(timezone.utc).isoformat()
+    return update_county(county_id,last_validated_at=now,validation_status=str(status),validation_errors=(errors or [])[:20],validation_warnings=(warnings or [])[:20],validation_source_fields_checked=bool(source_fields_checked),validation_sample_checked=max(0,int(sample_checked)))
+
 def mark_county_run(county_id:str, *, record_count:int, qualified_count:int=0, published_count:int=0, persisted_count:int=0, status:str="ok", error:str=""):
     """Promote coverage only from evidence produced by a real, non-empty successful ETL run."""
     entry=get_county(county_id)
     if not entry:return None
     now=datetime.now(timezone.utc).isoformat(); record_count=max(0,int(record_count)); persisted_count=max(0,int(persisted_count)); qualified_count=max(0,int(qualified_count)); published_count=max(0,int(published_count))
     fields={"last_record_count":record_count}
-    if status=="ok" and persisted_count>0:
-        fields.update({"last_successful_run":now,"data_freshness":now,"verification_status":"verified","coverage_status":"tier_5" if published_count>0 else "tier_4"})
-    elif status=="ok" and record_count>0:
-        fields.update({"last_successful_run":now,"data_freshness":now,"verification_status":"source_verified","coverage_status":"tier_3"})
-    else:
-        fields["verification_status"]="discovered_not_verified" if entry.get("data_source_type") else "not_started"
-        fields["coverage_status"]=entry.get("coverage_status") or "tier_0"
+    if status=="ok" and persisted_count>0: fields.update({"last_successful_run":now,"data_freshness":now,"verification_status":"verified","coverage_status":"tier_5" if published_count>0 else "tier_4"})
+    elif status=="ok" and record_count>0: fields.update({"last_successful_run":now,"data_freshness":now,"verification_status":"source_verified","coverage_status":"tier_3"})
+    else: fields["verification_status"]="discovered_not_verified" if entry.get("data_source_type") else "not_started"; fields["coverage_status"]=entry.get("coverage_status") or "tier_0"
     note=f"Last ETL: records={record_count}, persisted={persisted_count}, qualified={qualified_count}, published={published_count}, status={status}."
     if error: note+=f" Error: {error[:300]}"
     fields["notes"]=(entry.get("notes","").split(" | Last ETL:")[0].strip()+" | "+note).strip(" |")
