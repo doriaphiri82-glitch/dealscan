@@ -3,6 +3,7 @@ import fs from 'fs'
 import path from 'path'
 
 type RegistryCounty = Record<string, any>
+type RegistryDocument = { counties?: Record<string, RegistryCounty> }
 
 function statusForCounty(county: RegistryCounty) {
   const verification = String(county.verification_status || '').toLowerCase()
@@ -15,14 +16,29 @@ function statusForCounty(county: RegistryCounty) {
   return 'not_implemented'
 }
 
+function readRegistry(): RegistryDocument {
+  const candidates = [
+    path.join(process.cwd(), 'data', 'registry.json'),
+    path.join(process.cwd(), '..', 'pipeline', 'config', 'counties', 'registry.json'),
+  ]
+  for (const registryPath of candidates) {
+    try {
+      const raw = fs.readFileSync(registryPath, 'utf-8')
+      const parsed = JSON.parse(raw) as RegistryDocument
+      if (parsed && parsed.counties && typeof parsed.counties === 'object') return parsed
+    } catch {
+      // Try the next deployment-safe registry location.
+    }
+  }
+  throw new Error('No county coverage registry is available')
+}
+
 export async function GET() {
   try {
-    const registryPath = path.join(process.cwd(), 'data', 'registry.json')
-    const raw = fs.readFileSync(registryPath, 'utf-8')
-    const registry = JSON.parse(raw)
-    const source = registry.counties || {}
+    const registry = readRegistry()
+    const source: Record<string, RegistryCounty> = registry.counties || {}
 
-    const counties = Object.entries(source).map(([id, county]: [string, RegistryCounty]) => {
+    const counties = Object.entries(source).map(([id, county]) => {
       const records = Number(county.last_record_count || 0)
       const published = Number(county.last_published_count || 0)
       return {
