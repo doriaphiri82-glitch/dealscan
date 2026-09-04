@@ -1,6 +1,5 @@
 """DealScan - Per-county run runner."""
 from __future__ import annotations
-import traceback
 from typing import Any, Dict, Optional
 from config.counties.national_registry import PILOT_COUNTIES
 from config.counties.registry import get_county, mark_county_run
@@ -111,10 +110,10 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
         summary['status']='degraded' if m.errors else 'ok'; summary['error']='; '.join(m.errors[:3]); summary['counts']=m.to_counts()
         if m.rejection_reasons: summary['rejection_reasons']=m.rejection_reasons
         record_run(county_id,summary['status'],summary['counts'],summary['error'])
-        if not dry_run: mark_county_run(county_id,record_count=len(props),qualified_count=m.qualified,published_count=m.published,status=summary['status'],error=summary['error'])
+        if not dry_run: mark_county_run(county_id,record_count=len(props),qualified_count=m.qualified,published_count=m.published,persisted_count=m.stored,status=summary['status'],error=summary['error'])
     except Exception as exc:
         summary['status']='error'; summary['error']=f'{exc}'; summary['counts']=m.to_counts(); record_run(county_id,'error',summary['counts'],summary['error'])
-        if not dry_run: mark_county_run(county_id,record_count=m.normalized,status='error',error=summary['error'])
+        if not dry_run: mark_county_run(county_id,record_count=m.normalized,persisted_count=m.stored,status='error',error=summary['error'])
     return summary
 
 class CountyRunner:
