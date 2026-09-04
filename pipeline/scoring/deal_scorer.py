@@ -34,7 +34,10 @@ def calculate_deal_score(deal_data: Dict) -> int:
 
     # 3. Market Velocity Score (0-100)
     velocity = deal_data.get('market_velocity', 0.5)
-    scores['market_velocity'] = int(velocity * 100)
+    try:
+        scores['market_velocity'] = max(0, min(100, int(float(velocity) * 100)))
+    except (TypeError, ValueError):
+        scores['market_velocity'] = 50
 
     # 4. Competition Score (inverse: less competition = higher)
     comp_map = {'low': 90, 'medium': 60, 'high': 30}
@@ -47,33 +50,50 @@ def calculate_deal_score(deal_data: Dict) -> int:
     if deal_data.get('is_buildable'): acc += 15
     scores['accessibility'] = min(100, acc)
 
-    # Weighted total
     total = sum(scores.get(f, 0) * w for f, w in SCORING_WEIGHTS.items())
+    # Weak valuation evidence should reduce confidence in the headline score,
+    # rather than allowing an estimated ARV to look as reliable as comparable sales.
+    confidence = deal_data.get('valuation_confidence', 1.0)
+    try:
+        confidence = max(0.5, min(1.0, float(confidence)))
+    except (TypeError, ValueError):
+        confidence = 0.5
+    total *= confidence
     return max(1, min(100, int(total)))
 
 
 def calculate_profit_estimate(comps: List[Dict], lot_size_acres: float,
                                asking_price: float,
-                               assessed_value: float = 0) -> Dict:
-    """Calculate profit estimate based on comparable sales or assessed value fallback.
-    
-    When comps are available, uses them for accurate ARV estimation.
-    When no comps are available but assessed_value is provided, uses assessed value
-    as a proxy for ARV (with 70-85% of assessed value as conservative estimate).
-    """
+                               assessed_value: float = 0,
+                               market_value: float = 0) -> Dict:
+    """Estimate ARV/profit and record the strength of the valuation evidence."""
     empty = {'estimated_arv_low': 0, 'estimated_arv_high': 0,
              'estimated_costs': 0, 'estimated_profit_low': 0,
-             'estimated_profit_high': 0}
+             'estimated_profit_high': 0, 'valuation_basis': 'unavailable',
+             'valuation_confidence': 0.5}
     if not comps:
-        # Fallback: use market value or estimate from asking_price
-        # When asking_price is estimated from lot_size, use that as the deal price
-        # and estimate ARV from asking_price
+        # Prefer an official market value, then assessed value, before using the
+        # asking-price heuristic. This prevents an arbitrary 1.5-2x multiplier
+        # from being presented as equivalent to county valuation evidence.
+        source_value = market_value if market_value and market_value > 0 else assessed_value
+        if source_value and source_value > 0:
+            arv_low = source_value * 0.85
+            arv_high = source_value * 1.05
+            estimated_costs = arv_low * 0.12
+            profit_low = max(0, arv_low - asking_price - estimated_costs)
+            profit_high = max(0, arv_high - asking_price - estimated_costs)
+            return {
+                'estimated_arv_low': round(arv_low),
+                'estimated_arv_high': round(arv_high),
+                'estimated_costs': round(estimated_costs),
+                'estimated_profit_low': round(profit_low),
+                'estimated_profit_high': round(profit_high),
+                'valuation_basis': 'market_value' if market_value and market_value > 0 else 'assessed_value',
+                'valuation_confidence': 0.75 if market_value and market_value > 0 else 0.65,
+            }
         if asking_price > 0:
-            # ARV is typically 1.5-2x the asking price for wholesale vacant land deals
-            # We're buying at wholesale (distressed seller), selling at retail (market value)
             arv_low = asking_price * 1.5
             arv_high = asking_price * 2.0
-            # Costs: 8% of ARV + 10% buying/selling + holding
             estimated_costs = arv_low * 0.20
             profit_low = max(0, arv_low - asking_price - estimated_costs)
             profit_high = max(0, arv_high - asking_price - estimated_costs)
@@ -83,6 +103,8 @@ def calculate_profit_estimate(comps: List[Dict], lot_size_acres: float,
                 'estimated_costs': round(estimated_costs),
                 'estimated_profit_low': round(profit_low),
                 'estimated_profit_high': round(profit_high),
+                'valuation_basis': 'asking_price_heuristic',
+                'valuation_confidence': 0.5,
             }
         return empty
 
@@ -95,7 +117,6 @@ def calculate_profit_estimate(comps: List[Dict], lot_size_acres: float,
 
     prices_per_acre.sort()
     median_ppa = prices_per_acre[len(prices_per_acre) // 2]
-
     arv_low = median_ppa * lot_size_acres * 0.80
     arv_high = median_ppa * lot_size_acres * 1.0
     estimated_costs = arv_low * 0.08
@@ -108,6 +129,8 @@ def calculate_profit_estimate(comps: List[Dict], lot_size_acres: float,
         'estimated_costs': round(estimated_costs),
         'estimated_profit_low': round(profit_low),
         'estimated_profit_high': round(profit_high),
+        'valuation_basis': 'comparable_sales',
+        'valuation_confidence': min(1.0, 0.75 + len(prices_per_acre) * 0.05),
     }
 
 
@@ -160,25 +183,22 @@ def score_and_enrich_deal(property_data: Dict, comps: List[Dict],
     except (TypeError, ValueError):
         market_value = 0.0
 
-    # If no market value but we have lot size, estimate value using county avg price per acre
-    if not market_value or market_value == 0:
+    value_is_official = bool(market_value > 0)
+    if not market_value:
         lot_size = property_data.get('lot_size_acres', 0) or 0
         county_id = property_data.get('county_id', '')
-        # County average prices per acre for estimation
         avg_prices = {
             'cochise_az': 3500,
             'mohave_az': 2800,
-            'el_paso_tx': 25000,  # El Paso TX - higher urban land prices
+            'el_paso_tx': 25000,
             'hudson_co': 5500,
             'socorro_nm': 2200,
         }
         avg_ppa = avg_prices.get(county_id, 3000)
-        # Estimate market value at 80% of avg price per acre for distressed properties
         market_value = float(lot_size * avg_ppa * 0.8)
 
     asking_price = property_data.get('asking_price')
     if asking_price is None:
-        # Estimate asking price at 50-70% of market value for distressed/vacant properties
         asking_price = market_value * 0.6 if market_value and market_value > 0 else 0
     else:
         try:
@@ -187,8 +207,9 @@ def score_and_enrich_deal(property_data: Dict, comps: List[Dict],
             asking_price = 0.0
     lot_size = property_data.get('lot_size_acres', 1) or 1
     profit_data = calculate_profit_estimate(
-        comps, float(lot_size), float(asking_price), 
-        assessed_value=float(property_data.get('assessed_value', 0) or 0)
+        comps, float(lot_size), float(asking_price),
+        assessed_value=float(property_data.get('assessed_value', 0) or 0),
+        market_value=float(property_data.get('market_value', 0) or 0)
     )
 
     if profit_data['estimated_profit_low'] < MIN_PROFIT_ESTIMATE:
@@ -200,6 +221,9 @@ def score_and_enrich_deal(property_data: Dict, comps: List[Dict],
 
     comp_count = len(comps)
     competition = 'low' if comp_count <= 2 else 'medium' if comp_count <= 5 else 'high'
+    valuation_confidence = profit_data.get('valuation_confidence', 0.5)
+    if not value_is_official and not comps:
+        valuation_confidence = min(valuation_confidence, 0.5)
 
     deal_data = {
         'asking_price': asking_price,
@@ -209,7 +233,8 @@ def score_and_enrich_deal(property_data: Dict, comps: List[Dict],
         'competition_level': competition,
         'has_road_access': True,
         'utilities_nearby': False,
-        'is_buildable': 'residential' in property_data.get('zoning', '').lower(),
+        'is_buildable': 'residential' in str(property_data.get('zoning') or '').lower(),
+        'valuation_confidence': valuation_confidence,
         **profit_data,
         **offer_data,
     }
