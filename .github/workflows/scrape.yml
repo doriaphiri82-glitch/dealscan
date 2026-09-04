@@ -40,7 +40,7 @@ jobs:
           cache-dependency-path: pipeline/requirements.txt
       - name: Install dependencies
         working-directory: pipeline
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt pytest
       - name: Run pipeline tests
         working-directory: pipeline
         run: pytest -q
