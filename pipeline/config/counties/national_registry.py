@@ -11,7 +11,7 @@ PILOT_COUNTIES: Dict[str, Dict[str, Any]] = {
 }
 
 _STATE_NAMES={"01":"Alabama","02":"Alaska","04":"Arizona","05":"Arkansas","06":"California","08":"Colorado","09":"Connecticut","10":"Delaware","11":"District of Columbia","12":"Florida","13":"Georgia","15":"Hawaii","16":"Idaho","17":"Illinois","18":"Indiana","19":"Iowa","20":"Kansas","21":"Kentucky","22":"Louisiana","23":"Maine","24":"Maryland","25":"Massachusetts","26":"Michigan","27":"Minnesota","28":"Mississippi","29":"Missouri","30":"Montana","31":"Nebraska","32":"Nevada","33":"New Hampshire","34":"New Jersey","35":"New Mexico","36":"New York","37":"North Carolina","38":"North Dakota","39":"Ohio","40":"Oklahoma","41":"Oregon","42":"Pennsylvania","44":"Rhode Island","45":"South Carolina","46":"South Dakota","47":"Tennessee","48":"Texas","49":"Utah","50":"Vermont","51":"Virginia","53":"Washington","54":"West Virginia","55":"Wisconsin","56":"Wyoming"}
-_PRESERVE_KEYS=("population","data_source_type","assessor_url","gis_url","parcel_source_url","tax_source_url","delinquent_tax_source_url","zoning_source_url","source_vendor","scraper_type","verification_status","coverage_status","last_successful_run","last_record_count","data_freshness","field_mapping","notes","arcgis_layer_url","discovery_source","discovery_score","source_quality","source_quality_score","useful_field_count","missing_useful_fields","field_count","last_validated_at","validation_status","validation_errors","validation_warnings","validation_source_fields_checked","validation_sample_checked")
+_PRESERVE_KEYS=("population","data_source_type","assessor_url","gis_url","parcel_source_url","tax_source_url","delinquent_tax_source_url","zoning_source_url","source_vendor","scraper_type","verification_status","coverage_status","last_successful_run","last_record_count","last_published_count","data_freshness","field_mapping","notes","arcgis_layer_url","discovery_source","discovery_score","source_quality","source_quality_score","useful_field_count","missing_useful_fields","field_count","last_validated_at","validation_status","validation_errors","validation_warnings","validation_source_fields_checked","validation_sample_checked")
 
 
 def discover_national_counties()->Dict[str,Dict[str,Any]]:
@@ -44,5 +44,12 @@ def ensure_national_counties()->Dict[str,Dict[str,Any]]:
 
 
 def ensure_pilot_counties():
-    payloads=[dict(meta,county_id=cid) for cid,meta in PILOT_COUNTIES.items()]
+    existing={c["county_id"]:c for c in list_counties()}
+    payloads=[]
+    for cid,meta in PILOT_COUNTIES.items():
+        payload=dict(meta,county_id=cid)
+        existing_entry=existing.get(cid) or {}
+        for key in _PRESERVE_KEYS:
+            if existing_entry.get(key) not in (None,""): payload[key]=existing_entry[key]
+        payloads.append(payload)
     register_counties_bulk(payloads)
