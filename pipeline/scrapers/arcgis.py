@@ -38,11 +38,7 @@ def discover_services(rest_root: str) -> Optional[Dict[str, Any]]:
 
 def find_layer(rest_root: str, folder: str, service: str,
                layer_name_keywords: List[str]) -> Optional[str]:
-    """Locate a parcel layer URL inside an ArcGIS service.
-
-    Returns the full layer endpoint, e.g.
-    {root}/arcgis/rest/services/{folder}/{service}/MapServer/0
-    """
+    """Locate a parcel layer URL inside an ArcGIS service."""
     base = rest_root.rstrip("/") + "/arcgis/rest/services"
     svc_url = f"{base}/{folder}/{service}?f=json"
     r = fetch(svc_url, ttl=24 * 3600, as_json=True, respect_robots=False)
@@ -53,7 +49,6 @@ def find_layer(rest_root: str, folder: str, service: str,
         name = (lyr.get("name") or "").lower()
         if any(k in name for k in layer_name_keywords):
             return f"{base}/{folder}/{service}/MapServer/{lyr.get('id')}"
-    # fall back to first layer
     if layers:
         return f"{base}/{folder}/{service}/MapServer/{layers[0].get('id')}"
     return None
@@ -61,14 +56,7 @@ def find_layer(rest_root: str, folder: str, service: str,
 
 def find_layer_via_hub(hub_root: str,
                        keywords: List[str]) -> Optional[str]:
-    """Discover a parcel feature layer via an ArcGIS Hub opendata site.
-
-    Hub subdomains (e.g. gis-cochise.opendata.arcgis.com) are NOT REST roots;
-    their datasets are listed in the DCAT-US 1.1 feed, whose distributions
-    link the underlying ArcGIS REST services.
-
-    Returns a full layer URL (MapServer/{id} or FeatureServer/{id}).
-    """
+    """Discover a parcel feature layer via an ArcGIS Hub DCAT feed."""
     url = hub_root.rstrip("/") + "/api/feed/dcat-us/1.1.json"
     r = fetch(url, ttl=24 * 3600, as_json=True, respect_robots=False)
     if not r.ok or not isinstance(r.body, dict):
@@ -83,7 +71,6 @@ def find_layer_via_hub(hub_root: str,
                 u = str(dist.get(key) or "")
                 if "/MapServer/" in u or "/FeatureServer/" in u:
                     cand = u.rstrip("/")
-                    # prefer explicit layer endpoints
                     if cand.split("/")[-1].isdigit():
                         return cand
                     best = best or cand
@@ -103,7 +90,7 @@ def layer_fields(layer_url: str) -> Optional[List[str]]:
 def query_layer(layer_url: str, where: str, out_fields: List[str],
                 max_records: int = 5000,
                 page_size: int = 1000) -> Iterator[Dict[str, Any]]:
-    """Query a layer with pagination. Yields raw attribute dicts."""
+    """Query a layer with pagination and fail loudly on API/network errors."""
     offset = 0
     fields = ",".join(out_fields) if out_fields else "*"
     while offset < max_records:
@@ -113,36 +100,31 @@ def query_layer(layer_url: str, where: str, out_fields: List[str],
             "returnGeometry": "false",
             "f": "json",
             "resultOffset": offset,
-            "resultRecordCount": page_size,
+            "resultRecordCount": min(page_size, max_records - offset),
         }
         r = post_json(f"{layer_url}/query", payload)
-        if not r.ok or not isinstance(r.body, dict):
-            print(f"[debug] arcgis query failed: ok={r.ok} "
-                  f"error={r.error[:120] if r.error else ''}")
-            return
+        if not r.ok:
+            raise RuntimeError(
+                f"ArcGIS query request failed: {r.error or 'unknown error'}"
+            )
+        if not isinstance(r.body, dict):
+            raise RuntimeError("ArcGIS query returned a non-object response")
         if r.body.get("error"):
-            print(f"[debug] arcgis query error response: "
-                  f"{str(r.body['error'])[:150]}")
-            return
+            raise RuntimeError(f"ArcGIS query error: {r.body['error']}")
         feats = r.body.get("features") or []
-        if r.body.get("exceededTransferLimit") and not feats:
-            return
         for f in feats:
             attrs = f.get("attributes") or {}
             if attrs:
                 yield attrs
         got = len(feats)
-        if got < page_size:
+        if got == 0 or got < min(page_size, max_records - offset):
             return
         offset += got
 
 
 def map_attributes(attrs: Dict[str, Any], field_map: Dict[str, str],
                    county_id: str, defaults: Dict[str, Any]) -> Dict[str, Any]:
-    """Map raw ArcGIS attributes to the pipeline Property dict shape.
-
-    field_map: pipeline field -> source field name (or dotted path).
-    """
+    """Map raw ArcGIS attributes to the pipeline Property dict shape."""
     def get(src_field: str) -> Any:
         if "." in src_field:
             cur: Any = attrs
@@ -169,8 +151,6 @@ def map_attributes(attrs: Dict[str, Any], field_map: Dict[str, str],
     return out
 
 
-# County-specific vacant land use codes
-# These are common codes used by county assessors for vacant/unimproved land
 VACANT_LAND_USE_CODES = {
     "cochise_az": ["0011", "9700", "0012", "0013", "0014", "0001", "0002", "0003"],
     "mohave_az": ["0011", "9700", "VAC", "VACANT"],
@@ -181,47 +161,30 @@ VACANT_LAND_USE_CODES = {
 
 
 def is_vacant_residential(prop: Dict[str, Any], county_id: str) -> bool:
-    """Filter heuristic: vacant land parcels.
-    
-    Detection logic (in order):
-    1. has_improvements is False/0/N
-    2. land_use contains 'vacant' or 'unimproved'
-    3. County-specific vacant land use codes (0011, 9700, etc.)
-    4. Has no situs_address and no improvements (likely vacant)
-    5. Has lot_size_acres > 0 and small land use code indicates land
+    """Return True only when the source provides a credible vacant-land signal.
+
+    Unknown improvement status is not treated as vacant. This prevents a
+    missing source field from turning an entire parcel layer into candidates.
     """
-    lu = str(prop.get("land_use") or "").lower()
-    zoning = str(prop.get("zoning") or "").lower()
+    lu = str(prop.get("land_use") or "").strip().lower()
+    zoning = str(prop.get("zoning") or "").strip().lower()
+    code = str(prop.get("use_code") or prop.get("land_use") or "").strip().upper()
     imp = prop.get("has_improvements")
-    has_imp = imp is True or imp in (1, "1", "Y", "Yes")
-    
-    # Check improvements - if explicit has_improvements=True/Y, not vacant
+    has_imp = imp is True or imp in (1, "1", "Y", "YES", "Yes", "true", "True")
+    no_imp = imp is False or imp == 0 or imp in ("0", "N", "NO", "No", "NONE", "false", "False")
+
     if has_imp:
-        if "vacant" not in lu and "land" not in lu.lower():
-            return False
-    
-    # Explicit no-improvements indicators => vacant
-    if imp is False or imp == 0 or imp in ("0", "N", "No", "None"):
-        return True
-    
-    # Check text-based land use
-    if "vacant" in lu or "vacant" in zoning or "unimproved" in lu:
-        return True
-    
-    # Check county-specific codes
-    vacant_codes = VACANT_LAND_USE_CODES.get(county_id, [])
-    if prop.get("land_use") in vacant_codes or prop.get("use_code") in vacant_codes:
-        return True
-    
-    # If no improvements info available, treat as potentially vacant
-    if imp is None or imp == "":
-        addr = str(prop.get("address") or "").lower()
-        legal = str(prop.get("legal_description") or "").lower()
-        if "lot" in addr or "tract" in addr or "block" in addr or "lot" in legal:
+        return "vacant" in lu or "unimproved" in lu
+    if no_imp:
+        if "residential" in lu or "res" in zoning or "residential" in zoning:
             return True
+        if "vacant" in lu or "unimproved" in lu:
+            return True
+        return code in {str(x).upper() for x in VACANT_LAND_USE_CODES.get(county_id, [])}
+
+    if "vacant" in lu or "unimproved" in lu or "vacant" in zoning:
         return True
-    
-    return False
+    return code in {str(x).upper() for x in VACANT_LAND_USE_CODES.get(county_id, [])}
 
 
 def export_snapshot(props: List[Dict[str, Any]], path: str) -> str:
