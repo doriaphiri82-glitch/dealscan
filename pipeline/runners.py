@@ -34,11 +34,34 @@ ADAPTER_MAP = {
 
 
 def _adapter_for(cfg: Dict[str, Any]) -> Optional[BaseScraperAdapter]:
-    scraper_type = cfg.get("scraper_type") or cfg.get("data_mode", "arcgis")
-    adapter_cls = ADAPTER_MAP.get(scraper_type)
-    if not adapter_cls:
-        return None
-    return adapter_cls()
+    """Select the generic adapter only when the config supplies its inputs.
+
+    County configs using an ArcGIS Hub/root plus candidate services are handled
+    by the legacy discovery path below, which knows how to resolve a live layer
+    from the Hub DCAT feed. The generic ArcGIS adapter requires a concrete
+    ``arcgis_layer_url``; previously it was selected merely because
+    ``data_mode`` was ``arcgis``, causing discover() to see no layer URL and
+    silently return zero records for every Hub-backed pilot county.
+    """
+    scraper_type = cfg.get("scraper_type")
+    data_mode = cfg.get("data_mode", "arcgis")
+
+    if scraper_type:
+        adapter_cls = ADAPTER_MAP.get(scraper_type)
+        if adapter_cls is None:
+            return None
+        if scraper_type in ("arcgis", "arcgis_hub", "state_parcel") and not cfg.get("arcgis_layer_url"):
+            return None
+        return adapter_cls()
+
+    if data_mode in ("flatfile", "csv", "excel"):
+        return ADAPTER_MAP.get(data_mode, FlatFileAdapter)()
+
+    # Root/Hub ArcGIS configs must go through fetch_parcels() discovery unless
+    # a concrete layer URL is explicitly configured.
+    if data_mode in ("arcgis", "arcgis_hub", "state_parcel") and cfg.get("arcgis_layer_url"):
+        return ADAPTER_MAP.get(data_mode, ArcGISFeatureServerAdapter)()
+    return None
 
 
 class RunMetrics:
@@ -95,9 +118,10 @@ def fetch_parcels(cfg: Dict[str, Any], county_id: str,
     """Return normalized property dicts from the configured source.
 
     Supports:
-      * arcgis adapter
+      * arcgis adapter when a concrete layer URL is configured
       * flatfile adapter
       * direct ArcGIS layer URL fallback
+      * root/Hub ArcGIS discovery fallback
       * data_file mode
     """
     adapter = _adapter_for(cfg)
@@ -110,8 +134,7 @@ def fetch_parcels(cfg: Dict[str, Any], county_id: str,
     mode = cfg.get("data_mode", "arcgis")
     if mode == "flatfile":
         from scrapers.flatfile import fetch_el_paso_properties
-        props = fetch_el_paso_properties(
-            county_id, max_records=max_records)
+        props = fetch_el_paso_properties(county_id, max_records=max_records)
         print(f"[debug] flatfile {county_id}: fetched {len(props)} properties")
         return props
     if mode == "arcgis":
@@ -119,19 +142,15 @@ def fetch_parcels(cfg: Dict[str, Any], county_id: str,
         if direct_layer:
             print(f"[debug] arcgis {county_id}: using direct layer {direct_layer}")
             available = arcgis.layer_fields(direct_layer) or []
-            print(f"[debug] arcgis {county_id}: layer has {len(available)} "
-                  f"fields; sample: {available[:25]}")
+            print(f"[debug] arcgis {county_id}: layer has {len(available)} fields; sample: {available[:25]}")
             configured = list(cfg.get("fields", {}).values())
             valid = [f for f in configured if f in available]
             out_fields: List[str] = valid if valid else []
             if not valid:
-                print(f"[debug] arcgis {county_id}: configured fields "
-                      f"{configured} not in layer -> using outFields=*")
+                print(f"[debug] arcgis {county_id}: configured fields {configured} not in layer -> using outFields=*")
             props: List[Dict[str, Any]] = []
-            for attrs in arcgis.query_layer(direct_layer, cfg.get("where", "1=1"),
-                                            out_fields, max_records=max_records):
-                prop = arcgis.map_attributes(attrs, cfg.get("fields", {}),
-                                             county_id, cfg.get("defaults", {}))
+            for attrs in arcgis.query_layer(direct_layer, cfg.get("where", "1=1"), out_fields, max_records=max_records):
+                prop = arcgis.map_attributes(attrs, cfg.get("fields", {}), county_id, cfg.get("defaults", {}))
                 props.append(prop)
             print(f"[debug] arcgis {county_id}: direct layer returned {len(props)} records")
             return props
@@ -146,26 +165,20 @@ def fetch_parcels(cfg: Dict[str, Any], county_id: str,
             if not layer:
                 layer = arcgis.find_layer(root, folder, service, keywords)
             if not layer:
-                print(f"[debug] arcgis {county_id}: no layer for "
-                      f"{folder}/{service} {keywords}")
+                print(f"[debug] arcgis {county_id}: no layer for {folder}/{service} {keywords}")
                 continue
             print(f"[debug] arcgis {county_id}: querying layer {layer}")
             available = arcgis.layer_fields(layer) or []
-            print(f"[debug] arcgis {county_id}: layer has {len(available)} "
-                  f"fields; sample: {available[:25]}")
+            print(f"[debug] arcgis {county_id}: layer has {len(available)} fields; sample: {available[:25]}")
             configured = list(cfg.get("fields", {}).values())
             valid = [f for f in configured if f in available]
             out_fields: List[str] = valid if valid else []
             if not valid:
-                print(f"[debug] arcgis {county_id}: configured fields "
-                      f"{configured} not in layer -> using outFields=*")
+                print(f"[debug] arcgis {county_id}: configured fields {configured} not in layer -> using outFields=*")
             got = 0
-            for attrs in arcgis.query_layer(layer, cfg.get("where", "1=1"),
-                                             out_fields,
-                                             max_records=max_records):
+            for attrs in arcgis.query_layer(layer, cfg.get("where", "1=1"), out_fields, max_records=max_records):
                 got += 1
-                prop = arcgis.map_attributes(attrs, cfg.get("fields", {}),
-                                             county_id, cfg.get("defaults", {}))
+                prop = arcgis.map_attributes(attrs, cfg.get("fields", {}), county_id, cfg.get("defaults", {}))
                 props.append(prop)
             print(f"[debug] arcgis {county_id}: layer returned {got} records")
             if props:
@@ -239,14 +252,11 @@ def run(county_id: str, mode: str = "publish", max_records: int = 5000,
 
     try:
         if offline:
-            props = fetch_parcels({**cfg, "data_mode": "data_file"}, county_id,
-                                  max_records=max_records)
+            props = fetch_parcels({**cfg, "data_mode": "data_file"}, county_id, max_records=max_records)
         else:
             props = fetch_parcels(cfg, county_id, max_records=max_records)
         metrics.downloaded = len(props)
         metrics.discovered = metrics.downloaded
-        # The adapter output is already normalized Property-shaped data. Keep
-        # parsed/normalized counters meaningful for coverage observability.
         metrics.parsed = len(props)
 
         vacant = [p for p in props if arcgis.is_vacant_residential(p, county_id)]
@@ -261,8 +271,6 @@ def run(county_id: str, mode: str = "publish", max_records: int = 5000,
                 metrics.record_rejection(f"score_error: {exc}")
                 continue
             if deal is None:
-                # Record the concrete economics so the coverage dashboard can
-                # distinguish low-profit parcels from scraper/scoring failures.
                 metrics.record_rejection("below_min_profit")
                 continue
             if not dry_run:
@@ -270,8 +278,7 @@ def run(county_id: str, mode: str = "publish", max_records: int = 5000,
                     prop_id = save_property(prop)
                     deal["property_id"] = prop_id
                     deal["source"] = "scrape"
-                    deal["motivation_signals"] = ",".join(
-                        deal.get("motivation_signals", []))
+                    deal["motivation_signals"] = ",".join(deal.get("motivation_signals", []))
                     save_deal(deal)
                     metrics.stored += 1
                 except Exception as exc:
@@ -294,16 +301,14 @@ def run(county_id: str, mode: str = "publish", max_records: int = 5000,
         metrics.published = len(publish_deals)
 
         if mode == "publish":
-            path = write_bundle(publish_deals, [county_id],
-                                status="ok", error=summary["error"])
+            path = write_bundle(publish_deals, [county_id], status="ok", error=summary["error"])
             summary["bundle_path"] = path
 
         if metrics.errors:
             summary["status"] = "degraded"
             summary["error"] = "; ".join(metrics.errors[:3])
         summary["counts"] = metrics.to_counts()
-        record_run(county_id, summary["status"], summary["counts"],
-                   summary["error"])
+        record_run(county_id, summary["status"], summary["counts"], summary["error"])
     except Exception as exc:
         summary["status"] = "error"
         summary["error"] = f"{exc} | {traceback.format_exc(limit=2)}"
