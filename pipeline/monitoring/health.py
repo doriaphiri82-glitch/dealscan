@@ -86,6 +86,7 @@ def _registry_health(county: Dict[str, Any]) -> CountyHealth:
     verification = str(county.get("verification_status") or "").lower()
     coverage = str(county.get("coverage_status") or "").lower()
     stored = int(county.get("last_record_count") or 0)
+    published = int(county.get("last_published_count") or 0)
 
     # Persisted ETL state is authoritative even if the transient run registry
     # has been pruned. Never downgrade a county to "not implemented" merely
@@ -107,7 +108,7 @@ def _registry_health(county: Dict[str, Any]) -> CountyHealth:
         status=status,
         coverage_tier=tier,
         records_stored=stored,
-        records_published=stored if coverage == "tier_5" else 0,
+        records_published=published,
         last_successful_run=county.get("last_successful_run"),
         data_freshness=county.get("data_freshness"),
     )
@@ -175,6 +176,7 @@ def build_national_dashboard(registry: Dict[str, Any],
         "tier_counts": tier_counts,
         "coverage_summary": {
             "total": len(counties),
+            "total_counties": len(counties),
             "active": status_counts.get("ok", 0) + status_counts.get("active", 0),
             "degraded": status_counts.get("degraded", 0),
             "failed": status_counts.get("error", 0),
