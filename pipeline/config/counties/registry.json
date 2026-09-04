@@ -17,13 +17,13 @@
       "zoning_source_url": null,
       "source_vendor": "esri",
       "scraper_type": "arcgis",
-      "verification_status": "verified",
-      "coverage_status": "tier_4",
+      "verification_status": "source_verified",
+      "coverage_status": "tier_3",
       "last_successful_run": null,
       "last_record_count": null,
       "data_freshness": null,
       "field_mapping": {},
-      "notes": "ArcGIS Hub DCAT -> Cad_Parcel_TaxInfo FeatureServer (fields verified 2026-09-03)"
+      "notes": "ArcGIS Hub DCAT -> Cad_Parcel_TaxInfo FeatureServer (source fields verified 2026-09-03; ETL run pending)"
     },
     "mohave_az": {
       "county_id": "mohave_az",
@@ -42,13 +42,13 @@
       "zoning_source_url": null,
       "source_vendor": "esri",
       "scraper_type": "arcgis",
-      "verification_status": "verified",
-      "coverage_status": "tier_4",
+      "verification_status": "source_verified",
+      "coverage_status": "tier_3",
       "last_successful_run": null,
       "last_record_count": null,
       "data_freshness": null,
       "field_mapping": {},
-      "notes": "ArcGIS Hub DCAT -> mcgis.mohave.gov MapServer/38 (fields verified 2026-09-03)"
+      "notes": "ArcGIS Hub DCAT -> mcgis.mohave.gov MapServer/38 (source fields verified 2026-09-03; ETL run pending)"
     },
     "el_paso_tx": {
       "county_id": "el_paso_tx",
@@ -67,13 +67,13 @@
       "zoning_source_url": null,
       "source_vendor": "esri",
       "scraper_type": "arcgis",
-      "verification_status": "verified",
-      "coverage_status": "tier_4",
+      "verification_status": "source_verified",
+      "coverage_status": "tier_3",
       "last_successful_run": null,
       "last_record_count": null,
       "data_freshness": null,
       "field_mapping": {},
-      "notes": "EPCAD ArcGIS Hub FeatureServer/0 (working 2026-09-03). Flatfile fallback blocked by Cloudflare."
+      "notes": "EPCAD ArcGIS FeatureServer/0 (source verified 2026-09-03; ETL run pending). Flatfile fallback blocked by Cloudflare."
     }
   },
   "meta": {
