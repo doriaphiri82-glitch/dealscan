@@ -55,7 +55,14 @@ class ArcGISFeatureServerAdapter(BaseScraperAdapter):
             self.last_error = "missing arcgis_layer_url"
             return []
         try:
-            self._resolve_field_names(cfg, layer_fields(str(layer_url).rstrip("/")))
+            actual_fields = layer_fields(str(layer_url).rstrip("/"))
+            if actual_fields is None:
+                self.last_error = "layer metadata lookup failed or returned no metadata"
+                return []
+            if not actual_fields:
+                self.last_error = "layer metadata contains no fields"
+                return []
+            self._resolve_field_names(cfg, actual_fields)
         except Exception as exc:
             self.last_error = f"layer metadata lookup failed: {exc}"
             return []
