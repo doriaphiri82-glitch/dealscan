@@ -36,7 +36,7 @@
       "data_source_type": "arcgis",
       "assessor_url": "https://www.mohave.gov/departments/assessor",
       "gis_url": "https://az-mohave.opendata.arcgis.com",
-      "parcel_source_url": "https://mohave.maps.arcgis.com",
+      "parcel_source_url": "https://mcgis.mohave.gov/arcgis/rest/services/PARCELS/MapServer/14",
       "tax_source_url": null,
       "delinquent_tax_source_url": null,
       "zoning_source_url": null,
@@ -48,7 +48,8 @@
       "last_record_count": null,
       "data_freshness": null,
       "field_mapping": {},
-      "notes": "ArcGIS Hub DCAT -> mcgis.mohave.gov MapServer/38 (source fields verified 2026-09-03; ETL run pending)"
+      "notes": "Official Mohave County parcel MapServer/14; source fields verified 2026-09-03; ETL run pending",
+      "arcgis_layer_url": "https://mcgis.mohave.gov/arcgis/rest/services/PARCELS/MapServer/14"
     },
     "el_paso_tx": {
       "county_id": "el_paso_tx",
