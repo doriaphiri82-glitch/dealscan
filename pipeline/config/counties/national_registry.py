@@ -12,6 +12,16 @@ PILOT_COUNTIES: Dict[str, Dict[str, Any]] = {
 
 _STATE_NAMES={"01":"Alabama","02":"Alaska","04":"Arizona","05":"Arkansas","06":"California","08":"Colorado","09":"Connecticut","10":"Delaware","11":"District of Columbia","12":"Florida","13":"Georgia","15":"Hawaii","16":"Idaho","17":"Illinois","18":"Indiana","19":"Iowa","20":"Kansas","21":"Kentucky","22":"Louisiana","23":"Maine","24":"Maryland","25":"Massachusetts","26":"Michigan","27":"Minnesota","28":"Mississippi","29":"Missouri","30":"Montana","31":"Nebraska","32":"Nevada","33":"New Hampshire","34":"New Jersey","35":"New Mexico","36":"New York","37":"North Carolina","38":"North Dakota","39":"Ohio","40":"Oklahoma","41":"Oregon","42":"Pennsylvania","44":"Rhode Island","45":"South Carolina","46":"South Dakota","47":"Tennessee","48":"Texas","49":"Utah","50":"Vermont","51":"Virginia","53":"Washington","54":"West Virginia","55":"Wisconsin","56":"Wyoming"}
 
+_PRESERVE_KEYS=(
+    "data_source_type","assessor_url","gis_url","parcel_source_url","tax_source_url",
+    "delinquent_tax_source_url","zoning_source_url","source_vendor","scraper_type",
+    "verification_status","coverage_status","last_successful_run","last_record_count",
+    "data_freshness","field_mapping","notes","arcgis_layer_url","discovery_source",
+    "discovery_score","source_quality","source_quality_score","useful_field_count",
+    "missing_useful_fields","field_count",
+)
+
+
 def discover_national_counties()->Dict[str,Dict[str,Any]]:
     url="https://api.census.gov/data/2025/acs/acs5?get=NAME&for=county:*&in=state:*"
     try:
@@ -23,18 +33,20 @@ def discover_national_counties()->Dict[str,Dict[str,Any]]:
         return out
     except Exception:return {}
 
+
 def ensure_national_counties()->Dict[str,Dict[str,Any]]:
     """Ensure the Census universe exists without destroying discovered/verified source metadata."""
     discovered=discover_national_counties(); combined=dict(discovered); combined.update(PILOT_COUNTIES)
     for county_id,meta in combined.items():
         existing=get_county(county_id) or {}
-        # Census provides geography; the registry remains authoritative for source/run state.
         payload=dict(meta)
         if existing:
-            for key in ("data_source_type","assessor_url","gis_url","parcel_source_url","tax_source_url","delinquent_tax_source_url","zoning_source_url","source_vendor","scraper_type","verification_status","coverage_status","last_successful_run","last_record_count","data_freshness","field_mapping","notes","arcgis_layer_url","discovery_source","discovery_score"):
-                if existing.get(key) is not None and existing.get(key) != "": payload[key]=existing[key]
-        register_county(county_id=county_id,county_name=payload["county_name"],state=payload["state"],state_fips=payload["state_fips"],county_fips=payload["county_fips"],geoid=payload["geoid"],population=payload.get("population",existing.get("population")),data_source_type=payload.get("data_source_type"),assessor_url=payload.get("assessor_url"),gis_url=payload.get("gis_url"),parcel_source_url=payload.get("parcel_source_url"),tax_source_url=payload.get("tax_source_url"),delinquent_tax_source_url=payload.get("delinquent_tax_source_url"),zoning_source_url=payload.get("zoning_source_url"),source_vendor=payload.get("source_vendor"),scraper_type=payload.get("scraper_type"),verification_status=payload.get("verification_status","not_started"),coverage_status=payload.get("coverage_status","not_covered"),last_successful_run=payload.get("last_successful_run"),last_record_count=payload.get("last_record_count"),data_freshness=payload.get("data_freshness"),field_mapping=payload.get("field_mapping",{}),notes=payload.get("notes","") ,extra={k:payload[k] for k in ("arcgis_layer_url","discovery_source","discovery_score") if k in payload})
+            for key in _PRESERVE_KEYS:
+                if existing.get(key) is not None and existing.get(key) != "":
+                    payload[key]=existing[key]
+        register_county(county_id=county_id,county_name=payload["county_name"],state=payload["state"],state_fips=payload["state_fips"],county_fips=payload["county_fips"],geoid=payload["geoid"],population=payload.get("population",existing.get("population")),data_source_type=payload.get("data_source_type"),assessor_url=payload.get("assessor_url"),gis_url=payload.get("gis_url"),parcel_source_url=payload.get("parcel_source_url"),tax_source_url=payload.get("tax_source_url"),delinquent_tax_source_url=payload.get("delinquent_tax_source_url"),zoning_source_url=payload.get("zoning_source_url"),source_vendor=payload.get("source_vendor"),scraper_type=payload.get("scraper_type"),verification_status=payload.get("verification_status","not_started"),coverage_status=payload.get("coverage_status","not_covered"),last_successful_run=payload.get("last_successful_run"),last_record_count=payload.get("last_record_count"),data_freshness=payload.get("data_freshness"),field_mapping=payload.get("field_mapping",{}),notes=payload.get("notes","") ,extra={k:payload[k] for k in _PRESERVE_KEYS if k not in {"data_source_type","assessor_url","gis_url","parcel_source_url","tax_source_url","delinquent_tax_source_url","zoning_source_url","source_vendor","scraper_type","verification_status","coverage_status","last_successful_run","last_record_count","data_freshness","field_mapping","notes"} and k in payload})
     return combined
+
 
 def ensure_pilot_counties():
     for county_id,meta in PILOT_COUNTIES.items():
