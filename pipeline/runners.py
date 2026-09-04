@@ -1,8 +1,4 @@
-"""DealScan - Per-county run runner.
-
-Configured scrapers and dynamically discovered national ArcGIS sources both
-flow through the same ETL -> persistence -> scoring -> publishing pipeline.
-"""
+"""DealScan - Per-county run runner."""
 from __future__ import annotations
 import traceback
 from typing import Any, Dict, List, Optional
@@ -42,20 +38,28 @@ def _county_config(county_id:str)->Dict[str,Any]:
     if cfg: cfg["county_id"]=county_id
     return cfg
 
-def fetch_parcels(cfg:Dict[str,Any],county_id:str,max_records:int=5000)->List[Dict[str,Any]]:
+def fetch_parcels(cfg:Dict[str,Any],county_id:str,max_records:int=5000):
     adapter=_adapter_for(cfg)
     if adapter:
         result,normalized=adapter.run({**cfg,"county_id":county_id,"max_records":max_records},max_records=max_records)
-        if result.errors and not normalized: raise RuntimeError("; ".join(result.errors[:3]))
-        return normalized[:max_records]
+        if result.errors:
+            detail="; ".join(result.errors[:3])
+            if normalized:
+                raise RuntimeError(f"source returned partial data: {detail}")
+            raise RuntimeError(detail)
+        return normalized, result
     if cfg.get("data_mode")=="flatfile":
         from scrapers.flatfile import fetch_el_paso_properties
-        return fetch_el_paso_properties(county_id,max_records=max_records)
+        props=fetch_el_paso_properties(county_id,max_records=max_records)
+        return props, None
     if cfg.get("data_mode")=="arcgis" and cfg.get("arcgis_layer_url"):
-        layer=cfg["arcgis_layer_url"]; available=arcgis.layer_fields(layer) or []
-        configured=list(cfg.get("fields",{}).values()); out_fields=[f for f in configured if f in available]
-        return [arcgis.map_attributes(a,cfg.get("fields",{}),county_id,cfg.get("defaults",{})) for a in arcgis.query_layer(layer,cfg.get("where","1=1"),out_fields,max_records=max_records)]
-    return []
+        layer=cfg["arcgis_layer_url"]
+        available=arcgis.layer_fields(layer) or []
+        configured=list(cfg.get("fields",{}).values())
+        out_fields=[f for f in configured if f in available]
+        props=[arcgis.map_attributes(a,cfg.get("fields",{}),county_id,cfg.get("defaults",{})) for a in arcgis.query_layer(layer,cfg.get("where","1=1"),out_fields,max_records=max_records)]
+        return props, None
+    return [], None
 
 class RunMetrics:
     __slots__=('county_id','discovered','downloaded','parsed','normalized','rejected','rejection_reasons','stored','scored','qualified','published','errors')
@@ -69,47 +73,41 @@ def _shape_for_bundle(row):
 
 def _provenance(cfg:Dict[str,Any],county_id:str)->Dict[str,Any]:
     county=get_county(county_id) or {}
-    return {
-        'source_url':cfg.get('arcgis_layer_url') or cfg.get('parcel_source_url') or cfg.get('data_url') or county.get('parcel_source_url'),
-        'source_vendor':cfg.get('source_vendor') or county.get('source_vendor'),
-        'source_quality':cfg.get('source_quality') or county.get('source_quality'),
-        'verification_status':county.get('verification_status'),
-        'data_freshness':county.get('data_freshness'),
-    }
+    return {'source_url':cfg.get('arcgis_layer_url') or cfg.get('parcel_source_url') or cfg.get('data_url') or county.get('parcel_source_url'),'source_vendor':cfg.get('source_vendor') or county.get('source_vendor'),'source_quality':cfg.get('source_quality') or county.get('source_quality'),'verification_status':county.get('verification_status'),'data_freshness':county.get('data_freshness')}
 
 def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False,offline:bool=False)->Dict[str,Any]:
     cfg=_county_config(county_id); m=RunMetrics(county_id); summary={'county_id':county_id,'counts':m.to_counts(),'status':'ok','error':''}
     if not cfg:
         summary.update(status='skipped',error='County has no configured or discovered source'); record_run(county_id,'skipped',summary['counts'],summary['error']); return summary
     try:
-        props=fetch_parcels(cfg,county_id,max_records=max_records) if not offline else []
-        m.downloaded=m.discovered=m.parsed=len(props)
-        vacant=[p for p in props if arcgis.is_vacant_residential(p,county_id)]; m.normalized=len(vacant)
+        props, scrape_result=fetch_parcels(cfg,county_id,max_records=max_records) if not offline else ([],None)
+        if scrape_result:
+            m.discovered=scrape_result.discovered; m.downloaded=scrape_result.downloaded; m.parsed=scrape_result.parsed; m.normalized=scrape_result.normalized; m.rejected=scrape_result.rejected; m.rejection_reasons.update(scrape_result.rejection_reasons)
+        else:
+            m.downloaded=m.discovered=m.parsed=len(props); m.normalized=len(props)
+        vacant=[p for p in props if arcgis.is_vacant_residential(p,county_id)]
+        if m.normalized and len(vacant)<m.normalized:
+            m.rejected += m.normalized-len(vacant)
+            m.rejection_reasons['not_vacant_residential']=m.normalized-len(vacant)
         scored=[]
         for prop in vacant:
             try: deal=score_and_enrich_deal(prop,[],cfg)
             except Exception as exc: m.record_rejection(f'score_error: {exc}'); continue
             if deal is None:m.record_rejection('below_min_profit'); continue
-            deal.update(apn=prop.get('apn'),address=prop.get('address'),county_id=county_id)
-            deal.update(_provenance(cfg,county_id))
+            deal.update(apn=prop.get('apn'),address=prop.get('address'),county_id=county_id); deal.update(_provenance(cfg,county_id))
             if not dry_run:
                 try:
                     deal['property_id']=save_property(prop); deal['source']='scrape'; deal['motivation_signals']=','.join(deal.get('motivation_signals',[])); save_deal(deal); m.stored+=1
                 except Exception as exc:m.errors.append(f'save_error: {exc}'); m.record_rejection('save_error'); continue
             scored.append(deal); m.scored+=1; m.qualified+=1
-        if mode=='publish' and not dry_run:
-            publish_rows=get_top_deals(limit=25,min_score=0,county_id=county_id)
-        else:
-            publish_rows=scored[:25]
-        publish_deals=[_shape_for_bundle(d) for d in publish_rows]
-        m.published=len(publish_deals)
-        if mode=='publish' and not dry_run:
-            summary['bundle_path']=write_bundle(publish_deals,[county_id],status='ok',error=summary['error'])
+        if mode=='publish' and not dry_run: publish_rows=get_top_deals(limit=25,min_score=0,county_id=county_id)
+        else: publish_rows=scored[:25]
+        publish_deals=[_shape_for_bundle(d) for d in publish_rows]; m.published=len(publish_deals)
+        if mode=='publish' and not dry_run: summary['bundle_path']=write_bundle(publish_deals,[county_id],status='ok',error=summary['error'])
         summary['status']='degraded' if m.errors else 'ok'; summary['error']='; '.join(m.errors[:3]); summary['counts']=m.to_counts()
         if m.rejection_reasons: summary['rejection_reasons']=m.rejection_reasons
         record_run(county_id,summary['status'],summary['counts'],summary['error'])
-        if not dry_run:
-            mark_county_run(county_id,record_count=len(props),qualified_count=m.qualified,published_count=m.published,status=summary['status'],error=summary['error'])
+        if not dry_run: mark_county_run(county_id,record_count=len(props),qualified_count=m.qualified,published_count=m.published,status=summary['status'],error=summary['error'])
     except Exception as exc:
         summary['status']='error'; summary['error']=f'{exc} | {traceback.format_exc(limit=2)}'; summary['counts']=m.to_counts(); record_run(county_id,'error',summary['counts'],summary['error'])
         if not dry_run: mark_county_run(county_id,record_count=0,status='error',error=summary['error'])
