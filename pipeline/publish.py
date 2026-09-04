@@ -10,6 +10,7 @@ KEY_DEAL_PREFIX = "deal:"
 KV_URL = os.getenv("KV_REST_API_URL", "").rstrip("/")
 KV_TOKEN = os.getenv("KV_REST_API_TOKEN", "")
 REDIS_URL = os.getenv("REDIS_URL", "").rstrip("/")
+REDIS_TOKEN = os.getenv("REDIS_TOKEN") or os.getenv("UPSTASH_REDIS_REST_TOKEN") or ""
 
 
 def _is_redis_proto() -> bool:
@@ -36,7 +37,8 @@ def _set_key(key: str, payload: str) -> bool:
             pass
     if _is_redis_rest():
         try:
-            r = _request("POST", f"{REDIS_URL}/set/{encoded_key}", json=payload)
+            headers = {"Authorization": f"Bearer {REDIS_TOKEN}"} if REDIS_TOKEN else {}
+            r = _request("POST", f"{REDIS_URL}/set/{encoded_key}", headers=headers, json=payload)
             if r.ok:
                 return True
         except Exception:
@@ -93,7 +95,8 @@ def read_top() -> Optional[Dict[str, Any]]:
             pass
     if _is_redis_rest():
         try:
-            r = _request("GET", f"{REDIS_URL}/get/{quote(KEY_TOP, safe='')}")
+            headers = {"Authorization": f"Bearer {REDIS_TOKEN}"} if REDIS_TOKEN else {}
+            r = _request("GET", f"{REDIS_URL}/get/{quote(KEY_TOP, safe='')}", headers=headers)
             if r.ok:
                 return _decode_result(r.json())
         except Exception:
