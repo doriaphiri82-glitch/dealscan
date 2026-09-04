@@ -5,6 +5,7 @@ import SEED_BUNDLE from '../../../../lib/seed-bundle'
 const KEY_PREFIX = 'deal:'
 
 const REDIS_URL = process.env.REDIS_URL || ''
+const REDIS_TOKEN = process.env.REDIS_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || ''
 const KV_URL = process.env.KV_REST_API_URL || ''
 const KV_TOKEN = process.env.KV_REST_API_TOKEN || ''
 
@@ -32,7 +33,7 @@ async function getRedis(): Promise<{ get: (k: string) => Promise<string | null> 
 async function readFromRedis(key: string): Promise<unknown | null> {
   if (isRedisRest) {
     try {
-      const headers = KV_TOKEN ? { Authorization: `Bearer ${KV_TOKEN}` } : undefined
+      const headers = REDIS_TOKEN ? { Authorization: `Bearer ${REDIS_TOKEN}` } : undefined
       const res = await fetch(`${REDIS_URL}/get/${encodeURIComponent(key)}`, { headers, cache: 'no-store' })
       if (!res.ok) return null
       const json = (await res.json()) as { result?: string | null }
