@@ -126,7 +126,11 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
         summary['counts']=m.to_counts()
         if m.rejection_reasons:summary['rejection_reasons']=m.rejection_reasons
         record_run(county_id,summary['status'],summary['counts'],summary['error'])
-        if not dry_run:mark_county_run(county_id,record_count=len(props),qualified_count=m.qualified,published_count=m.published,persisted_count=m.stored,status=summary['status'],error=summary['error'])
+        # ETL health and product qualification health are different signals. A
+        # successful non-empty ETL with zero qualifying deals is still real source
+        # coverage, but the run is degraded for product output purposes.
+        etl_status='ok' if m.normalized>0 and not m.errors else summary['status']
+        if not dry_run:mark_county_run(county_id,record_count=len(props),qualified_count=m.qualified,published_count=m.published,persisted_count=m.stored,status=etl_status,error=summary['error'])
     except Exception as exc:
         summary['status']='error';summary['error']=str(exc);summary['counts']=m.to_counts();record_run(county_id,'error',summary['counts'],summary['error'])
         if not dry_run:mark_county_run(county_id,record_count=m.normalized,persisted_count=m.stored,status='error',error=summary['error'])
