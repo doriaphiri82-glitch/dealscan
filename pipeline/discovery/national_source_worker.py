@@ -7,17 +7,17 @@ from discovery.source_discovery import discover_arcgis_county_config
 from runners import run as run_county
 
 
-def _limit(value: int, default: int = 25) -> int:
+def _limit(value:int,default:int=25)->int:
     try:return max(1,min(int(value),250))
     except (TypeError,ValueError):return default
 
 
 def discover_and_register(limit:int=25)->Dict[str,Any]:
-    """Discover sources for unconfigured counties and retry previously failed discovery/validation."""
+    """Discover sources for unconfigured counties and retry failed discovery/validation."""
     ensure_national_counties()
     candidates=[c for c in list_counties() if c.get("coverage_status")!="tier_5" and (not c.get("arcgis_layer_url") and not c.get("parcel_source_url") or c.get("validation_status") in {"invalid","unreachable"})]
     candidates.sort(key=lambda c:(bool(c.get("arcgis_layer_url") or c.get("parcel_source_url")),c.get("state",""),c.get("county_name","")))
-    results=[]; found=0
+    results=[];found=0
     for county in candidates[:_limit(limit)]:
         cid=county["county_id"]
         try:
@@ -31,9 +31,9 @@ def discover_and_register(limit:int=25)->Dict[str,Any]:
 
 
 def run_national_batch(limit:int=10,max_records:int=5000,mode:str="publish")->Dict[str,Any]:
-    """Run only live-validated sources; repeatable batches eventually cover every eligible county."""
+    """Run only currently live-validated sources; repeated batches eventually process the full eligible universe."""
     ensure_national_counties()
-    candidates=[c for c in list_counties() if c.get("coverage_status")!="tier_5" and (c.get("validation_status")=="valid" or c.get("coverage_status") in {"tier_4","tier_5"}) and (c.get("arcgis_layer_url") or c.get("parcel_source_url") or c.get("arcgis_root"))]
+    candidates=[c for c in list_counties() if c.get("coverage_status")!="tier_5" and c.get("validation_status")=="valid" and (c.get("arcgis_layer_url") or c.get("parcel_source_url") or c.get("arcgis_root"))]
     candidates.sort(key=lambda c:(c.get("last_successful_run") is not None,c.get("last_successful_run") or ""))
     results=[]
     for county in candidates[:_limit(limit,10)]:
