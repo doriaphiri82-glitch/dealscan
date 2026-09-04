@@ -43,23 +43,23 @@ export default function Navbar() {
   }, [open])
 
   return (
-    <header className={`fixed top-0 inset-x-0 z-50 transition-all duration-300 ${scrolled || open ? 'bg-[#0A0A0B]/90 backdrop-blur-md border-b border-white/[0.06]' : 'bg-transparent border-b border-transparent'}`}>
-      <div className={`max-w-6xl mx-auto px-6 md:px-8 flex items-center justify-between transition-all duration-300 ${scrolled ? 'h-14' : 'h-16'}`}>
-        <a href="#" className="text-[15px] font-bold tracking-[0.02em] text-white" aria-label="DealScan home">DEAL<span className="text-brand-500">SCAN</span></a>
-        <nav aria-label="Primary" className="hidden md:flex items-center gap-6">
-          {links.map((link) => <a key={link.href} href={link.href} className="text-[13px] text-[#A1A1AA] hover:text-white transition-colors">{link.label}</a>)}
+    <header className={`fixed inset-x-0 top-0 z-50 transition-all duration-300 ${scrolled || open ? 'border-b border-[#dfe8e2] bg-white/90 shadow-[0_8px_30px_rgba(25,49,38,.06)] backdrop-blur-xl' : 'border-b border-transparent bg-white/55 backdrop-blur-sm'}`}>
+      <div className={`mx-auto flex max-w-7xl items-center justify-between px-4 transition-all duration-300 sm:px-6 lg:px-8 ${scrolled ? 'h-14' : 'h-16'}`}>
+        <a href="#" className="text-[15px] font-black tracking-[0.02em] text-[#15211b]" aria-label="DealScan home">DEAL<span className="text-[#176b45]">SCAN</span></a>
+        <nav aria-label="Primary" className="hidden items-center gap-5 lg:flex">
+          {links.map((link) => <a key={link.href} href={link.href} className="rounded-full px-2 py-1.5 text-[12px] font-semibold text-[#64716a] transition-colors hover:text-[#176b45]">{link.label}</a>)}
         </nav>
         <div className="flex items-center gap-2">
-          <a href="/deals" className="group hidden sm:inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-brand-600 hover:bg-brand-500 text-white text-[13px] font-medium transition-all hover:-translate-y-px">Start exploring <span aria-hidden="true" className="transition-transform duration-200 group-hover:translate-x-0.5">&rarr;</span></a>
-          <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-controls="mobile-menu" aria-label={open ? 'Close menu' : 'Open menu'} className="md:hidden inline-flex items-center justify-center w-9 h-9 rounded-md text-[#A1A1AA] hover:text-white hover:bg-white/5 transition-colors">
+          <a href="/deals" className="group hidden items-center gap-1.5 rounded-xl bg-[#153025] px-4 py-2.5 text-[12px] font-bold text-white shadow-[0_8px_20px_rgba(21,48,37,.14)] transition-all hover:-translate-y-0.5 hover:bg-[#176b45] sm:inline-flex">Explore deals <span aria-hidden="true" className="transition-transform duration-200 group-hover:translate-x-0.5">&rarr;</span></a>
+          <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-controls="mobile-menu" aria-label={open ? 'Close menu' : 'Open menu'} className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#d7e2db] bg-white text-[#34433b] shadow-sm transition-colors hover:border-[#b9cfc1] hover:text-[#176b45] lg:hidden">
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">{open ? <path d="M4 4l10 10M14 4L4 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /> : <path d="M2 4.5h14M2 9h14M2 13.5h14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />}</svg>
           </button>
         </div>
       </div>
-      <div id="mobile-menu" ref={menuRef} className="md:hidden" hidden={!open}>
-        <nav aria-label="Mobile" className="px-6 pb-4 pt-1 flex flex-col bg-[#0A0A0B]/95 backdrop-blur-md">
-          {links.map((link) => <a key={link.href} href={link.href} onClick={() => setOpen(false)} className="py-3 text-sm text-[#A1A1AA] hover:text-white border-b border-white/[0.04] last:border-0 transition-colors">{link.label}</a>)}
-          <a href="/deals" onClick={() => setOpen(false)} className="mt-3 inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-md bg-brand-600 hover:bg-brand-500 text-white text-[13px] font-medium">Open deal explorer <span aria-hidden="true">&rarr;</span></a>
+      <div id="mobile-menu" ref={menuRef} className="border-t border-[#e6ece8] bg-white/95 shadow-[0_18px_45px_rgba(25,49,38,.08)] backdrop-blur-xl lg:hidden" hidden={!open}>
+        <nav aria-label="Mobile" className="mx-auto flex max-w-7xl flex-col px-4 pb-5 pt-2 sm:px-6">
+          {links.map((link) => <a key={link.href} href={link.href} onClick={() => setOpen(false)} className="border-b border-[#edf1ee] py-3.5 text-sm font-semibold text-[#59675f] transition-colors hover:text-[#176b45] last:border-0">{link.label}</a>)}
+          <a href="/deals" onClick={() => setOpen(false)} className="mt-3 inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#153025] px-4 py-3 text-[13px] font-bold text-white transition-colors hover:bg-[#176b45]">Open deal explorer <span aria-hidden="true">&rarr;</span></a>
         </nav>
       </div>
     </header>
