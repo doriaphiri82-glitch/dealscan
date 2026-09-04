@@ -46,6 +46,18 @@ def cmd_run_national(args):
     for row in result['results']: _print_run_summary(row)
 
 
+def cmd_validate():
+    ensure_national_counties()
+    from validation.national_validator import validate_all_counties
+    report=validate_all_counties(); c=report['counts']
+    print(f"National validation: total={c['total']} ready={c['ready']} invalid={c['invalid']} not_started={c['not_started']} etl_verified={c['etl_verified']}")
+    for row in report['results']:
+        if row['status'] != 'ready':
+            detail='; '.join(row.get('errors',[])[:3])
+            print(f"  {row['county_id']:28} {row['status']:12} {detail}")
+    print("Validation is read-only; it does not promote coverage or claim ETL success.")
+
+
 def cmd_coverage():
     ensure_national_counties(); s=county_summary(); total=s['total'] or 1
     covered=sum(v for k,v in s['by_coverage_status'].items() if k in ('tier_4','tier_5'))
@@ -83,10 +95,12 @@ def main():
     parser.add_argument('--run-national',type=int,metavar='N',help='Run up to N discovered counties through ETL')
     parser.add_argument('--max-records',type=int,default=5000)
     parser.add_argument('--coverage',action='store_true')
+    parser.add_argument('--validate',action='store_true',help='Validate every registered county configuration without changing coverage state')
     add_county_commands(parser.add_subparsers())
     args=parser.parse_args()
     if args.setup_db: init_db(); print('Database initialized.')
     elif args.probe: cmd_probe()
+    elif args.validate: cmd_validate()
     elif args.coverage: cmd_coverage()
     elif args.discover_national is not None: cmd_discover(args)
     elif args.run_national is not None: cmd_run_national(args)
