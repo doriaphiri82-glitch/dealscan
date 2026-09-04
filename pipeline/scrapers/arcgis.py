@@ -154,6 +154,13 @@ def map_attributes(attrs: Dict[str, Any], field_map: Dict[str, Any],
     out["year_acquired"] = _to_int(out.get("year_acquired"))
     out["latitude"] = _to_float(out.get("latitude"))
     out["longitude"] = _to_float(out.get("longitude"))
+    # Some county sources expose a building/improvement area instead of a
+    # dollar improvement value. Preserve a boolean improvement signal when
+    # that field is mapped so vacancy filtering can use it safely.
+    if "has_improvements" in field_map:
+        raw = out.get("has_improvements")
+        if raw is not None:
+            out["has_improvements"] = raw
     out["county_id"] = county_id
     return out
 
