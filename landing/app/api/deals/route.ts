@@ -1,31 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
-
-/*
- * GET /api/deals
- * Returns the top scored deals published by the pipeline.
- *
- * Storage resolution:
- *   1. REDIS_URL (Upstash REST https:// or native redis://) — production
- *   2. KV_REST_API_URL + KV_REST_API_TOKEN — Vercel KV REST
-  *   3. Committed seed bundle (../../../lib/seed-bundle.ts, statically compiled)
- *
- * Returns a missing-data envelope (not an error) when no live data exists yet,
- * so the site can fall back to its clearly-labeled demo section.
- */
 import SEED_BUNDLE from '../../../lib/seed-bundle'
 
 const KEY_TOP = 'deals:top'
-
-type DealsSource = 'redis' | 'redis-proto' | 'kv' | 'seed' | null
-
+type DealsSource = 'redis' | 'redis-proto' | 'kv' | 'seed'
 const REDIS_URL = process.env.REDIS_URL || ''
 const KV_URL = process.env.KV_REST_API_URL || ''
 const KV_TOKEN = process.env.KV_REST_API_TOKEN || ''
-
 const isRedisRest = /^https?:\/\//.test(REDIS_URL)
 const isRedisProto = /^rediss?:\/\//.test(REDIS_URL)
 
-// Cache across warm invocations.
 const globalForRedis = globalThis as unknown as {
   __dealsRedis?: { client: { get: (k: string) => Promise<string | null> } | null }
 }
@@ -45,21 +28,25 @@ async function getRedis(): Promise<{ get: (k: string) => Promise<string | null> 
 }
 
 async function readFromRedis(source: DealsSource): Promise<unknown | null> {
-  if (source === 'redis') {
-    const res = await fetch(`${REDIS_URL}/get/${KEY_TOP}`)
-    if (!res.ok) return null
-    const json = (await res.json()) as { result?: string | null }
-    return json.result ? JSON.parse(json.result) : null
-  }
-  if (source === 'redis-proto') {
-    const client = await getRedis()
-    const raw = client ? await client.get(KEY_TOP) : null
-    return raw ? JSON.parse(raw) : null
+  try {
+    if (source === 'redis') {
+      const res = await fetch(`${REDIS_URL}/get/${KEY_TOP}`, { cache: 'no-store' })
+      if (!res.ok) return null
+      const json = (await res.json()) as { result?: string | null }
+      return json.result ? JSON.parse(json.result) : null
+    }
+    if (source === 'redis-proto') {
+      const client = await getRedis()
+      const raw = client ? await client.get(KEY_TOP) : null
+      return raw ? JSON.parse(raw) : null
+    }
+  } catch {
+    return null
   }
   return null
 }
 
-async function readBundle(): Promise<{ data: unknown; source: string }> {
+async function readBundle(): Promise<{ data: unknown; source: DealsSource }> {
   if (isRedisRest) {
     const d = await readFromRedis('redis')
     if (d) return { data: d, source: 'redis' }
@@ -72,39 +59,30 @@ async function readBundle(): Promise<{ data: unknown; source: string }> {
     try {
       const res = await fetch(`${KV_URL}/get/${KEY_TOP}`, {
         headers: { Authorization: `Bearer ${KV_TOKEN}` },
+        cache: 'no-store',
       })
       if (res.ok) {
         const json = (await res.json()) as { result?: string | null }
         if (json.result) return { data: JSON.parse(json.result), source: 'kv' }
       }
     } catch {
-      /* fall through */
+      /* fall through to the committed seed */
     }
-    }
-  // Seed bundle fallback: statically imported so it ships with the deployment.
-  // The pipeline overwrites the live source (Redis/KV) when real data exists.
+  }
   return { data: SEED_BUNDLE, source: 'seed' }
 }
 
 export async function GET(request: NextRequest) {
   const { data, source } = await readBundle()
-
-  if (!data) {
-    return NextResponse.json(
-      { count: 0, deals: [], generated_at: null, meta: { status: 'no-data' } },
-      { status: 200 }
-    )
-  }
-
-  const bundle = data as {
+  const bundle = (data || {}) as {
     deals?: unknown[]
     generated_at?: string
     meta?: { status?: string; scraped_counties?: string[] }
   }
-
   const deals = Array.isArray(bundle.deals) ? bundle.deals : []
-  const limitRaw = request.nextUrl.searchParams.get('limit')
-  const limit = limitRaw ? Math.max(1, Math.min(50, parseInt(limitRaw, 10) || 25)) : 25
+  const raw = request.nextUrl.searchParams.get('limit')
+  const parsed = raw ? parseInt(raw, 10) : 25
+  const limit = Math.max(1, Math.min(50, Number.isFinite(parsed) ? parsed : 25))
 
   return NextResponse.json({
     count: deals.length,
@@ -115,5 +93,5 @@ export async function GET(request: NextRequest) {
       scraped_counties: bundle.meta?.scraped_counties ?? [],
       storage_source: source,
     },
-  })
+  }, { headers: { 'Cache-Control': 'no-store' } })
 }
