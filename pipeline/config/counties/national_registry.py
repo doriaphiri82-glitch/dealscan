@@ -2,7 +2,7 @@
 from __future__ import annotations
 import json, urllib.request
 from typing import Any, Dict
-from .registry import register_county, get_county, list_counties
+from .registry import register_counties_bulk, get_county, list_counties
 
 PILOT_COUNTIES: Dict[str, Dict[str, Any]] = {
     "cochise_az": {"county_name":"Cochise County","state":"Arizona","state_fips":"04","county_fips":"003","geoid":"04003","population":125447,"data_source_type":"arcgis","assessor_url":"https://www.cochise.az.gov/departments/assessor","gis_url":"https://gis-cochise.opendata.arcgis.com","parcel_source_url":"https://gis-cochise.opendata.arcgis.com/datasets/Cad_Parcel_TaxInfo","source_vendor":"esri","scraper_type":"arcgis","verification_status":"source_verified","coverage_status":"tier_3","notes":"ArcGIS Hub -> Cad_Parcel_TaxInfo; source fields verified 2026-09-03; ETL run pending"},
@@ -12,6 +12,7 @@ PILOT_COUNTIES: Dict[str, Dict[str, Any]] = {
 
 _STATE_NAMES={"01":"Alabama","02":"Alaska","04":"Arizona","05":"Arkansas","06":"California","08":"Colorado","09":"Connecticut","10":"Delaware","11":"District of Columbia","12":"Florida","13":"Georgia","15":"Hawaii","16":"Idaho","17":"Illinois","18":"Indiana","19":"Iowa","20":"Kansas","21":"Kentucky","22":"Louisiana","23":"Maine","24":"Maryland","25":"Massachusetts","26":"Michigan","27":"Minnesota","28":"Mississippi","29":"Missouri","30":"Montana","31":"Nebraska","32":"Nevada","33":"New Hampshire","34":"New Jersey","35":"New Mexico","36":"New York","37":"North Carolina","38":"North Dakota","39":"Ohio","40":"Oklahoma","41":"Oregon","42":"Pennsylvania","44":"Rhode Island","45":"South Carolina","46":"South Dakota","47":"Tennessee","48":"Texas","49":"Utah","50":"Vermont","51":"Virginia","53":"Washington","54":"West Virginia","55":"Wisconsin","56":"Wyoming"}
 _PRESERVE_KEYS=("data_source_type","assessor_url","gis_url","parcel_source_url","tax_source_url","delinquent_tax_source_url","zoning_source_url","source_vendor","scraper_type","verification_status","coverage_status","last_successful_run","last_record_count","data_freshness","field_mapping","notes","arcgis_layer_url","discovery_source","discovery_score","source_quality","source_quality_score","useful_field_count","missing_useful_fields","field_count","last_validated_at","validation_status","validation_errors","validation_warnings","validation_source_fields_checked","validation_sample_checked")
+
 
 def discover_national_counties()->Dict[str,Dict[str,Any]]:
     url="https://api.census.gov/data/2025/acs/acs5?get=NAME&for=county:*&in=state:*"
@@ -23,19 +24,25 @@ def discover_national_counties()->Dict[str,Dict[str,Any]]:
         return out
     except Exception:return {}
 
+
 def ensure_national_counties()->Dict[str,Dict[str,Any]]:
     discovered=discover_national_counties()
     existing={c["county_id"]:c for c in list_counties()}
-    combined=dict(existing)
-    combined.update(discovered)
-    combined.update(PILOT_COUNTIES)
+    combined=dict(existing); combined.update(discovered); combined.update(PILOT_COUNTIES)
+    payloads=[]
     for cid,meta in combined.items():
         existing_entry=existing.get(cid) or get_county(cid) or {}; payload=dict(meta)
         if existing_entry:
             for key in _PRESERVE_KEYS:
                 if existing_entry.get(key) not in (None,""): payload[key]=existing_entry[key]
-        register_county(county_id=cid,county_name=payload["county_name"],state=payload["state"],state_fips=payload["state_fips"],county_fips=payload["county_fips"],geoid=payload["geoid"],population=payload.get("population",existing_entry.get("population")),data_source_type=payload.get("data_source_type"),assessor_url=payload.get("assessor_url"),gis_url=payload.get("gis_url"),parcel_source_url=payload.get("parcel_source_url"),tax_source_url=payload.get("tax_source_url"),delinquent_tax_source_url=payload.get("delinquent_tax_source_url"),zoning_source_url=payload.get("zoning_source_url"),source_vendor=payload.get("source_vendor"),scraper_type=payload.get("scraper_type"),verification_status=payload.get("verification_status","not_started"),coverage_status=payload.get("coverage_status","not_covered"),last_successful_run=payload.get("last_successful_run"),last_record_count=payload.get("last_record_count"),data_freshness=payload.get("data_freshness"),field_mapping=payload.get("field_mapping",{}),notes=payload.get("notes","") ,extra={k:payload[k] for k in _PRESERVE_KEYS if k not in {"data_source_type","assessor_url","gis_url","parcel_source_url","tax_source_url","delinquent_tax_source_url","zoning_source_url","source_vendor","scraper_type","verification_status","coverage_status","last_successful_run","last_record_count","data_freshness","field_mapping","notes"} and k in payload})
+        payload["county_id"]=cid
+        for key in ("county_name","state","state_fips","county_fips","geoid"):
+            if not payload.get(key) and existing_entry.get(key): payload[key]=existing_entry[key]
+        payloads.append(payload)
+    register_counties_bulk(payloads)
     return combined
 
+
 def ensure_pilot_counties():
-    for cid,meta in PILOT_COUNTIES.items(): register_county(county_id=cid,county_name=meta["county_name"],state=meta["state"],state_fips=meta["state_fips"],county_fips=meta["county_fips"],geoid=meta["geoid"],population=meta.get("population"),data_source_type=meta.get("data_source_type"),assessor_url=meta.get("assessor_url"),gis_url=meta.get("gis_url"),parcel_source_url=meta.get("parcel_source_url"),source_vendor=meta.get("source_vendor"),scraper_type=meta.get("scraper_type"),verification_status=meta.get("verification_status","not_started"),coverage_status=meta.get("coverage_status","tier_0"),notes=meta.get("notes",""))
+    payloads=[dict(meta,county_id=cid) for cid,meta in PILOT_COUNTIES.items()]
+    register_counties_bulk(payloads)
