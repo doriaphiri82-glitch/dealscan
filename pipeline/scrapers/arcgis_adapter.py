@@ -15,6 +15,19 @@ class ArcGISFeatureServerAdapter(BaseScraperAdapter):
     def __init__(self) -> None:
         self.last_error: Optional[str] = None
 
+    @staticmethod
+    def _out_fields(cfg: Dict[str, Any]) -> List[str]:
+        configured = cfg.get("out_fields")
+        if configured is None:
+            configured = list((cfg.get("fields") or {}).values())
+        fields: List[str] = []
+        for value in configured:
+            values = value if isinstance(value, (list, tuple)) else [value]
+            for item in values:
+                if item and str(item).strip() and str(item).strip() not in fields:
+                    fields.append(str(item).strip())
+        return fields
+
     def discover(self, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         self.last_error = None
         layer_url = cfg.get("arcgis_layer_url")
@@ -22,8 +35,7 @@ class ArcGISFeatureServerAdapter(BaseScraperAdapter):
             self.last_error = "missing arcgis_layer_url"
             return []
         where = cfg.get("where", "1=1")
-        out_fields = cfg.get("out_fields") or list((cfg.get("fields") or {}).values())
-        out_fields = [str(f) for f in out_fields if f]
+        out_fields = self._out_fields(cfg)
         max_records = max(1, int(cfg.get("max_records", 5000)))
         records: List[Dict[str, Any]] = []
         offset = 0
