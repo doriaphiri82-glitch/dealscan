@@ -5,8 +5,6 @@ Provides health status for every configured county and coverage dashboards.
 """
 from __future__ import annotations
 
-import json
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -76,10 +74,43 @@ def build_county_health(run_entry: Dict[str, Any]) -> CountyHealth:
         records_scored=counts.get("scored", counts.get("saved", 0)),
         records_qualified=counts.get("qualified", counts.get("saved", 0)),
         records_published=counts.get("published", 0),
-        last_successful_run=run_entry.get("at"),
-        data_freshness=run_entry.get("at"),
+        last_successful_run=run_entry.get("at") if status in ("ok", "degraded") else None,
+        data_freshness=run_entry.get("at") if status in ("ok", "degraded") else None,
     )
     return health
+
+
+def _registry_health(county: Dict[str, Any]) -> CountyHealth:
+    """Build a truthful dashboard state when no run-registry entry exists."""
+    validation = str(county.get("validation_status") or "").lower()
+    verification = str(county.get("verification_status") or "").lower()
+    coverage = str(county.get("coverage_status") or "").lower()
+    stored = int(county.get("last_record_count") or 0)
+
+    # Persisted ETL state is authoritative even if the transient run registry
+    # has been pruned. Never downgrade a county to "not implemented" merely
+    # because there is no recent run entry.
+    if coverage == "tier_5" and stored > 0:
+        tier = "tier_5"
+    elif stored > 0:
+        tier = "tier_4"
+    elif validation == "valid" or verification in {"source_verified", "verified"}:
+        tier = "tier_2"
+    elif county.get("arcgis_layer_url") or county.get("parcel_source_url") or county.get("arcgis_root"):
+        tier = "tier_1"
+    else:
+        tier = "tier_0"
+
+    status = "active" if verification == "verified" and stored > 0 else "not_implemented"
+    return CountyHealth(
+        county_id=county.get("county_id", "unknown"),
+        status=status,
+        coverage_tier=tier,
+        records_stored=stored,
+        records_published=stored if coverage == "tier_5" else 0,
+        last_successful_run=county.get("last_successful_run"),
+        data_freshness=county.get("data_freshness"),
+    )
 
 
 def _tier_from_status(status: str, counts: Dict[str, int]) -> str:
@@ -116,8 +147,8 @@ def build_national_dashboard(registry: Dict[str, Any],
     county_healths = []
     for county in counties:
         cid = county.get("county_id", "")
-        run = runs_by_county.get(cid, {})
-        health = build_county_health(run)
+        run = runs_by_county.get(cid)
+        health = build_county_health(run) if run else _registry_health(county)
         status_counts[health.status] = status_counts.get(health.status, 0) + 1
         tier_counts[health.coverage_tier] = tier_counts.get(health.coverage_tier, 0) + 1
         county_healths.append({
@@ -133,6 +164,9 @@ def build_national_dashboard(registry: Dict[str, Any],
             "last_run": health.last_successful_run,
             "data_freshness": health.data_freshness,
             "rejection_reasons": health.rejection_reasons,
+            "validation_status": county.get("validation_status"),
+            "verification_status": county.get("verification_status"),
+            "registry_coverage_status": county.get("coverage_status"),
         })
 
     return {
@@ -141,7 +175,7 @@ def build_national_dashboard(registry: Dict[str, Any],
         "tier_counts": tier_counts,
         "coverage_summary": {
             "total": len(counties),
-            "active": status_counts.get("ok", 0),
+            "active": status_counts.get("ok", 0) + status_counts.get("active", 0),
             "degraded": status_counts.get("degraded", 0),
             "failed": status_counts.get("error", 0),
             "not_implemented": status_counts.get("not_implemented", 0),
