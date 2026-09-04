@@ -19,6 +19,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: dealscan-national-pipeline
+  cancel-in-progress: false
+
 jobs:
   national:
     runs-on: ubuntu-latest
@@ -55,20 +59,23 @@ jobs:
           KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
           KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}
           REDIS_URL: ${{ secrets.REDIS_URL }}
-        run: python publish.py || true
+        run: python publish_live.py
       - name: Show coverage
         working-directory: pipeline
         run: python main.py --coverage
       - name: Publish web data fallback
         run: |
           mkdir -p landing/data
-          cp -f pipeline/data/bundle.json landing/data/bundle.json || true
-          cp -f pipeline/data/registry.json landing/data/registry.json || true
+          cp -f pipeline/data/bundle.json landing/data/bundle.json
+          cp -f pipeline/data/registry.json landing/data/registry.json
       - name: Commit pipeline data artifacts
-        if: always()
         run: |
           git config user.name "DealScan Pipeline"
           git config user.email "pipeline@dealscan.app"
-          git add -f pipeline/data/registry.json pipeline/data/bundle.json landing/data/bundle.json landing/data/registry.json || true
-          git diff --cached --quiet || git commit -m "chore: national pipeline refresh $(date -u +%F-%H%M)"
-          git push origin HEAD:main || true
+          git add -f pipeline/data/registry.json pipeline/data/bundle.json landing/data/bundle.json landing/data/registry.json
+          if git diff --cached --quiet; then
+            echo "No pipeline data changes to commit."
+          else
+            git commit -m "chore: national pipeline refresh $(date -u +%F-%H%M)"
+            git push origin HEAD:main
+          fi
