@@ -23,7 +23,7 @@ def test_property_and_deal_round_trip_payloads(monkeypatch):
         if url.endswith("/deals") and method == "POST": return FakeResponse([{"id":77}])
         raise AssertionError((method,url))
     monkeypatch.setattr("database_supabase.requests.request", fake_request)
-    pid=db.save_property({"apn":"A-1","county_id":"test_county","address":"1 Main St"})
+    pid=db.save_property({"apn":"A-1","county_id":"test_county","county_name":"Test County","address":"1 Main St"})
     did=db.save_deal({"property_id":pid,"deal_score":81,"source_url":"https://source.test/1"})
     assert pid == 42 and did == 77
     assert any(x[0]=="POST" and x[1].endswith("/properties") for x in calls)
