@@ -28,23 +28,23 @@ def _entry(county_id:str,county_name:str,state:str,state_fips:str,county_fips:st
     entry={"county_id":county_id,"county_name":county_name,"state":state,"state_fips":state_fips,"county_fips":county_fips,"geoid":geoid,"population":population,"data_source_type":data_source_type,"assessor_url":assessor_url,"gis_url":gis_url,"parcel_source_url":parcel_source_url,"tax_source_url":tax_source_url,"delinquent_tax_source_url":delinquent_tax_source_url,"zoning_source_url":zoning_source_url,"source_vendor":source_vendor,"scraper_type":scraper_type,"verification_status":verification_status,"coverage_status":coverage_status,"last_successful_run":last_successful_run,"last_record_count":last_record_count,"last_published_count":None,"data_freshness":data_freshness,"field_mapping":field_mapping or {},"notes":notes or ""}
     entry.update(extra or {}); return entry
 
-def register_county(county_id:str,county_name:str,state:str,state_fips:str,county_fips:str,geoid:str,population:Optional[int]=None,data_source_type:Optional[str]=None,assessor_url:Optional[str]=None,gis_url:Optional[str]=None,parcel_source_url:Optional[str]=None,tax_source_url:Optional[str]=None,delinquent_tax_source_url:Optional[str]=None,zoning_source_url:Optional[str]=None,source_vendor:Optional[str]=None,scraper_type:Optional[str]=None,verification_status="not_implemented",coverage_status="tier_0",last_successful_run:Optional[str]=None,last_record_count:Optional[int]=None,data_freshness:Optional[str]=None,field_mapping:Optional[Dict[str,str]]=None,notes:Optional[str]=None,extra:Optional[Dict[str,Any]]=None):
-    reg=_load_registry(); counties=reg.setdefault("counties",{}); counties[county_id]=_entry(county_id,county_name,state,state_fips,county_fips,geoid,population,data_source_type,assessor_url,gis_url,parcel_source_url,tax_source_url,delinquent_tax_source_url,zoning_source_url,source_vendor,scraper_type,verification_status,coverage_status,last_successful_run,last_record_count,data_freshness,field_mapping,notes,extra); _recompute_meta(reg); _save_registry(reg); return counties[county_id]
+def register_county(county_id:str,county_name:str,state:str,state_fips:str,county_fips:str,geoid:str,population:Optional[int]=None,data_source_type:Optional[str]=None,assessor_url:Optional[str]=None,gis_url:Optional[str]=None,parcel_source_url:Optional[str]=None,tax_source_url:Optional[str]=None,delinquent_tax_source_url:Optional[str]=None,zoning_source_url:Optional[str]=None,source_vendor:Optional[str]=None,scraper_type:Optional[str]=None,verification_status="not_implemented",coverage_status="tier_0",last_successful_run:Optional[str]=None,last_record_count:Optional[int]=None,data_freshness:Optional[str]=None,field_mapping:Optional[Dict[str,str]]=None,notes:Optional[str]=None,extra:Optional[Dict[str,Any]]=None,arcgis_layer_url:Optional[str]=None):
+    """Register one county, including ArcGIS layer identity when supplied."""
+    reg=_load_registry(); counties=reg.setdefault("counties",{})
+    extras=dict(extra or {})
+    if arcgis_layer_url is not None: extras["arcgis_layer_url"]=arcgis_layer_url
+    counties[county_id]=_entry(county_id,county_name,state,state_fips,county_fips,geoid,population,data_source_type,assessor_url,gis_url,parcel_source_url,tax_source_url,delinquent_tax_source_url,zoning_source_url,source_vendor,scraper_type,verification_status,coverage_status,last_successful_run,last_record_count,data_freshness,field_mapping,notes,extras)
+    _recompute_meta(reg); _save_registry(reg); return counties[county_id]
 
 def register_counties_bulk(entries:List[Dict[str,Any]])->Dict[str,Dict[str,Any]]:
-    """Upsert many counties with one read and one atomic write.
-
-    This is intentionally a replace-style upsert for each supplied county: callers
-    should pass the complete desired entry, while preserving historical fields
-    before calling this function when they need to retain them.
-    """
     reg=_load_registry(); counties=reg.setdefault("counties",{})
     for payload in entries:
         cid=payload.get("county_id")
         if not cid: continue
         base={k:payload.get(k) for k in ("county_id","county_name","state","state_fips","county_fips","geoid")}
         if any(base[k] in (None,"") for k in base): continue
-        entry=_entry(cid,payload["county_name"],payload["state"],payload["state_fips"],payload["county_fips"],payload["geoid"],payload.get("population"),payload.get("data_source_type"),payload.get("assessor_url"),payload.get("gis_url"),payload.get("parcel_source_url"),payload.get("tax_source_url"),payload.get("delinquent_tax_source_url"),payload.get("zoning_source_url"),payload.get("source_vendor"),payload.get("scraper_type"),payload.get("verification_status","not_implemented"),payload.get("coverage_status","tier_0"),payload.get("last_successful_run"),payload.get("last_record_count"),payload.get("data_freshness"),payload.get("field_mapping",{}),payload.get("notes","") ,extra={k:v for k,v in payload.items() if k not in {"county_id","county_name","state","state_fips","county_fips","geoid","population","data_source_type","assessor_url","gis_url","parcel_source_url","tax_source_url","delinquent_tax_source_url","zoning_source_url","source_vendor","scraper_type","verification_status","coverage_status","last_successful_run","last_record_count","data_freshness","field_mapping","notes"}})
+        known={"county_id","county_name","state","state_fips","county_fips","geoid","population","data_source_type","assessor_url","gis_url","parcel_source_url","tax_source_url","delinquent_tax_source_url","zoning_source_url","source_vendor","scraper_type","verification_status","coverage_status","last_successful_run","last_record_count","data_freshness","field_mapping","notes"}
+        entry=_entry(cid,payload["county_name"],payload["state"],payload["state_fips"],payload["county_fips"],payload["geoid"],payload.get("population"),payload.get("data_source_type"),payload.get("assessor_url"),payload.get("gis_url"),payload.get("parcel_source_url"),payload.get("tax_source_url"),payload.get("delinquent_tax_source_url"),payload.get("zoning_source_url"),payload.get("source_vendor"),payload.get("scraper_type"),payload.get("verification_status","not_implemented"),payload.get("coverage_status","tier_0"),payload.get("last_successful_run"),payload.get("last_record_count"),payload.get("data_freshness"),payload.get("field_mapping",{}),payload.get("notes","") ,extra={k:v for k,v in payload.items() if k not in known})
         counties[cid]=entry
     _recompute_meta(reg); _save_registry(reg); return counties
 
@@ -57,14 +57,12 @@ def update_county(county_id,**fields):
     entry.update({k:v for k,v in fields.items() if v is not None}); _recompute_meta(reg); _save_registry(reg); return entry
 
 def mark_county_validation(county_id:str, *, status:str, errors:Optional[List[str]]=None, warnings:Optional[List[str]]=None, source_fields_checked:bool=False, sample_checked:int=0):
-    """Persist validation evidence separately from ETL coverage."""
     entry=get_county(county_id)
     if not entry:return None
     now=datetime.now(timezone.utc).isoformat()
     return update_county(county_id,last_validated_at=now,validation_status=str(status),validation_errors=(errors or [])[:20],validation_warnings=(warnings or [])[:20],validation_source_fields_checked=bool(source_fields_checked),validation_sample_checked=max(0,int(sample_checked)))
 
 def mark_county_run(county_id:str, *, record_count:int, qualified_count:int=0, published_count:int=0, persisted_count:int=0, status:str="ok", error:str=""):
-    """Promote coverage only from evidence produced by a real, non-empty successful ETL run."""
     entry=get_county(county_id)
     if not entry:return None
     now=datetime.now(timezone.utc).isoformat(); record_count=max(0,int(record_count)); persisted_count=max(0,int(persisted_count)); qualified_count=max(0,int(qualified_count)); published_count=max(0,int(published_count))
