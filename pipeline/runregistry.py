@@ -9,6 +9,7 @@ import logging
 import os
 import tempfile
 from datetime import datetime, timezone
+from normalization import sale_date
 from persistence import AuditRunNotFound, PUBLIC_COMP_FIELDS, PUBLIC_DEAL_FIELDS, PUBLIC_PROPERTY_FIELDS
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
@@ -93,6 +94,8 @@ def write_bundle(deals, scraped_counties, status='ok', error=''):
         if (not isinstance(deal, dict) or deal.get('verification_status') != 'verified'
                 or not deal.get('verified_at') or not deal.get('county_id') or not deal.get('apn')):
             continue
+        expiry=sale_date(deal.get('verification_expires_at'))
+        if not expiry or expiry<=datetime.now(timezone.utc): continue
         clean = {field:deal.get(field) for field in (*PUBLIC_DEAL_FIELDS,*PUBLIC_PROPERTY_FIELDS)}
         clean['comps'] = [{field:comp.get(field) for field in PUBLIC_COMP_FIELDS} for comp in deal.get('comps') or [] if isinstance(comp,dict)]
         unique[(deal['county_id'], deal['apn'])] = clean

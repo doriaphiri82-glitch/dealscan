@@ -37,6 +37,9 @@ command does not create credentials or migrate tables automatically.
 - Server-side features requiring private writes need separately configured
   `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. A server-only Vercel secret is
   not a public frontend variable.
+- Set a real `WAITLIST_CONTACT_EMAIL`, review `/privacy` and the retention/contact
+  process before collecting signups. Requests require explicit consent and a durable
+  private database write. They are not automated email-alert subscriptions.
 - Confirm `/api/health` returns 200 with `database=ok`. A configured but empty
   database is healthy; an unavailable/misconfigured one must return 503.
 
@@ -87,7 +90,7 @@ python main.py --verify-ingestion-run RUN_ID --county el_paso_tx --max-records 2
 ```
 
 `RUN_ID` is the real numeric ID returned by the ingestion summary, not a sample ID.
-When executed inside Actions the check also requires the current workflow ID.
+When executed inside Actions the check also requires the current workflow ID and attempt, not evidence from an older retry. The health response must identify the same Supabase project even when both public feeds are empty.
 
 ## 5. Review opportunities separately; opt into automation last
 
@@ -95,7 +98,8 @@ Ingestion persists source-faithful held candidates and pending-review assessment
 It does **not** automatically publish opportunities. An operator may invoke
 `python main.py --verify-deal DEAL_ID` only for a real persisted assessment after
 reviewing its source evidence. Verification recomputes the financial model,
-checks durable comparables and sets a bounded expiry. It fails if evidence is
+checks durable comparables and sets an expiry bounded by both source validation
+and the oldest comparable's allowed age. It fails if evidence is
 missing or changed.
 
 Only after the real smoke/deployment checks pass, set repository variable
@@ -115,3 +119,15 @@ so fresh workflow checkouts do not silently reuse stale local permissions.
 A count of counties in Census/the registry is **not** national live parcel coverage.
 Report discovered, current live-validated, authorized, actually ingested and
 publicly verified opportunities as separate measurements.
+
+## Deliberately inactive features
+
+Paid checkout and automated deal alerts are not enabled. The email CLI fails
+explicitly; provider helpers require consent, a real unsubscribe URL and explicit
+enabling, and report acceptance rather than inbox delivery. Legacy subscriber
+rows do not acquire manufactured consent during migration. Browser saved parcels
+are local to the browser profile, not synchronized private account data.
+
+No production datasource is replaced with an illustrative property or an invented
+map point. Optional diagnostic cache exports are disabled unless explicitly
+requested, reread current verified rows and are never read by the web API.

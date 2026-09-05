@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 REGISTRY_DIR=os.path.dirname(__file__)
-REGISTRY_PATH=os.getenv("DEALSCAN_REGISTRY_PATH",os.path.join(REGISTRY_DIR,"registry.json"))
+REGISTRY_PATH=(os.getenv("DEALSCAN_REGISTRY_PATH") or os.path.join(REGISTRY_DIR,"registry.json"))
 
 def _load_registry():
     try:

@@ -14,21 +14,21 @@ REDIS_TOKEN = os.getenv("REDIS_TOKEN") or os.getenv("UPSTASH_REDIS_REST_TOKEN") 
 
 
 def _is_redis_proto() -> bool:
-    return REDIS_URL.startswith(("redis://", "rediss://"))
+    return REDIS_URL.startswith('rediss://') or (os.getenv('DEALSCAN_ENV')!='production' and REDIS_URL.startswith('redis://'))
 
 
 def _is_redis_rest() -> bool:
-    return REDIS_URL.startswith(("https://", "http://"))
+    return REDIS_URL.startswith("https://")
 
 
 def _request(method: str, url: str, **kwargs):
     import requests
-    return requests.request(method, url, timeout=20, **kwargs)
+    return requests.request(method, url, timeout=20, allow_redirects=False, **kwargs)
 
 
 def _set_key(key: str, payload: str) -> bool:
     encoded_key = quote(key, safe="")
-    if KV_URL and KV_TOKEN:
+    if KV_URL.startswith("https://") and KV_TOKEN:
         try:
             r = _request("POST", f"{KV_URL}/set/{encoded_key}", headers={"Authorization": f"Bearer {KV_TOKEN}"}, json=payload)
             if r.ok:
@@ -46,7 +46,7 @@ def _set_key(key: str, payload: str) -> bool:
     if _is_redis_proto():
         try:
             import redis
-            client = redis.Redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=20)
+            client = redis.Redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=20, socket_connect_timeout=5)
             client.set(key, payload)
             client.close()
             return True
@@ -55,21 +55,23 @@ def _set_key(key: str, payload: str) -> bool:
     return False
 
 
-def publish_top(bundle: Dict[str, Any]) -> bool:
-    payload = json.dumps(bundle, separators=(",", ":"))
-    top_ok = _set_key(KEY_TOP, payload)
+def publish_top(bundle: Dict[str, Any] | None = None) -> bool:
+    """Opt-in diagnostic cache export. Caller-provided bundle contents are ignored.
 
-    # Keep exact deal lookups in sync with the published top bundle. These keys
-    # make detail pages cheap and avoid forcing the web app to scan the bundle.
-    deal_ok = True
-    for deal in bundle.get("deals") or []:
-        apn = str(deal.get("apn") or "").strip()
-        if not apn:
-            continue
-        if not _set_key(f"{KEY_DEAL_PREFIX}{apn}", json.dumps(deal, separators=(",", ":"))):
-            deal_ok = False
-            break
-    return top_ok and deal_ok
+    This does not publish a deal. The live application never reads these keys.
+    """
+    if os.getenv('ENABLE_CACHE_EXPORT')!='true': return False
+    from database import get_top_deals
+    from persistence import PUBLIC_DEAL_FIELDS,PUBLIC_PROPERTY_FIELDS,json_safe,now
+    from normalization import sale_date
+    from datetime import datetime,timezone
+    records=[]
+    for row in get_top_deals(limit=100):
+        expiry=sale_date(row.get('verification_expires_at'))
+        if row.get('verification_status')!='verified' or not expiry or expiry<=datetime.now(timezone.utc): continue
+        records.append({key:row.get(key) for key in (*PUBLIC_DEAL_FIELDS,*PUBLIC_PROPERTY_FIELDS)})
+    snapshot={'generated_at':now(),'deals':records,'count':len(records),'meta':{'storage_source':'verified_database_snapshot'}}
+    return _set_key(KEY_TOP,json.dumps(json_safe(snapshot),separators=(',',':')))
 
 
 def _decode_result(response_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -86,7 +88,7 @@ def _decode_result(response_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def read_top() -> Optional[Dict[str, Any]]:
-    if KV_URL and KV_TOKEN:
+    if KV_URL.startswith("https://") and KV_TOKEN:
         try:
             r = _request("GET", f"{KV_URL}/get/{quote(KEY_TOP, safe='')}", headers={"Authorization": f"Bearer {KV_TOKEN}"})
             if r.ok:
@@ -104,7 +106,7 @@ def read_top() -> Optional[Dict[str, Any]]:
     if _is_redis_proto():
         try:
             import redis
-            client = redis.Redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=20)
+            client = redis.Redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=20, socket_connect_timeout=5)
             value = client.get(KEY_TOP)
             client.close()
             return json.loads(value) if value else None

@@ -2,7 +2,7 @@
 DealScan AI - Data Models
 """
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 from enum import Enum
 
@@ -44,56 +44,60 @@ class Property:
     """A property record from county data."""
     apn: str                          # Assessor's Parcel Number
     county_id: str
-    address: str
-    lot_size_acres: float
-    assessed_value: float
-    market_value: float
-    owner_name: str
-    owner_address: str
-    owner_state: str
-    tax_amount: float
-    tax_delinquent_years: int
-    year_acquired: int
-    zoning: str
-    land_use: str
-    has_improvements: bool
-    legal_description: str
+    address: Optional[str] = None
+    lot_size_acres: Optional[float] = None
+    assessed_value: Optional[float] = None
+    market_value: Optional[float] = None
+    owner_name: Optional[str] = None
+    owner_address: Optional[str] = None
+    owner_state: Optional[str] = None
+    tax_amount: Optional[float] = None
+    tax_delinquent_years: Optional[int] = None
+    year_acquired: Optional[int] = None
+    zoning: Optional[str] = None
+    land_use: Optional[str] = None
+    has_improvements: Optional[bool] = None
+    legal_description: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
 
 @dataclass
 class Deal:
-    """A scored deal ready for delivery."""
+    """A private assessment; its existence never authorizes publication or delivery."""
     id: Optional[int] = None
     property: Optional[Property] = None
     comps: List[CompSale] = field(default_factory=list)
-    
+
     # Scoring
-    deal_score: int = 0               # 1-100
-    estimated_arv_low: float = 0
-    estimated_arv_high: float = 0
-    estimated_costs: float = 0
-    estimated_profit_low: float = 0
-    estimated_profit_high: float = 0
-    asking_price: float = 0
-    recommended_offer_low: float = 0
-    recommended_offer_high: float = 0
-    
+    deal_score: Optional[int] = None               # 1-100
+    estimated_arv_low: Optional[float] = None
+    estimated_arv_high: Optional[float] = None
+    estimated_costs: Optional[float] = None
+    estimated_profit_low: Optional[float] = None
+    estimated_profit_high: Optional[float] = None
+    asking_price: Optional[float] = None
+    recommended_offer_low: Optional[float] = None
+    recommended_offer_high: Optional[float] = None
+
     # Motivation
     motivation_signals: List[MotivationSignal] = field(default_factory=list)
-    motivation_score: float = 0       # 0-1
-    
+    motivation_score: Optional[float] = None       # 0-1
+
     # Market
-    market_velocity: float = 0        # 0-1
-    competition_level: str = 'low'    # low, medium, high
-    days_on_market: int = 0
-    
+    market_velocity: Optional[float] = None        # 0-1
+    competition_level: Optional[str] = None    # low, medium, high
+    days_on_market: Optional[int] = None
+
+    verification_status: str = 'pending_review'
+    verified_at: Optional[datetime] = None
+    verification_expires_at: Optional[datetime] = None
+
     # Status
     status: DealStatus = DealStatus.DISCOVERED
-    discovered_at: datetime = field(default_factory=datetime.now)
+    discovered_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     delivered_at: Optional[datetime] = None
-    
+
     # Metadata
     notes: str = ''
     source: str = ''
@@ -106,10 +110,12 @@ class Subscriber:
     email: str = ''
     name: str = ''
     tier: str = 'free'                # free, pro, elite
-    budget_min: float = 5000
-    budget_max: float = 50000
+    budget_min: Optional[float] = None
+    budget_max: Optional[float] = None
     target_states: List[str] = field(default_factory=list)
     target_counties: List[str] = field(default_factory=list)
-    min_profit: float = 3000
-    joined_at: datetime = field(default_factory=datetime.now)
-    is_active: bool = True
+    min_profit: Optional[float] = None
+    joined_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    is_active: bool = False
+    consented_at: Optional[datetime] = None
+    unsubscribe_url: Optional[str] = None

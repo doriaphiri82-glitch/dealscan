@@ -1,148 +1,101 @@
+"""Optional email transport, disabled by default and never a publication path.
+
+Provider acceptance is not proof of inbox delivery. Automated CLI delivery stays
+unavailable until consent, unsubscribe and delivery-event operations are wired.
 """
-DealScan AI - Email Delivery System
-Sends daily deal alerts to subscribers.
-"""
-import json
-from datetime import datetime
-from typing import List, Dict
+from __future__ import annotations
+import os
+import re
+from datetime import datetime, timezone
+from html import escape
+from urllib.parse import urlsplit
+import requests
+from normalization import number, sale_date
 from config.settings import EMAIL_PROVIDER, EMAIL_API_KEY, EMAIL_FROM, EMAIL_FROM_NAME
 
 
-def format_deal_for_email(deal: Dict) -> str:
-    """Format a single deal as HTML for email."""
-    signals = deal.get('motivation_signals', '').split(',')
-    signal_badges = ''.join(
-        f'<span style="background:#fef3c7;color:#92400e;padding:2px 8px;'
-        f'border-radius:12px;font-size:12px;margin:2px;">{s.strip()}</span>'
-        for s in signals if s.strip()
-    )
-
-    return f"""
-    <div style="border:1px solid #e5e7eb;border-radius:12px;padding:20px;margin:16px 0;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <div>
-          <h3 style="margin:0;font-size:18px;color:#1f2937;">{deal.get('address', 'N/A')}</h3>
-          <p style="margin:4px 0 0;color:#6b7280;font-size:14px;">
-            {deal.get('county_id', '').replace('_', ' ').title()} | {deal.get('lot_size_acres', 0)} acres
-          </p>
-        </div>
-        <div style="text-align:center;">
-          <div style="font-size:24px;font-weight:900;color:#16a34a;">{deal.get('deal_score', 0)}/100</div>
-          <div style="font-size:11px;color:#9ca3af;">Deal Score</div>
-        </div>
-      </div>
-      <table style="width:100%;font-size:14px;">
-        <tr><td style="color:#6b7280;padding:4px 0;">Asking Price</td>
-            <td style="text-align:right;font-weight:700;color:#16a34a;">${deal.get('asking_price', 0):,.0f}</td></tr>
-        <tr><td style="color:#6b7280;padding:4px 0;">Est. ARV</td>
-            <td style="text-align:right;">${deal.get('estimated_arv_low', 0):,.0f} - ${deal.get('estimated_arv_high', 0):,.0f}</td></tr>
-        <tr><td style="color:#6b7280;padding:4px 0;">Est. Profit</td>
-            <td style="text-align:right;font-weight:700;color:#16a34a;">${deal.get('estimated_profit_low', 0):,.0f} - ${deal.get('estimated_profit_high', 0):,.0f}</td></tr>
-        <tr><td style="color:#6b7280;padding:4px 0;">Recommended Offer</td>
-            <td style="text-align:right;">${deal.get('recommended_offer_low', 0):,.0f} - ${deal.get('recommended_offer_high', 0):,.0f}</td></tr>
-      </table>
-      <div style="margin-top:12px;">{signal_badges}</div>
-    </div>
-    """
+def _url(value):
+    try:
+        url=urlsplit(str(value))
+        return str(value) if url.scheme=='https' and url.hostname and not url.username and not url.password else None
+    except ValueError: return None
 
 
-def build_daily_email(deals: List[Dict], subscriber_name: str = '') -> Dict:
-    """Build the full daily deals email."""
-    today = datetime.now().strftime('%B %d, %Y')
-    deals_html = ''.join(format_deal_for_email(d) for d in deals)
-
-    html = f"""
-    <div style="max-width:600px;margin:0 auto;font-family:Arial,sans-serif;">
-      <div style="background:#0f172a;padding:24px;border-radius:12px 12px 0 0;text-align:center;">
-        <h1 style="color:#22c55e;margin:0;font-size:24px;">DealScan AI</h1>
-        <p style="color:#94a3b8;margin:8px 0 0;font-size:14px;">Daily Deal Report - {today}</p>
-      </div>
-      <div style="background:#ffffff;padding:24px;">
-        <p style="color:#374151;font-size:16px;">
-          Good morning{' ' + subscriber_name if subscriber_name else ''}! Here are today's top deals:
-        </p>
-        {deals_html}
-        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px;margin-top:20px;">
-          <p style="color:#166534;font-size:14px;margin:0;">
-            <strong>Next Steps:</strong> Review each deal, verify comps on Zillow/Redfin,
-            then send your offer using our templates. Aim to send 5-10 offers per week.
-          </p>
-        </div>
-      </div>
-      <div style="background:#f8fafc;padding:16px;border-radius:0 0 12px 12px;text-align:center;">
-        <p style="color:#9ca3af;font-size:12px;margin:0;">
-          DealScan AI | You're receiving this because you subscribed.
-          <a href="#" style="color:#6b7280;">Unsubscribe</a>
-        </p>
-      </div>
-    </div>
-    """
-
-    return {
-        'subject': f"🏔️ {len(deals)} New Land Deals | Top Score: {deals[0].get('deal_score', 0)}/100" if deals else "No deals today",
-        'html': html,
-    }
+def _current(deal):
+    expiry=sale_date(deal.get('verification_expires_at'))
+    return deal.get('verification_status')=='verified' and bool(deal.get('verified_at')) and expiry and expiry>datetime.now(timezone.utc)
 
 
-def send_email(to: str, subject: str, html: str) -> bool:
-    """Send email using configured provider."""
-    if EMAIL_PROVIDER == 'console':
-        print(f"\n[EMAIL] To: {to}")
-        print(f"[EMAIL] Subject: {subject}")
-        print(f"[EMAIL] Body length: {len(html)} chars")
-        print("[EMAIL] (Console mode - not actually sent)")
-        return True
-
-    elif EMAIL_PROVIDER == 'resend':
-        import requests
-        resp = requests.post(
-            'https://api.resend.com/emails',
-            headers={'Authorization': f'Bearer {EMAIL_API_KEY}'},
-            json={
-                'from': f'{EMAIL_FROM_NAME} <{EMAIL_FROM}>',
-                'to': [to],
-                'subject': subject,
-                'html': html,
-            }
-        )
-        return resp.status_code == 200
-
-    elif EMAIL_PROVIDER == 'sendgrid':
-        import requests
-        resp = requests.post(
-            'https://api.sendgrid.com/v3/mail/send',
-            headers={'Authorization': f'Bearer {EMAIL_API_KEY}'},
-            json={
-                'personalizations': [{'to': [{'email': to}]}],
-                'from': {'email': EMAIL_FROM, 'name': EMAIL_FROM_NAME},
-                'subject': subject,
-                'content': [{'type': 'text/html', 'value': html}],
-            }
-        )
-        return resp.status_code in (200, 201, 202)
-
-    return False
+def _money(value):
+    parsed=number(value)
+    return f'${parsed:,.0f}' if parsed is not None else 'Not published'
 
 
-def deliver_daily_deals(deals: List[Dict], subscribers: List[Dict]):
-    """Send daily deals to all subscribers."""
-    if not deals:
-        print("No deals to deliver today.")
-        return
+def format_deal_for_email(deal: dict) -> str:
+    if not _current(deal): raise ValueError('Only current, verified opportunities may be rendered')
+    source=_url(deal.get('source_url'))
+    if not source: raise ValueError('A source URL is required')
+    heading=escape(str(deal.get('address') or deal.get('apn') or 'Parcel'))
+    county=escape(str(deal.get('county_id') or ''))
+    return (f'<article><h2>{heading}</h2><p>{county}</p><dl>'
+        f'<dt>Asking price</dt><dd>{_money(deal.get("asking_price"))}</dd>'
+        f'<dt>Estimated costs</dt><dd>{_money(deal.get("estimated_costs"))}</dd>'
+        f'<dt>Estimated ARV</dt><dd>{_money(deal.get("estimated_arv_low"))} – {_money(deal.get("estimated_arv_high"))}</dd>'
+        f'</dl><a href="{escape(source,quote=True)}">Review source evidence</a></article>')
 
-    email_content = build_daily_email(deals)
-    sent = 0
-    failed = 0
 
-    for sub in subscribers:
-        success = send_email(
-            to=sub['email'],
-            subject=email_content['subject'],
-            html=email_content['html'],
-        )
-        if success:
-            sent += 1
-        else:
-            failed += 1
+def build_daily_email(deals: list[dict],subscriber_name: str='',*,unsubscribe_url: str | None=None) -> dict:
+    unsubscribe=_url(unsubscribe_url)
+    if not unsubscribe: raise ValueError('A real HTTPS unsubscribe URL is required')
+    if not deals: raise ValueError('No verified opportunities to include')
+    body=''.join(format_deal_for_email(deal) for deal in deals)
+    return {'subject':f'DealScan: {len(deals)} verified opportunities to research',
+        'html':f'<main><h1>DealScan research</h1><p>Hello {escape(subscriber_name)}.</p>{body}'
+            '<p>Screening estimates are not guarantees. Verify title, access, zoning, sales and costs independently.</p>'
+            f'<p><a href="{escape(unsubscribe,quote=True)}">Unsubscribe</a></p></main>'}
 
-    print(f"\nDelivery complete: {sent} sent, {failed} failed")
+
+def send_email(to: str,subject: str,html: str,*,consented: bool=False,unsubscribe_url: str | None=None) -> bool:
+    if os.getenv('ENABLE_EMAIL_DELIVERY')!='true' or not consented or not _url(unsubscribe_url): return False
+    if not EMAIL_API_KEY or not EMAIL_FROM or not re.fullmatch(r'[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+',to): return False
+    if EMAIL_PROVIDER=='resend':
+        endpoint='https://api.resend.com/emails'
+        payload={'from':f'{EMAIL_FROM_NAME} <{EMAIL_FROM}>','to':[to],'subject':subject,'html':html}
+    elif EMAIL_PROVIDER=='sendgrid':
+        endpoint='https://api.sendgrid.com/v3/mail/send'
+        payload={'personalizations':[{'to':[{'email':to}]}],'from':{'email':EMAIL_FROM,'name':EMAIL_FROM_NAME},
+                 'subject':subject,'content':[{'type':'text/html','value':html}]}
+    else:
+        # Console output is not a sent message; never log recipients or bodies.
+        return False
+    try:
+        response=requests.post(endpoint,headers={'Authorization':f'Bearer {EMAIL_API_KEY}'},json=payload,
+                               timeout=(5,15),allow_redirects=False)
+        return response.status_code in (200,201,202)
+    except requests.RequestException:
+        return False
+
+
+def deliver_daily_deals(deals: list[dict],subscribers: list[dict]) -> dict:
+    if os.getenv('ENABLE_EMAIL_DELIVERY')!='true': return {'status':'disabled','accepted':0,'failed':0,'skipped':len(subscribers)}
+    # Never send an arbitrary supplied bundle. Re-read current verified records.
+    from database import get_top_deals
+    requested={(deal.get('county_id'),deal.get('apn')) for deal in deals}
+    current=[row for row in get_top_deals(limit=100) if (row.get('county_id'),row.get('apn')) in requested and _current(row)][:10]
+    if not current: return {'status':'no_verified_opportunities','accepted':0,'failed':0,'skipped':len(subscribers)}
+    if len(subscribers)>100: raise ValueError('Email batch exceeds the manual safety limit')
+    accepted=failed=skipped=0
+    for subscriber in subscribers:
+        consent=sale_date(subscriber.get('consented_at'))
+        unsubscribe=_url(subscriber.get('unsubscribe_url'))
+        if subscriber.get('is_active') not in (True,1) or not consent or consent>datetime.now(timezone.utc) or not unsubscribe:
+            skipped+=1
+            continue
+        try:
+            content=build_daily_email(current,subscriber.get('name') or '',unsubscribe_url=unsubscribe)
+            ok=send_email(subscriber.get('email') or '',**content,consented=True,unsubscribe_url=unsubscribe)
+        except ValueError: ok=False
+        if ok: accepted+=1
+        else: failed+=1
+    return {'status':'partial' if accepted and (failed or skipped) else 'accepted_by_provider' if accepted else 'failed',
+            'accepted':accepted,'failed':failed,'skipped':skipped}

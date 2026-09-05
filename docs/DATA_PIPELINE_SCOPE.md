@@ -1,107 +1,74 @@
-# DealScan — Real Data Pipeline Scope
+# Data pipeline scope and release evidence
 
-**Goal:** serve real, verified vacant-land opportunities through the web application without fabricating records, valuations, seller signals, or accessibility evidence.
-
-**Status:** production hardening in progress.
-
-## Current architecture
+## Actual architecture
 
 ```text
-GitHub Actions (15-minute production schedule)
-        |
-        v
-National county registry
-        |
-        v
-Source discovery -> live validation -> county ETL
-        |
-        +--> normalize / vacancy validation / financial evidence
-        |
-        +--> Supabase Postgres
-        |      |- counties
-        |      |- properties
-        |      |- deals
-        |      |- comps
-        |      |- ingestion_runs
-        |      `- ingestion_records
-        |
-        `--> bundle.json fallback artifact
-
-Next.js / Vercel
-        |
-        `--> /api/deals -> Supabase verified deals first
-              /api/deals/[apn] -> Supabase verified deal detail
+Official county geography → candidate-source research
+                                     ↓
+                     live validation → authority review
+                                     ↓
+                         explicit authorization
+                                     ↓
+                        bounded county ingestion
+                                     ↓
+             Supabase properties + private assessments
+             private ingestion runs/records + comparables
+                                     ↓
+               separate source/financial verification
+                                     ↓
+             transactional publication and expiry + RLS
+                                     ↓
+             Next.js verified-only APIs / research UI
 ```
 
-## Implemented
+There is no public bundle, Redis or demonstration-data fallback. An empty live
+database is authoritative. A database outage is a 503, not a successful empty feed.
 
-| Area | Status |
-|---|---|
-| National county registry | Implemented |
-| Source discovery | Implemented |
-| Live source validation | Implemented |
-| ArcGIS/public parcel adapters | Implemented |
-| Normalization + field coverage diagnostics | Implemented |
-| Vacant-land validation | Implemented |
-| Deal scoring + valuation evidence | Implemented |
-| Supabase production persistence | Implemented |
-| Comparables persistence | Implemented |
-| Ingestion run audit | Implemented |
-| Per-record ingestion provenance | Implemented |
-| Verified-deal public API | Implemented |
-| Auth + protected dashboard | Implemented |
-| CI Python tests | Passing |
-| CI Next.js build | Passing |
-| Scheduled production workflow | Implemented |
-| Production smoke workflow | Implemented, manual by design |
+## Separate measurements
 
-## Data-quality rules
+1. **Geography registered:** county/county-equivalent identity only.
+2. **Source discovered:** a candidate URL, not permission or proof of usability.
+3. **Validating / unavailable:** an honest technical state, not coverage.
+4. **Live validated:** current schema, sample, record-count and pagination evidence.
+5. **Ingestion ready:** current validation plus reviewed authority and a matching
+   explicitly authorized fingerprint, including the source object-ID field.
+6. **Ingested:** actual persisted properties from a completed bounded run.
+7. **Published:** separately verified opportunities with unexpired evidence.
 
-1. A county without an authoritative usable source is not treated as successful ingestion.
-2. Source fields are normalized without inventing missing values.
-3. Vacant-land classification requires an actual supported source signal.
-4. Valuation requires source-derived evidence; missing evidence causes rejection.
-5. Public APIs expose only deals with `status=discovered` and `verification_status=verified`.
-6. Every persisted property can retain source-record provenance in `ingestion_records`.
-7. Demo records are not used by the public deals API.
+The admin API computes current stored/verified inventory from the database.
+Python registry reports explicitly label their metrics as last-batch outcomes.
+Neither ingestion time nor successful HTTP transport is substituted for source
+freshness. A published count does not prove a monitoring service is operating.
 
-## Production workflow
+## Data requirements
 
-`.github/workflows/scrape.yml`:
+- Missing, invalid and conflicting facts are not converted to zero/default values.
+- An unoccupied building is not vacant land. Vacancy needs defensible source evidence.
+- An assessment is not an asking price. Costs must be complete and source-backed.
+- ARV uses at least three genuine, distinct, geographically/temporally relevant,
+  qualified vacant-at-sale records. The documented model is replayed at review.
+- Raw source facts, exact JSON/hash, mapping, source identity, county, run and
+  normalized evidence must agree. Review and source changes are race-safe.
+- Public output is allowlisted. Owners, mailing addresses, subscriber records,
+  financial audit documents and raw payloads remain private.
+- No source row or owner payload is uploaded in ordinary CI artifacts.
 
-1. verifies Supabase credentials;
-2. runs the pipeline test suite;
-3. initializes the database;
-4. validates the county registry;
-5. discovers national sources;
-6. live-validates a bounded number of sources;
-7. runs bounded national ETL;
-8. optionally publishes Redis/KV cache data;
-9. writes the committed web fallback bundle; and
-10. reports coverage.
+## Implemented versus externally proved
 
-The workflow is deliberately fail-closed when production Supabase credentials are missing.
+Offline regression coverage exercises Python normalization/ingestion, adapter
+failures, authorization, provenance, HTTP transport, actual SQL migrations/RLS,
+publication rollback/races, API privacy, auth, waitlist durability and browser data
+contracts. Web typecheck and production build are local build evidence only.
 
-## Production smoke test
+Production gates still require inspection/application of the actual Supabase
+schema, real securely configured credentials, executable source access, a bounded
+current-run ingestion, deployed API agreement and production Auth configuration.
+No production run or Vercel deployment is claimed from tests or metadata research.
 
-`.github/workflows/production-smoke.yml` is manually dispatched because it requires the real production secrets. It validates:
+Only `cochise_az`, `mohave_az` and `el_paso_tx` are configured pilots. The Census
+universe implementation must not be described as nationwide parcel availability.
+Begin real proof with the bounded El Paso zero-improvement source query; keep
+missing prices and comparable evidence private rather than inventing deals.
 
-- Supabase credentials;
-- pipeline tests;
-- database initialization;
-- county configuration;
-- live pilot sources;
-- one bounded production ingestion;
-- persisted production data; and
-- `ingestion_runs` / `ingestion_records` provenance.
-
-## Remaining release gates
-
-1. Add the real `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` GitHub Actions secrets.
-2. Run the production smoke workflow successfully.
-3. Confirm at least one authoritative county completes ETL against Supabase.
-4. Confirm verified deals appear through the production `/api/deals` endpoint.
-5. Configure the Vercel project with `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` and verify the deployed health endpoint.
-6. Complete any commercial integrations such as payments/email only when those credentials are intentionally enabled.
-
-Until the production smoke test passes, DealScan should be considered **release candidate**, not falsely labeled fully live.
+See [production runbook](production-runbook.md) for exact operator actions and
+[ingestion integrity](ingestion-integrity.md) for persistence/verification rules.

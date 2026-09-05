@@ -104,3 +104,13 @@ def test_production_watcher_cannot_bypass_workflow_controls(monkeypatch):
     monkeypatch.setenv('DEALSCAN_ENV','production')
     with pytest.raises(SystemExit) as exc: scheduler.main(['--watch'])
     assert exc.value.code==2
+
+
+def test_legacy_runner_preserves_disabled_operation_failure(monkeypatch,tmp_path):
+    import os,subprocess,sys
+    from pathlib import Path
+    monkeypatch.setenv('DEALSCAN_SQLITE_PATH',str(tmp_path/'isolated.db'))
+    script=Path(__file__).resolve().parents[1]/'runner.py'
+    result=subprocess.run([sys.executable,str(script),'--deliver'],env=os.environ.copy(),capture_output=True,text=True,timeout=20)
+    assert result.returncode==1
+    assert not (tmp_path/'isolated.db').exists()

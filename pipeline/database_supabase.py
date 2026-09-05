@@ -283,7 +283,7 @@ class SupabaseDatabase:
         return result
 
     def get_subscribers(self, tier: str | None = None) -> list[dict]:
-        params = {'is_active': 'eq.true', 'select': '*'}
+        params = {'is_active': 'eq.true', 'consented_at': 'not.is.null', 'select': '*'}
         if tier: params['tier'] = f'eq.{tier}'
         return self._request('GET', 'subscribers', params=params).json()
 

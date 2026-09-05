@@ -54,7 +54,7 @@ class SQLiteDatabase:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_properties_id_county ON properties(id,county_id);
             CREATE TABLE IF NOT EXISTS ingestion_runs(id INTEGER PRIMARY KEY AUTOINCREMENT, run_key TEXT UNIQUE NOT NULL, county_id TEXT NOT NULL, run_type TEXT NOT NULL DEFAULT 'manual', source_url TEXT, started_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, finished_at TEXT, status TEXT NOT NULL, records_seen INTEGER DEFAULT 0, records_normalized INTEGER DEFAULT 0, records_persisted INTEGER DEFAULT 0, records_rejected INTEGER DEFAULT 0, records_held INTEGER DEFAULT 0, records_skipped INTEGER DEFAULT 0, deals_persisted INTEGER DEFAULT 0, records_failed INTEGER DEFAULT 0, records_published INTEGER DEFAULT 0, error_message TEXT, metadata TEXT DEFAULT '{}', UNIQUE(id,county_id));
             CREATE TABLE IF NOT EXISTS ingestion_records(id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, county_id TEXT NOT NULL, record_key TEXT NOT NULL, source_record_id TEXT, source_url TEXT, raw_payload TEXT, normalized_payload TEXT, field_mapping TEXT, property_id INTEGER, deal_id INTEGER REFERENCES deals(id), status TEXT NOT NULL, rejection_reason TEXT, hold_reason TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(run_id,county_id) REFERENCES ingestion_runs(id,county_id), FOREIGN KEY(property_id,county_id) REFERENCES properties(id,county_id), UNIQUE(run_id,record_key));
-            CREATE TABLE IF NOT EXISTS subscribers(id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE NOT NULL, name TEXT, tier TEXT DEFAULT 'free', budget_min REAL DEFAULT 5000, budget_max REAL DEFAULT 50000, target_states TEXT, target_counties TEXT, min_profit REAL DEFAULT 3000, joined_at TEXT DEFAULT CURRENT_TIMESTAMP, is_active INTEGER DEFAULT 1);
+            CREATE TABLE IF NOT EXISTS subscribers(id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE NOT NULL, name TEXT, tier TEXT DEFAULT 'free', budget_min REAL, budget_max REAL, target_states TEXT, target_counties TEXT, min_profit REAL, joined_at TEXT DEFAULT CURRENT_TIMESTAMP, is_active INTEGER DEFAULT 0);
             CREATE TABLE IF NOT EXISTS deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT, subscriber_id INTEGER REFERENCES subscribers(id), deal_id INTEGER REFERENCES deals(id), delivered_at TEXT DEFAULT CURRENT_TIMESTAMP);
             CREATE TABLE IF NOT EXISTS waitlist(id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE NOT NULL, source TEXT, joined_at TEXT DEFAULT CURRENT_TIMESTAMP);
             ''')
@@ -63,7 +63,7 @@ class SQLiteDatabase:
                        'recommended_offer_low','recommended_offer_high','motivation_score','market_velocity','valuation_confidence',
                        'sale_price','distance_miles','price_per_acre'}
             integers = {'tax_delinquent_years','year_acquired','has_improvements','deal_score','ingestion_record_id','sale_qualified','vacant_at_sale','revision'}
-            for table, fields in [('properties', PROPERTY_FIELDS), ('deals', (*DEAL_FIELDS,'revision')), ('comps', COMP_FIELDS), ('ingestion_records', ('raw_payload_canonical',))]:
+            for table, fields in [('properties', PROPERTY_FIELDS), ('deals', (*DEAL_FIELDS,'revision')), ('comps', COMP_FIELDS), ('ingestion_records', ('raw_payload_canonical',)), ('subscribers', ('consented_at','unsubscribe_url'))]:
                 existing = {row['name'] for row in conn.execute(f'PRAGMA table_info({table})')}
                 for field in fields:
                     if field not in existing:
@@ -297,7 +297,7 @@ class SQLiteDatabase:
 
     def get_subscribers(self, tier=None):
         with self.connection() as conn:
-            return [_row(row) for row in conn.execute('SELECT * FROM subscribers WHERE is_active=1' + (' AND tier=?' if tier else ''), (tier,) if tier else ())]
+            return [_row(row) for row in conn.execute('SELECT * FROM subscribers WHERE is_active=1 AND consented_at IS NOT NULL' + (' AND tier=?' if tier else ''), (tier,) if tier else ())]
 
     def add_waitlist_entry(self, email, source='unknown'):
         with self.connection() as conn:
