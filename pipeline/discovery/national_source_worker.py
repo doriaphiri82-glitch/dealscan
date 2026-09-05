@@ -34,17 +34,20 @@ def _statewide_queue(states: Optional[Iterable[str]] = None) -> List[Dict[str, A
     return build_county_discovery_queue(reconciled, registry)
 
 
-def discover_and_register(limit:int=25)->Dict[str,Any]:
+def discover_and_register(limit:int=25, states: Optional[Iterable[str]] = None)->Dict[str,Any]:
     """Discover sources fairly, prioritizing authoritative statewide enumeration."""
     ensure_national_counties()
     try:
-        statewide = _statewide_queue()
+        statewide = _statewide_queue(states)
         statewide_error = None
     except Exception as exc:
         statewide = []
         statewide_error = str(exc)[:300]
     queued_ids = {row["county_id"] for row in statewide}
+    wanted = {str(state).strip().lower() for state in states} if states else None
     candidates=[c for c in list_counties() if c.get("coverage_status")!="tier_5" and ((not c.get("arcgis_layer_url") and not c.get("parcel_source_url")) or c.get("validation_status") in {"invalid","unreachable"})]
+    if wanted:
+        candidates=[c for c in candidates if str(c.get("state") or "").strip().lower() in wanted]
     candidates.sort(key=lambda c:(c.get("discovery_attempted_at") is not None,c.get("discovery_attempted_at") or "",c.get("state",""),c.get("county_name","")))
     statewide_by_id = {row["county_id"]: row for row in statewide}
     prioritized = [c for c in candidates if c.get("county_id") in queued_ids]
@@ -67,13 +70,7 @@ def discover_and_register(limit:int=25)->Dict[str,Any]:
     return response
 
 
-def run_statewide_batch(
-    states: Optional[Iterable[str]] = None,
-    discovery_limit: int = 25,
-    etl_limit: int = 5,
-    max_records: int = 5000,
-    mode: str = "dry_run",
-) -> Dict[str, Any]:
+def run_statewide_batch(states: Optional[Iterable[str]] = None, discovery_limit: int = 25, etl_limit: int = 5, max_records: int = 5000, mode: str = "dry_run") -> Dict[str, Any]:
     """Execute reconciled statewide counties through discovery and live ETL.
 
     Discovery remains deterministic and unverified until the live runner returns
@@ -84,8 +81,8 @@ def run_statewide_batch(
     queue = _statewide_queue(states)
     wanted = {str(state).strip().lower() for state in states} if states else None
     queued = [row for row in queue if not wanted or str(row.get("state") or "").strip().lower() in wanted]
-    discovery = discover_and_register(limit=_limit(discovery_limit))
-    discovered_ids = {row.get("county_id") for row in discovery.get("results", []) if row.get("status") == "discovered"}
+    discovery = discover_and_register(limit=_limit(discovery_limit), states=states)
+    discovered_ids = {row.get("county_id") for row in discovery.get("results", []) if row.get("status") == "discovered" and row.get("county_id") in {q.get("county_id") for q in queued}}
     refreshed = {str(row.get("county_id")): row for row in list_counties()}
     targets = [refreshed[cid] for cid in discovered_ids if cid in refreshed]
     targets.sort(key=lambda row: (str(row.get("state_fips") or ""), str(row.get("county_fips") or ""), str(row.get("county_id") or "")))
@@ -96,12 +93,7 @@ def run_statewide_batch(
         except Exception as exc:
             etl_results.append({"county_id": county["county_id"], "status": "error", "error": str(exc)[:300]})
     ok = sum(1 for result in etl_results if result.get("status") in {"ok", "degraded"})
-    return {
-        "states": sorted(wanted) if wanted else None,
-        "statewide_queued": len(queued),
-        "discovery": discovery,
-        "etl": {"attempted": len(etl_results), "ok": ok, "results": etl_results},
-    }
+    return {"states": sorted(wanted) if wanted else None, "statewide_queued": len(queued), "discovery": discovery, "etl": {"attempted": len(etl_results), "ok": ok, "results": etl_results}}
 
 
 def run_national_batch(limit:int=10,max_records:int=5000,mode:str="publish")->Dict[str,Any]:
