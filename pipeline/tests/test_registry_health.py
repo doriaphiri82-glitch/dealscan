@@ -3,7 +3,9 @@ DealScan - County registry and health tests.
 """
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -63,6 +65,17 @@ def test_pilot_source_metadata_overwrites_stale_registry_values() -> None:
     assert entry["parcel_source_url"].endswith("MapServer/14")
     assert entry["arcgis_layer_url"].endswith("MapServer/14")
     assert "/MapServer/38" not in entry["notes"]
+
+
+def test_committed_registry_preserves_authoritative_pilot_layer_identity() -> None:
+    """The checked-in registry artifact must not drop a configured pilot layer URL."""
+    registry_path = Path(__file__).parents[1] / "config" / "counties" / "registry.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    counties = registry["counties"]
+    for cid, pilot in PILOT_COUNTIES.items():
+        expected = pilot.get("arcgis_layer_url")
+        if expected:
+            assert counties[cid].get("arcgis_layer_url") == expected
 
 
 def test_update_county() -> None:

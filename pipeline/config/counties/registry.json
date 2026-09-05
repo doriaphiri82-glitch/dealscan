@@ -61,8 +61,8 @@
       "population": 865424,
       "data_source_type": "arcgis",
       "assessor_url": "https://www.epcad.org",
-      "gis_url": "https://services7.arcgis.com/HCMBmskOgOdHcxMC/arcgis/rest/services/EPCAD",
-      "parcel_source_url": "https://services7.arcgis.com/HCMBmskOgOdHcxMC/arcgis/rest/services/EPCAD/FeatureServer/0",
+      "gis_url": "https://services2.arcgis.com/fKvlzLJczghwPYHS/ArcGIS/rest/services/ElPasoCADWebService/FeatureServer/0",
+      "parcel_source_url": "https://services2.arcgis.com/fKvlzLJczghwPYHS/ArcGIS/rest/services/ElPasoCADWebService/FeatureServer/0",
       "tax_source_url": null,
       "delinquent_tax_source_url": null,
       "zoning_source_url": null,
@@ -74,7 +74,8 @@
       "last_record_count": null,
       "data_freshness": null,
       "field_mapping": {},
-      "notes": "EPCAD ArcGIS FeatureServer/0 (source verified 2026-09-03; ETL run pending). Flatfile fallback blocked by Cloudflare."
+      "notes": "EPCAD direct ArcGIS FeatureServer; source verified 2026-09-03; ETL run pending",
+      "arcgis_layer_url": "https://services2.arcgis.com/fKvlzLJczghwPYHS/ArcGIS/rest/services/ElPasoCADWebService/FeatureServer/0"
     }
   },
   "meta": {
