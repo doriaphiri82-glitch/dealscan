@@ -1,19 +1,20 @@
 -- Keep the production publication contract reproducible from migrations.
--- Idempotent so it is safe against the policies already applied in production.
+-- The browser-facing roles may read published data only; writes remain server-side.
 
 alter table public.counties enable row level security;
 alter table public.properties enable row level security;
 alter table public.deals enable row level security;
 alter table public.comps enable row level security;
 
- drop policy if exists "public read counties" on public.counties;
+-- Replace policies so this migration is safe when the same policy names already exist.
+drop policy if exists "public read counties" on public.counties;
 create policy "public read counties"
 on public.counties
 for select
 to anon, authenticated
 using (true);
 
- drop policy if exists "public read published deals" on public.deals;
+drop policy if exists "public read published deals" on public.deals;
 create policy "public read published deals"
 on public.deals
 for select
@@ -23,7 +24,7 @@ using (
   and verification_status = 'verified'
 );
 
- drop policy if exists "public read deal properties" on public.properties;
+drop policy if exists "public read deal properties" on public.properties;
 create policy "public read deal properties"
 on public.properties
 for select
@@ -38,7 +39,7 @@ using (
   )
 );
 
- drop policy if exists "public read comps for published deals" on public.comps;
+drop policy if exists "public read comps for published deals" on public.comps;
 create policy "public read comps for published deals"
 on public.comps
 for select
@@ -53,7 +54,9 @@ using (
   )
 );
 
--- Explicitly document that write-capable roles are not granted public access.
-revoke all on public.subscribers from anon, authenticated;
-revoke all on public.deliveries from anon, authenticated;
-revoke all on public.waitlist from anon, authenticated;
+-- Least privilege for browser-facing roles: published tables are read-only.
+revoke all on table public.counties, public.properties, public.deals, public.comps from anon, authenticated;
+grant select on table public.counties, public.properties, public.deals, public.comps to anon, authenticated;
+
+-- Subscriber, delivery and waitlist data is server-only.
+revoke all on table public.subscribers, public.deliveries, public.waitlist from anon, authenticated;
