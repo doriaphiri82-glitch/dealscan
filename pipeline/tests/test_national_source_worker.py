@@ -137,3 +137,24 @@ def test_discover_and_register_scopes_fallback_candidates_to_requested_states(mo
     result=worker.discover_and_register(limit=10, states=["North Carolina"])
     assert result["attempted"] == 1
     assert attempted == ["nc"]
+
+
+def test_run_statewide_batch_etls_already_valid_counties(monkeypatch):
+    queue = [{"county_id": "nc_valid", "state": "North Carolina"}, {"county_id": "nc_new", "state": "North Carolina"}]
+    registry = [
+        {"county_id": "nc_valid", "state": "North Carolina", "state_fips": "37", "county_fips": "001", "validation_status": "valid", "arcgis_layer_url": "https://example.test/valid"},
+        {"county_id": "nc_new", "state": "North Carolina", "state_fips": "37", "county_fips": "003", "validation_status": "pending", "arcgis_layer_url": "https://example.test/new"},
+    ]
+    calls=[]
+    monkeypatch.setattr(worker, "ensure_national_counties", lambda: None)
+    monkeypatch.setattr(worker, "_statewide_snapshot", lambda states=None: {"census": {}, "reconciled": [], "queue": queue, "coverage": {}})
+    monkeypatch.setattr(worker, "discover_and_register", lambda **kwargs: {"results": [{"county_id": "nc_new", "status": "discovered", "registry_patch": {"arcgis_layer_url": "https://example.test/new", "verification_status": "discovered_not_verified"}}], "persisted": False})
+    monkeypatch.setattr(worker, "list_counties", lambda: registry)
+    monkeypatch.setattr(worker, "build_statewide_coverage_report", lambda *args, **kwargs: {})
+    monkeypatch.setattr(worker, "run_county", lambda cid, **kwargs: calls.append(cid) or {"county_id": cid, "status": "ok"})
+
+    result = worker.run_statewide_batch(states=["North Carolina"], etl_limit=5, mode="dry_run")
+
+    assert calls == ["nc_valid", "nc_new"]
+    assert result["etl"]["attempted"] == 2
+    assert result["etl"]["ok"] == 2
