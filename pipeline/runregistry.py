@@ -10,9 +10,35 @@ def load_registry():
     try:
         with open(REGISTRY_PATH,encoding="utf-8") as f:return json.load(f)
     except Exception:return {"runs":[],"last_run":None}
+def _record_supabase_audit(county_id:str,status:str,counts:Dict[str,Any],error:str)->None:
+    """Mirror local run-registry events into production audit storage when enabled."""
+    if os.getenv("DEALSCAN_DB_BACKEND", "sqlite").strip().lower() != "supabase":
+        return
+    try:
+        from database_supabase import SupabaseDatabase
+        county = {}
+        try:
+            from config.counties.registry import get_county
+            county = get_county(county_id) or {}
+        except Exception:
+            pass
+        SupabaseDatabase().record_ingestion_run(
+            county_id=county_id,
+            status=status,
+            counts=counts,
+            error=error,
+            source_url=county.get("arcgis_layer_url") or county.get("parcel_source_url") or county.get("gis_url"),
+            metadata={"local_registry": True},
+        )
+    except Exception as exc:
+        # Audit failure must not hide the primary ETL result; the pipeline summary
+        # already records its operational errors separately.
+        print(f"WARNING: Supabase ingestion audit unavailable: {str(exc)[:300]}")
+
 def record_run(county_id,status,counts,error=""):
     reg=load_registry(); entry={"county_id":county_id,"status":status,"counts":counts,"error":error,"at":datetime.now(timezone.utc).isoformat()}; reg.setdefault("runs",[]).insert(0,entry); reg["runs"]=reg["runs"][:100]; reg["last_run"]=entry; _ensure_dir()
     with open(REGISTRY_PATH,"w",encoding="utf-8") as f:json.dump(reg,f,indent=1)
+    _record_supabase_audit(county_id,status,counts,error)
     return entry
 def _load_existing_bundle():
     try:
