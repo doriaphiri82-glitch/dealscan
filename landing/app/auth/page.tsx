@@ -4,6 +4,11 @@ import { FormEvent, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 
+function safeNext(value: string | null): string {
+  if (!value || !value.startsWith('/') || value.startsWith('//')) return '/my-dealscan'
+  return value
+}
+
 export default function AuthPage() {
   const router = useRouter()
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
@@ -12,11 +17,12 @@ export default function AuthPage() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [nextPath, setNextPath] = useState('/my-dealscan')
 
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('error')) {
-      setError('We could not complete that sign-in. Please try again.')
-    }
+    const params = new URLSearchParams(window.location.search)
+    setNextPath(safeNext(params.get('next')))
+    if (params.get('error')) setError('We could not complete that sign-in. Please try again.')
   }, [])
 
   const submit = async (event: FormEvent) => {
@@ -28,12 +34,12 @@ export default function AuthPage() {
       const supabase = createSupabaseBrowserClient()
       const result = mode === 'signin'
         ? await supabase.auth.signInWithPassword({ email, password })
-        : await supabase.auth.signUp({ email, password, options: { emailRedirectTo: `${window.location.origin}/auth/callback` } })
+        : await supabase.auth.signUp({ email, password, options: { emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(nextPath)}` } })
       if (result.error) throw result.error
       if (mode === 'signup' && !result.data.session) {
         setMessage('Check your email to confirm your account, then come back to DealScan.')
       } else {
-        router.push('/my-dealscan')
+        router.push(nextPath)
         router.refresh()
       }
     } catch (err) {
@@ -50,7 +56,7 @@ export default function AuthPage() {
       const supabase = createSupabaseBrowserClient()
       const { error: authError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: { redirectTo: `${window.location.origin}/auth/callback` },
+        options: { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(nextPath)}` },
       })
       if (authError) throw authError
     } catch (err) {
