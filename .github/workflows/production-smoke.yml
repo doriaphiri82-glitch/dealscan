@@ -1,0 +1,72 @@
+name: dealscan-production-smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pipeline/**'
+      - '.github/workflows/production-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dealscan-production-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEALSCAN_DB_BACKEND: supabase
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: pipeline/requirements.txt
+      - name: Install dependencies
+        working-directory: pipeline
+        run: pip install -r requirements.txt pytest
+      - name: Verify production credentials
+        working-directory: pipeline
+        run: |
+          test -n "$SUPABASE_URL" || (echo 'Missing SUPABASE_URL GitHub secret' && exit 1)
+          test -n "$SUPABASE_SERVICE_ROLE_KEY" || (echo 'Missing SUPABASE_SERVICE_ROLE_KEY GitHub secret' && exit 1)
+      - name: Validate pipeline
+        working-directory: pipeline
+        env:
+          PYTHONPATH: .
+        run: pytest -q
+      - name: Initialize production database
+        working-directory: pipeline
+        run: python main.py --setup-db
+      - name: Refresh national county universe
+        working-directory: pipeline
+        run: python main.py --validate
+      - name: Live validate pilot sources
+        working-directory: pipeline
+        run: python main.py --validate-live 3 --include-validated
+      - name: Ingest one production county
+        working-directory: pipeline
+        run: python main.py --run-national 1 --max-records 250
+      - name: Verify persisted production data
+        working-directory: pipeline
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          from database import get_top_deals
+          from config.counties.registry import list_counties
+          counties = list_counties()
+          deals = get_top_deals(limit=5, min_score=0)
+          successful = [c for c in counties if c.get('last_successful_run')]
+          print(f'counties={len(counties)} successful_counties={len(successful)} deals={len(deals)}')
+          if not successful:
+              raise SystemExit('Production smoke test failed: no county has a successful ETL run')
+          PY
