@@ -12,9 +12,9 @@ export function privateSupabaseConfig(): { url: string; key: string } {
     if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') throw new Error()
     const publicUrl=process.env.NEXT_PUBLIC_SUPABASE_URL
     if (publicUrl && new URL(publicUrl).origin !== parsed.origin) throw new Error()
-    if (!key.startsWith('sb_secret_')) {
+    if (!/^sb_secret_[A-Za-z0-9_-]+$/.test(key)) {
       const parts = key.split('.')
-      if (parts.length !== 3 || JSON.parse(Buffer.from(parts[1], 'base64url').toString()).role !== 'service_role') throw new Error()
+      if (parts.length !== 3 || !parts.every(part=>/^[A-Za-z0-9_-]+$/.test(part)) || JSON.parse(Buffer.from(parts[1], 'base64url').toString()).role !== 'service_role') throw new Error()
     }
     return { url: parsed.origin, key }
   } catch { throw new PrivateStoreUnavailable('Private database not configured') }

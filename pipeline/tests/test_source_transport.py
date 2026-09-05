@@ -131,3 +131,11 @@ def test_actual_urllib3_gzip_decoding_is_bounded_by_expanded_bytes(monkeypatch,l
     result=base.fetch('https://county.example/data',ttl=0,respect_robots=False,as_json=True,max_bytes=limit)
     assert result.ok is ok
     if ok: assert result.body=={'value':'x'*1000}
+
+
+
+def test_excessively_nested_json_is_a_bounded_failure_not_an_uncaught_parser_error(monkeypatch):
+    response=Response(b'['*2000+b'0'+b']'*2000)
+    monkeypatch.setattr(base._session,'post',lambda *a,**kw:response)
+    result=base.post_json('https://county.example/data',{})
+    assert result.ok is False and response.closed

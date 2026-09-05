@@ -120,6 +120,7 @@ it('the deadline covers response-body parsing, not just initial response headers
 
 it('keeps cents from source prices and does not turn unavailable values into zero',()=>{
   expect(formatCurrency(.49)).toBe('$0.49')
+  expect(formatCurrency(.001)).toBe('<$0.01')
   expect(formatCurrency(25000.25)).toBe('$25,000.25')
   expect(formatCurrency(25000)).toBe('$25,000')
   expect(formatCurrency(0)).toBe('$0')

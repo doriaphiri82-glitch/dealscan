@@ -65,7 +65,7 @@ def _cached(url: str, ttl: int, ns: str = "", max_bytes: int = DEFAULT_MAX_BYTES
         size=len(value) if isinstance(value,bytes) else len(json.dumps(value,ensure_ascii=False,allow_nan=False).encode())
         return value if size<=max_bytes else None
     except FileNotFoundError: return None
-    except (OSError,ValueError,TypeError):
+    except (OSError,ValueError,TypeError,RecursionError):
         log.warning('Source cache read unavailable; performing a fresh request')
         return None
 
@@ -85,7 +85,7 @@ def _store_cache(url: str, body: Any, ns: str = "") -> None:
             target.flush()
             os.fsync(target.fileno())
         os.replace(temporary,path)
-    except (OSError,ValueError,TypeError):
+    except (OSError,ValueError,TypeError,RecursionError):
         log.warning('Optional source cache write unavailable; fetched data remains usable')
     finally:
         if temporary:
@@ -191,7 +191,7 @@ def _network(method: str,url: str,*,payload=None,raw=False,as_json=False,
             body=content if raw else _json(content) if as_json or 'json' in response.headers.get('content-type','') else content.decode(response.encoding or 'utf-8')
             if time.monotonic()>deadline: raise TimeoutError()
             return FetchResult(True,200,body)
-        except (ValueError,UnicodeError):
+        except (ValueError,UnicodeError,RecursionError):
             return FetchResult(False,error='Invalid or oversized source response')
         except (requests.RequestException,TransportError,OSError) as exc:
             if attempt>=retries: return FetchResult(False,error=type(exc).__name__)
