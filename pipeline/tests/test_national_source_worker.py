@@ -79,7 +79,7 @@ def test_run_statewide_batch_scopes_discovery_and_runs_discovered_counties(monke
     ]
     calls=[]
     monkeypatch.setattr(worker, "ensure_national_counties", lambda: None)
-    monkeypatch.setattr(worker, "_statewide_queue", lambda states=None: queue)
+    monkeypatch.setattr(worker, "_statewide_snapshot", lambda states=None: {"census": {}, "reconciled": [], "queue": queue, "coverage": {"states": {}, "totals": {}}})
     monkeypatch.setattr(worker, "discover_and_register", lambda limit=25, states=None: {"attempted": 2, "found": 2, "results":[{"county_id":"nc_001","status":"discovered"},{"county_id":"nc_002","status":"discovered"}]})
     monkeypatch.setattr(worker, "list_counties", lambda: registry)
     monkeypatch.setattr(worker, "run_county", lambda cid, **kwargs: calls.append((cid, kwargs["mode"])) or {"county_id":cid,"status":"ok"})
@@ -88,6 +88,7 @@ def test_run_statewide_batch_scopes_discovery_and_runs_discovered_counties(monke
 
     assert result["states"] == ["north carolina"]
     assert result["statewide_queued"] == 2
+    assert result["coverage"] == {"states": {}, "totals": {}}
     assert result["etl"]["attempted"] == 1
     assert result["etl"]["ok"] == 1
     assert calls == [("nc_001", "dry_run")]
