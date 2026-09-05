@@ -81,7 +81,13 @@ def _source_quality(field_map: Dict[str,str], meta: Dict[str,Any]) -> Dict[str,A
     return {"source_quality":tier,"source_quality_score":score,"useful_field_count":useful_count,"missing_useful_fields":[k for k in useful if k not in field_map]}
 
 def discover_arcgis_county_config(county_id: str, county_name: str, state: str) -> Optional[Dict[str,Any]]:
-    """Discover a public ArcGIS parcel layer for one county on demand."""
+    """Discover a public ArcGIS parcel layer for one county on demand.
+
+    Candidate ranking is intentionally conservative: an ArcGIS item being
+    reachable is not enough to register it as a parcel source. The item must
+    have parcel/property semantics and the layer must expose enough parcel
+    fields for DealScan's downstream ETL to be useful.
+    """
     county=_norm(county_name.replace(" County","")); st=_norm(state)
     q=f'("{county}" OR "{county_name}") AND (parcel OR parcels) AND ("{state}" OR {st})'
     url="https://www.arcgis.com/sharing/rest/search?f=json&num=100&q="+quote_plus(q)
@@ -97,6 +103,8 @@ def discover_arcgis_county_config(county_id: str, county_name: str, state: str) 
         if st in title: score+=3
         if "parcel" in title: score+=4
         if "assessor" in title or "property" in title: score+=1
+        parcel_semantics=any(term in f"{title} {desc}" for term in ("parcel","property","assessor","tax parcel","cadastral"))
+        if not parcel_semantics: continue
         ranked.append((score,item))
     for score,item in sorted(ranked,key=lambda x:x[0],reverse=True)[:10]:
         root=str(item["url"]).rstrip("/"); meta=fetch(root+"?f=json",ttl=6*3600,as_json=True,respect_robots=False)
@@ -111,9 +119,13 @@ def discover_arcgis_county_config(county_id: str, county_name: str, state: str) 
                     if lm.ok and isinstance(lm.body,dict): candidates.append((u,lm.body))
         for layer,lm in candidates:
             fm=_field_map(lm); quality=_source_quality(fm,lm)
-            if "apn" in fm or lm.get("objectIdField") or lm.get("geometryType"):
-                modified=item.get("modified") or lm.get("lastEditDate") or lm.get("editingInfo",{}).get("lastEditDate")
-                return {"name":f"{county_name}, {state}","data_mode":"arcgis","arcgis_layer_url":layer,"arcgis_root":root,"fields":fm,"defaults":{"county_state":state},"where":"1=1","verified":False,"discovery_source":"arcgis_online","discovery_score":score,"source_last_modified":modified,"status":"DISCOVERED_NOT_VERIFIED",**quality}
+            # Reject generic ArcGIS layers that merely have geometry/object IDs.
+            # A discovered source should be useful for parcel ETL before it is
+            # persisted; live extraction/validation remains a separate step.
+            if score < 6 or quality["source_quality_score"] < 55: continue
+            if "apn" not in fm: continue
+            modified=item.get("modified") or lm.get("lastEditDate") or lm.get("editingInfo",{}).get("lastEditDate")
+            return {"name":f"{county_name}, {state}","data_mode":"arcgis","arcgis_layer_url":layer,"arcgis_root":root,"fields":fm,"defaults":{"county_state":state},"where":"1=1","verified":False,"discovery_source":"arcgis_online","discovery_score":score,"source_last_modified":modified,"status":"DISCOVERED_NOT_VERIFIED",**quality}
     return None
 
 def probe_county_sources(county_id: str, cfg: Dict[str,Any]) -> List[Dict[str,Any]]:
