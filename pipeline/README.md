@@ -1,72 +1,73 @@
 # DealScan Pipeline
 
-Land-deal screening pipeline: scrapes county parcel data, scores deals, and
-publishes a web bundle. See also `docs/DATA_PIPELINE_SCOPE.md` for the full
-plan and `scrapers/` for data sources.
+Land-deal screening pipeline: discovers authoritative county parcel sources, validates them, ingests real records, scores opportunities, persists production data to Supabase, and publishes a web bundle.
+
+## Architecture
+
+- **Production database:** Supabase/Postgres (`DEALSCAN_DB_BACKEND=supabase`)
+- **Local development:** SQLite fallback
+- **Source discovery:** county registry + ArcGIS/public parcel sources
+- **Audit trail:** `ingestion_runs` + `ingestion_records`
+- **Web app:** Next.js under `landing/`
+- **Production schedule:** GitHub Actions `.github/workflows/scrape.yml` every 15 minutes
+- **Optional cache:** Redis/Vercel KV; not required for primary Supabase reads
 
 ## Layout
 
 ```
 pipeline/
-├── config/            # counties + settings
-├── scrapers/
-│   ├── base.py        # polite HTTP + cache + robots.txt + probing
-│   ├── argis.py       # ArcGIS REST adapter (parcel layers)
-│   └── counties.py    # per-county source registry
-├── scoring/           # deal_scorer (signals, ARV, 1-100 score)
-├── delivery/          # email digest (Resend/SendGrid/console)
-├── runners.py         # orchestration of one county run
-├── scheduler.py       # daily/weekly scheduling + --run-once (CI)
-├── publish.py         # push bundle to Vercel KV / REDIS_URL
-├── runregistry.py     # run history + bundle artifact
-├── demo_pipeline.py   # offline demo data run
-├── main.py            # CLI (setup-db / run / probe / dry-run / bundle / demo)
+├── config/            # national county registry + settings
+├── scrapers/          # ArcGIS, flat-file and county adapters
+├── scoring/           # deal scoring, valuation and comparables
+├── delivery/          # optional email delivery
+├── runners.py         # one-county ETL orchestration
+├── runregistry.py     # local run history + Supabase audit finalization
+├── database.py        # backend selector
+├── database_supabase.py # production PostgREST persistence + provenance
+├── main.py            # CLI
 └── tests/             # offline unit tests
 ```
 
 ## Commands
 
 ```bash
-python main.py --setup-db                    # create SQLite schema
-python main.py --run                         # scrape + score + publish bundle
-python main.py --run --county cochise_az     # one county
-python main.py --run --etl-only              # ETL only, no publish
-python main.py --probe                       # probe county data sources
-python main.py --dry-run --county cochise_az # ETL offline (data_file mode)
-python main.py --bundle                      # show published bundle summary
-python main.py --demo                        # offline demo run
-python scheduler.py --run-once               # all counties once (CI cron)
-python scheduler.py --watch                  # scheduled local loop (needs schedule)
+python main.py --setup-db
+python main.py --validate
+python main.py --discover-national 50
+python main.py --validate-live 50
+python main.py --run-national 20 --max-records 5000
+python main.py --coverage
 ```
 
-## Scheduling
+For local SQLite development, omit `DEALSCAN_DB_BACKEND=supabase`. Production ingestion must have both `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` configured.
 
-* **Production (recommended):** `.github/workflows/scrape.yml` (repo root)
-  runs `scheduler.py --run-once` on a cron — daily delta + weekly full —
-  inside GitHub Actions, then commits `pipeline/data/bundle.json` +
-  `registry.json` and copies them to `landing/data/` so Vercel serves the
-  latest artifact.
-* **Local:** `python scheduler.py --watch`.
+## Production workflow
 
-## Publishing to the webapp
+`.github/workflows/scrape.yml` runs the production pipeline in this order:
 
-Producers write `data/bundle.json` (top scored deals) + `data/registry.json`
-(run history). The webapp reads, in order:
+1. Verify Supabase credentials.
+2. Run the complete offline test suite.
+3. Initialize/verify the database schema.
+4. Validate the national county universe.
+5. Discover and live-validate authoritative parcel sources.
+6. Ingest a bounded batch of validated counties.
+7. Persist properties/deals/comparables to Supabase.
+8. Record ingestion provenance in `ingestion_runs` and `ingestion_records`.
+9. Publish optional Redis/KV cache data when configured.
+10. Commit the generated web bundle as a fallback artifact.
 
-1. `REDIS_URL` — Upstash REST (`https://`) or native (`redis://`)
-2. `KV_REST_API_URL` + `KV_REST_API_TOKEN` — Vercel KV REST
-3. committed `landing/data/bundle.json` artifact
-
-Set the secret in GitHub Actions to publish through your store. Otherwise the
-committed artifact is used automatically (deploy-time snapshot).
+The web API reads verified deals directly from Supabase first, then optional Redis/KV caches. It does **not** expose hard-coded demo opportunities.
 
 ## Tests
 
 ```bash
-python -m pytest pipeline/tests/   # offline fixtures, no network
+python -m pytest pipeline/tests/
 ```
 
-## Delivery
+The production smoke test is intentionally manual because it requires real production Supabase credentials:
 
-`delivery/email_sender.py` sends the daily digest. Configure
-`EMAIL_PROVIDER` + `EMAIL_API_KEY` in `.env` (see `.env.example`).
+`.github/workflows/production-smoke.yml`
+
+## Data quality
+
+DealScan does not manufacture opportunities when a county source is missing, stale, malformed, or insufficiently verifiable. Candidates are rejected when required source/valuation/vacancy evidence is not strong enough. Only deals marked `verification_status=verified` are eligible for the public deals API.
