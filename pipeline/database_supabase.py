@@ -21,13 +21,34 @@ class SupabaseDatabase:
             raise RuntimeError(f"Supabase {method} {table} failed ({response.status_code}): {response.text[:1000]}")
         return response
 
-    def _ensure_county(self, county_id: str) -> None:
+    def upsert_county(self, county: Dict[str, Any]) -> None:
+        """Persist authoritative registry metadata; never invent county identity fields."""
+        county_id = str(county.get("county_id") or "").strip()
+        county_name = str(county.get("county_name") or "").strip()
+        if not county_id or not county_name:
+            raise ValueError("county metadata requires county_id and county_name")
+        known = {"county_id","state","state_fips","county_fips","county_name","coverage_status","data_source_type","gis_url","parcel_source_url","arcgis_layer_url","source_vendor","scraper_type","field_mapping","verification_status","validation_status","data_freshness","discovery_attempted_at","last_successful_run","last_run_status","last_run_error","record_count","qualified_count","published_count","persisted_count","notes","extra"}
+        payload = {k: county.get(k) for k in known if county.get(k) is not None}
+        payload["county_id"] = county_id
+        payload["county_name"] = county_name
+        payload["field_mapping"] = county.get("field_mapping") or {}
+        payload["extra"] = {k: v for k, v in county.items() if k not in known}
+        self._request("POST", "counties", params={"on_conflict": "county_id"}, headers={**self.headers, "Prefer": "resolution=merge-duplicates"}, json=payload)
+
+    def ensure_county(self, county: Dict[str, Any]) -> None:
+        county_id = str(county.get("county_id") or "").strip()
+        if not county_id:
+            raise ValueError("county metadata requires county_id")
         rows = self._request("GET", "counties", params={"county_id": f"eq.{county_id}", "select": "county_id"}).json()
         if not rows:
-            self._request("POST", "counties", json={"county_id": county_id, "county_name": county_id})
+            self.upsert_county(county)
 
     def save_property(self, data: Dict[str, Any]) -> int:
-        self._ensure_county(data["county_id"])
+        county = data.get("_county_metadata")
+        if county:
+            self.upsert_county(county)
+        else:
+            self.ensure_county({"county_id": data["county_id"], "county_name": data.get("county_name")})
         payload = {"apn": data["apn"], "county_id": data["county_id"], "address": data.get("address"), "lot_size_acres": data.get("lot_size_acres"), "assessed_value": data.get("assessed_value"), "market_value": data.get("market_value"), "owner_name": data.get("owner_name"), "owner_address": data.get("owner_address"), "owner_state": data.get("owner_state"), "tax_amount": data.get("tax_amount"), "tax_delinquent_years": data.get("tax_delinquent_years", 0), "year_acquired": data.get("year_acquired"), "zoning": data.get("zoning"), "land_use": data.get("land_use"), "has_improvements": bool(data.get("has_improvements", False)), "legal_description": data.get("legal_description"), "latitude": data.get("latitude"), "longitude": data.get("longitude")}
         rows = self._request("POST", "properties", params={"on_conflict": "apn,county_id"}, headers={**self.headers, "Prefer": "resolution=merge-duplicates,return=representation"}, json=payload).json()
         if not rows: raise RuntimeError("Supabase property upsert returned no row")
