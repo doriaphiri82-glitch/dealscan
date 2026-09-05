@@ -76,7 +76,10 @@ Pushes to the trusted handoff branch `arena/01a072f4-dealscan` also run only
 read-only readiness (to obtain evidence when the connector cannot manually
 dispatch Actions). The write step additionally requires `workflow_dispatch`, so
 a push never authorizes or ingests. Environment protection rules remain enforced.
-The workflow refuses to continue when readiness fails. A preflight pass alone is
+The workflow refuses to continue when readiness fails. The same minimized
+readiness report appears in a GitHub Check annotation, so it remains inspectable
+when the artifact/log storage endpoint is unreachable. No source rows or secret
+values are included. A preflight pass alone is
 not a completed production smoke, migration proof or authenticated-login test.
 
 Read-only readiness is also available locally (it can report missing credentials

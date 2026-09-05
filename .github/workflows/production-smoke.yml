@@ -80,7 +80,7 @@ jobs:
         run: python main.py --production-smoke "$COUNTY_ID" --max-records "$MAX_RECORDS" --app-url "$PRODUCTION_APP_URL" --report-file data/smoke-summary.json
       - name: Upload minimized readiness and smoke summaries
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24
         with:
           name: production-smoke-${{ github.run_id }}
           path: |

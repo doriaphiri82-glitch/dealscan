@@ -42,7 +42,7 @@ jobs:
         run: python main.py --statewide-audit --states "$STATES" --discovery-limit "$DISCOVERY_LIMIT" --etl-limit 0 --report-file data/source-research-summary.json
       - name: Upload minimized source research report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24
         with:
           name: source-research-${{ github.run_id }}
           path: pipeline/data/source-research-summary.json

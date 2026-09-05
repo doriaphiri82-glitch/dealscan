@@ -145,6 +145,12 @@ def main(argv=None) -> int:
     path = Path(args.report_file); path.parent.mkdir(parents=True,exist_ok=True)
     path.write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps(report,indent=2))
+    if os.getenv('GITHUB_ACTIONS')=='true':
+        # Keep minimized evidence readable through the Checks API as well as
+        # blob-backed logs/artifacts. Never print source records or secret values.
+        message=json.dumps(report,separators=(',',':')).replace('%','%25').replace('\r','%0D').replace('\n','%0A')
+        level='notice' if report['status']=='ready_for_bounded_smoke' else 'error'
+        print(f'::{level} title=Read-only production readiness::{message}')
     return 0 if report['status']=='ready_for_bounded_smoke' else 1
 
 

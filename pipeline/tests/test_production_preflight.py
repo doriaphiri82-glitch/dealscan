@@ -107,3 +107,16 @@ def test_read_only_source_probe_does_not_authorize_or_export_samples(monkeypatch
     assert result['status']=='passed' and result['sample_checked']==5
     assert result['ingestion_authorized'] is False
     assert 'PRIVATE' not in json.dumps(result) and 'raw_payload' not in result
+
+
+def test_workflow_annotation_exposes_only_the_minimized_readiness_report(monkeypatch,tmp_path,capsys):
+    monkeypatch.setenv('GITHUB_ACTIONS','true')
+    report={'status':'blocked','checks':{'configuration':{'missing':['SUPABASE_SERVICE_ROLE_KEY']}}}
+    monkeypatch.setattr(preflight,'run_preflight',lambda *args:report)
+    output=tmp_path/'report.json'
+    assert preflight.main(['--app-url','https://app.example','--report-file',str(output)])==1
+    assert json.loads(output.read_text())==report
+    text=capsys.readouterr().out
+    assert '::error title=Read-only production readiness::' in text
+    assert 'SUPABASE_SERVICE_ROLE_KEY' in text
+    assert 'ephemeral-service-key' not in text
