@@ -14,7 +14,7 @@ on:
         required: false
         default: '50'
       run_limit:
-        description: 'Maximum discovered counties to ETL'
+        description: 'Maximum validated counties to ETL'
         required: false
         default: '20'
 
@@ -95,16 +95,11 @@ jobs:
       - name: Show coverage
         working-directory: pipeline
         run: python main.py --coverage
-      - name: Publish web data fallback
-        run: |
-          mkdir -p landing/data
-          cp -f pipeline/data/bundle.json landing/data/bundle.json
-          cp -f pipeline/config/counties/registry.json landing/data/registry.json
       - name: Commit pipeline data and national registry artifacts
         run: |
           git config user.name "DealScan Pipeline"
           git config user.email "pipeline@dealscan.app"
-          git add -f pipeline/data/registry.json pipeline/data/bundle.json pipeline/config/counties/registry.json landing/data/bundle.json landing/data/registry.json
+          git add -f pipeline/data/registry.json pipeline/data/bundle.json pipeline/config/counties/registry.json
           if git diff --cached --quiet; then
             echo "No pipeline data changes to commit."
           else
