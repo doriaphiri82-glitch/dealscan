@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 from config.counties.national_registry import PILOT_COUNTIES
 from config.counties.registry import get_county, mark_county_run
-from database import get_top_deals, save_comps, save_deal, save_property
+from database import get_top_deals, save_comps, save_deal, save_property, sync_county
 from runregistry import record_run, write_bundle
 from scoring.deal_scorer import score_and_enrich_deal, _source_comparables
 from scrapers import arcgis
@@ -33,12 +33,8 @@ def _county_config(county_id:str)->Dict[str,Any]:
         for key in _AUTHORITATIVE_PILOT_SOURCE_KEYS:
             value=pilot.get(key)
             if value is not None: cfg[key]=value
-        # A pilot layer is itself an ArcGIS source. Do not allow stale scraper
-        # metadata to change the adapter selection back to another source mode.
         if pilot.get("arcgis_layer_url"):
-            cfg["arcgis_root"]=pilot["arcgis_layer_url"]
-            cfg["data_mode"]="arcgis"
-            cfg["scraper_type"]="arcgis"
+            cfg["arcgis_root"]=pilot["arcgis_layer_url"]; cfg["data_mode"]="arcgis"; cfg["scraper_type"]="arcgis"
     if not cfg:
         if pilot: cfg=dict(pilot)
         else: cfg=dict(get_county(county_id) or {})
@@ -122,6 +118,10 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
     cfg=_county_config(county_id); m=RunMetrics(county_id); summary={'county_id':county_id,'counts':m.to_counts(),'status':'ok','error':''}
     if not cfg:summary.update(status='skipped',error='County has no configured or discovered source');record_run(county_id,'skipped',summary['counts'],summary['error']);return summary
     try:
+        # In Supabase mode, persist the authoritative registry record before any
+        # property/deal foreign keys are written. SQLite keeps its registry file.
+        county_metadata=get_county(county_id)
+        if county_metadata and not dry_run: sync_county(county_metadata)
         props,scrape_result=fetch_parcels(cfg,county_id,max_records=max_records) if not offline else ([],None)
         if scrape_result:
             m.discovered=scrape_result.discovered;m.downloaded=scrape_result.downloaded;m.parsed=scrape_result.parsed;m.normalized=scrape_result.normalized;m.rejected=scrape_result.rejected;m.rejection_reasons.update(scrape_result.rejection_reasons);m.errors.extend(scrape_result.errors)
