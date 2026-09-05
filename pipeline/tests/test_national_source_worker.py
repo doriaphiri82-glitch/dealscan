@@ -74,7 +74,7 @@ def test_run_statewide_batch_reuses_snapshot_queue_and_refreshes_coverage(monkey
         {"county_id": "nc_001", "county_name": "Alpha", "state": "North Carolina", "state_fips": "37", "county_fips": "001", "arcgis_layer_url": "https://example.test/nc1"},
         {"county_id": "nc_002", "county_name": "Beta", "state": "North Carolina", "state_fips": "37", "county_fips": "003", "arcgis_layer_url": "https://example.test/nc2"},
     ]
-    calls=[]; seen={"queue": None, "coverage_registry": None}
+    calls=[]; seen={"queue": None, "coverage_registry": None, "etl_kwargs": None}
     monkeypatch.setattr(worker, "ensure_national_counties", lambda: None)
     monkeypatch.setattr(worker, "_statewide_snapshot", lambda states=None: {"census": census, "reconciled": reconciled, "queue": queue, "coverage": {"before": True}})
     def fake_discover(limit=25, states=None, statewide_queue=None, persist=True):
@@ -86,16 +86,24 @@ def test_run_statewide_batch_reuses_snapshot_queue_and_refreshes_coverage(monkey
         seen["coverage_registry"] = list(registry_arg)
         return {"refreshed": True}
     monkeypatch.setattr(worker, "build_statewide_coverage_report", fake_coverage)
-    monkeypatch.setattr(worker, "run_county", lambda cid, **kwargs: calls.append((cid, kwargs["mode"])) or {"county_id":cid,"status":"ok"})
+    def fake_run_county(cid, **kwargs):
+        calls.append((cid, kwargs["mode"]))
+        seen["etl_kwargs"] = kwargs
+        return {"county_id":cid,"status":"ok"}
+    monkeypatch.setattr(worker, "run_county", fake_run_county)
     result = worker.run_statewide_batch(states=["North Carolina"], discovery_limit=10, etl_limit=1, mode="dry_run")
     assert result["states"] == ["north carolina"]
     assert result["statewide_queued"] == 2
     assert seen["queue"] == queue
-    assert seen["coverage_registry"] == registry
+    assert seen["coverage_registry"] != registry
+    assert seen["coverage_registry"][0]["arcgis_layer_url"] == "https://example.test/nc1"
+    assert seen["coverage_registry"][0]["verification_status"] == "discovered_not_verified"
+    assert registry[0].get("verification_status") is None
     assert result["coverage"] == {"refreshed": True}
     assert result["etl"]["attempted"] == 1
     assert result["etl"]["ok"] == 1
     assert calls == [("nc_001", "dry_run")]
+    assert seen["etl_kwargs"]["dry_run"] is True
     assert result["discovery"]["persisted"] is False
 
 
@@ -126,6 +134,6 @@ def test_discover_and_register_scopes_fallback_candidates_to_requested_states(mo
     monkeypatch.setattr(worker, "_statewide_queue", lambda states=None: [])
     monkeypatch.setattr(worker, "update_county", lambda cid, **fields: attempted.append(cid))
     monkeypatch.setattr(worker, "discover_arcgis_county_config", lambda *args: None)
-    result = worker.discover_and_register(limit=10, states=["North Carolina"])
+    result=worker.discover_and_register(limit=10, states=["North Carolina"])
     assert result["attempted"] == 1
     assert attempted == ["nc"]
