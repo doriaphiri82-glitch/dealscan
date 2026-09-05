@@ -79,7 +79,8 @@ class SupabaseDatabase:
         return self._request("GET", "comps", params={"deal_id": f"eq.{int(deal_id)}", "select": "address,sale_price,sale_date,distance_miles,lot_size_acres,price_per_acre", "order": "distance_miles.asc"}).json()
 
     def get_top_deals(self, limit: int = 10, min_score: int = 40, county_id: Optional[str] = None) -> List[dict]:
-        params = {"status": "eq.discovered", "deal_score": f"gte.{int(min_score)}", "select": "*,properties!inner(apn,county_id,address,lot_size_acres,owner_name,owner_state,tax_delinquent_years,zoning)", "order": "deal_score.desc", "limit": str(int(limit))}
+        # Keep server-side publication queries aligned with the browser RLS contract.
+        params = {"status": "eq.discovered", "verification_status": "eq.verified", "deal_score": f"gte.{int(min_score)}", "select": "*,properties!inner(apn,county_id,address,lot_size_acres,owner_name,owner_state,tax_delinquent_years,zoning)", "order": "deal_score.desc", "limit": str(int(limit))}
         if county_id: params["properties.county_id"] = f"eq.{county_id}"
         rows = self._request("GET", "deals", params=params).json(); out = []
         for row in rows:
