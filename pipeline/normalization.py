@@ -93,6 +93,15 @@ def source_value(record: dict, source: Any) -> Any:
     return current
 
 
+def source_identity(record: dict, cfg: dict, normalized: dict) -> str | None:
+    fields = (cfg.get('object_id_field') or cfg.get('source_object_id_field'),
+              'OBJECTID_1', 'OBJECTID', (cfg.get('fields') or {}).get('source_record_id'), 'source_record_id', 'id')
+    for field in fields:
+        value = source_value(record, field)
+        if value not in (None, ''): return str(value)
+    return str(normalized['apn']) if normalized.get('apn') else None
+
+
 def normalize(record: dict, cfg: dict) -> dict:
     mapping = cfg.get('fields') or {}
     # Canonical passthrough supports already-parsed flat files, not arbitrary raw

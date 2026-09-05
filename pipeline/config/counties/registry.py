@@ -72,9 +72,12 @@ def mark_county_run(county_id:str, *, record_count:int, qualified_count:int=0, p
     entry=get_county(county_id)
     if not entry:return None
     now=datetime.now(timezone.utc).isoformat(); record_count=max(0,int(record_count)); persisted_count=max(0,int(persisted_count)); qualified_count=max(0,int(qualified_count)); published_count=max(0,int(published_count))
-    fields={"last_record_count":record_count,"last_published_count":published_count}
-    if status=="ok" and persisted_count>0: fields.update({"last_successful_run":now,"data_freshness":now,"verification_status":"verified","coverage_status":"tier_5" if published_count>0 else "tier_4"})
-    elif status=="ok" and record_count>0: fields.update({"last_successful_run":now,"data_freshness":now,"verification_status":"source_verified","coverage_status":"tier_3"})
+    fields={"last_record_count":record_count,"last_persisted_count":persisted_count,"last_published_count":published_count,
+            "record_count":record_count,"persisted_count":persisted_count,"qualified_count":qualified_count,"published_count":published_count,
+            "last_run_at":now,"last_run_status":status,"last_run_error":error or None,
+            "ingestion_status":"ingested" if status=="ok" and persisted_count>0 else "completed_no_candidates" if status=="ok" and record_count>0 else status}
+    if status=="ok" and persisted_count>0: fields.update({"last_successful_run":now,"verification_status":"verified" if published_count>0 else "source_verified","coverage_status":"tier_5" if published_count>0 else "tier_4"})
+    elif status=="ok" and record_count>0: fields.update({"last_successful_run":now,"verification_status":"source_verified","coverage_status":"tier_3"})
     else: fields["verification_status"]="discovered_not_verified" if entry.get("data_source_type") else "not_started"; fields["coverage_status"]=entry.get("coverage_status") or "tier_0"
     note=f"Last ETL: records={record_count}, persisted={persisted_count}, qualified={qualified_count}, published={published_count}, status={status}."
     if error: note+=f" Error: {error[:300]}"

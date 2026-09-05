@@ -37,11 +37,13 @@ def test_deal_provenance_persists(tmp_path, monkeypatch):
     )
 
     rows = database.get_top_deals(limit=10, min_score=0, county_id="test_county")
-    assert rows and rows[0]["id"] == deal_id
+    assert rows == []  # Caller-provided verification cannot bypass evidence review.
+    rows = [database.get_backend().get_deal_for_verification(deal_id)]
+    assert rows[0]["id"] == deal_id
     assert rows[0]["source_url"] == "https://example.test/parcel"
     assert rows[0]["source_vendor"] == "Test County"
     assert rows[0]["source_quality"] == "strong"
-    assert rows[0]["verification_status"] == "verified"
+    assert rows[0]["verification_status"] == "pending_review"
     assert rows[0]["data_freshness"] == "2026-09-01"
     assert rows[0]["valuation_basis"] == "market_value"
     assert rows[0]["valuation_confidence"] == 0.75

@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
-from normalization import normalize
+from normalization import normalize, source_identity
 
 
 @dataclass
@@ -56,6 +56,10 @@ class BaseScraperAdapter(ABC):
         for item in raw:
             try:
                 records = self.parse(item)
+                if not records:
+                    result.rejected += 1
+                    result.rejection_reasons['empty_parsed_record'] = result.rejection_reasons.get('empty_parsed_record', 0) + 1
+                    audit.append({'raw_payload': item, 'source_url': source_url, 'status': 'rejected', 'rejection_reason': 'empty_parsed_record'})
             except Exception as exc:
                 records = []
                 result.rejected += 1
@@ -70,6 +74,7 @@ class BaseScraperAdapter(ABC):
                     if not isinstance(record, dict):
                         raise ValueError('Source record is not an object')
                     canonical = self.normalize(record, cfg)
+                    canonical['_source_record_id'] = source_identity(record, cfg, canonical)
                     result.normalized += 1
                     if not self.validate(canonical):
                         reason = 'validation_failed'
@@ -80,15 +85,16 @@ class BaseScraperAdapter(ABC):
                     result.rejected += 1
                     result.rejection_reasons[reason] = result.rejection_reasons.get(reason, 0) + 1
                     audit.append({'raw_payload': record, 'normalized_payload': canonical, 'source_url': source_url,
-                                  'status': 'rejected', 'rejection_reason': reason})
+                                  'status': 'rejected', 'rejection_reason': reason, 'source_record_id': source_identity(record, cfg, canonical) if isinstance(record, dict) else None})
                     continue
                 identity = (canonical.get('county_id'), canonical.get('apn'))
                 if identity in seen:
                     result.skipped += 1
+                    audit.append({'raw_payload': record, 'normalized_payload': canonical, 'source_url': source_url,
+                                  'source_record_id': canonical['_source_record_id'], 'status': 'skipped',
+                                  'hold_reason': 'duplicate_county_apn'})
                     continue
                 seen.add(identity)
-                source_id = next((record.get(key) for key in (cfg.get('object_id_field'), 'OBJECTID_1', 'ObjectID_1', 'OBJECTID', 'objectid', 'source_record_id', 'id') if key and record.get(key) not in (None, '')), canonical.get('apn'))
-                canonical['_source_record_id'] = str(source_id) if source_id is not None else None
                 canonical['_raw_payload'] = record
                 canonical['source_url'] = source_url
                 normalized.append(canonical)

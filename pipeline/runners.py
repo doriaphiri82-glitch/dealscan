@@ -1,164 +1,292 @@
-"""DealScan - Per-county run runner."""
+"""Bounded county ingestion: authorized source -> private evidence -> review.
+
+An ingestion run never self-verifies or manufactures an opportunity. Authentic
+vacant candidates survive missing financial evidence as private held properties.
+"""
 from __future__ import annotations
-from typing import Any, Dict, Optional
-from config.counties.national_registry import PILOT_COUNTIES
 from config.counties.registry import get_county, mark_county_run
-from database import get_top_deals, save_comps, save_deal, save_property, sync_county
+from database import get_backend, get_top_deals, init_db, save_comps, save_deal, save_property, sync_county
+from persistence import record_key
 from runregistry import record_run, write_bundle
-from scoring.deal_scorer import score_and_enrich_deal, _source_comparables
-from scrapers import arcgis
+from scoring.deal_scorer import MODEL_VERSION, qualification_reason, score_and_enrich_deal, _source_comparables
 from scrapers.adapter import BaseScraperAdapter
 from scrapers.arcgis_adapter import ArcGISFeatureServerAdapter, ArcGISHubAdapter
 from scrapers.counties import COUNTY_SCRAPERS
 from scrapers.flatfile_adapter import FlatFileAdapter, CSVAdapter, ExcelAdapter
+from validation.gates import authorization_error, source_fingerprint, source_url
+from validation.vacancy import vacancy_decision
 
-ADAPTER_MAP={"arcgis":ArcGISFeatureServerAdapter,"arcgis_hub":ArcGISHubAdapter,"flatfile":FlatFileAdapter,"csv":CSVAdapter,"excel":ExcelAdapter,"state_parcel":ArcGISFeatureServerAdapter}
-_AUTHORITATIVE_PILOT_SOURCE_KEYS=("arcgis_layer_url","arcgis_root","gis_url","parcel_source_url","data_source_type","source_vendor","scraper_type")
+ADAPTER_MAP = {'arcgis': ArcGISFeatureServerAdapter, 'arcgis_hub': ArcGISHubAdapter,
+               'flatfile': FlatFileAdapter, 'csv': CSVAdapter, 'excel': ExcelAdapter,
+               'state_parcel': ArcGISFeatureServerAdapter}
 
-def _adapter_for(cfg: Dict[str,Any])->Optional[BaseScraperAdapter]:
-    scraper_type=cfg.get("scraper_type"); data_mode=cfg.get("data_mode","arcgis")
-    if scraper_type:
-        cls=ADAPTER_MAP.get(scraper_type)
-        if cls is None:return None
-        if scraper_type in ("arcgis","arcgis_hub","state_parcel") and not cfg.get("arcgis_layer_url"):return None
-        return cls()
-    if data_mode in ("flatfile","csv","excel"):return ADAPTER_MAP.get(data_mode,FlatFileAdapter)()
-    if data_mode in ("arcgis","arcgis_hub","state_parcel") and cfg.get("arcgis_layer_url"):return ADAPTER_MAP.get(data_mode,ArcGISFeatureServerAdapter)()
-    return None
 
-def _county_config(county_id:str)->Dict[str,Any]:
+def _adapter_for(cfg: dict) -> BaseScraperAdapter | None:
+    kind = cfg.get('scraper_type') or cfg.get('data_mode', 'arcgis')
+    cls = ADAPTER_MAP.get(kind)
+    if not cls or (kind in {'arcgis','arcgis_hub','state_parcel'} and not cfg.get('arcgis_layer_url')):
+        return None
+    return cls()
+
+
+def _county_config(county_id):
     from config.source_config import county_config
     return county_config(county_id)
 
 
-def _resolve_hub_layer(cfg:Dict[str,Any])->Dict[str,Any]:
-    if cfg.get("arcgis_layer_url"): return cfg
-    root=cfg.get("arcgis_root") or cfg.get("gis_url")
-    if not root or "opendata.arcgis.com" not in root:return cfg
-    layer=arcgis.find_layer_via_hub(root,["parcel","ownership","tax parcel","cadastral"])
-    if not layer:return cfg
-    resolved=dict(cfg); resolved["arcgis_layer_url"]=layer; resolved["data_mode"]="arcgis"; resolved["scraper_type"]="arcgis"; return resolved
+def fetch_parcels(cfg, county_id, max_records=5000):
+    adapter = _adapter_for(cfg)
+    if not adapter: raise ValueError('Unsupported or incomplete source adapter')
+    result, normalized = adapter.run({**cfg, 'county_id': county_id}, max_records=max_records)
+    # Keep rejected raw rows and partial-source diagnostics available for audit,
+    # even when none normalized. The runner decides the terminal outcome.
+    return normalized, result
 
-def fetch_parcels(cfg:Dict[str,Any],county_id:str,max_records:int=5000):
-    cfg=_resolve_hub_layer(cfg); adapter=_adapter_for(cfg)
-    if adapter:
-        result,normalized=adapter.run({**cfg,"county_id":county_id,"max_records":max_records},max_records=max_records)
-        if result.errors and not normalized: raise RuntimeError(f"source error before usable records: {'; '.join(result.errors[:3])}")
-        result.metadata["resolved_layer_url"]=cfg.get("arcgis_layer_url")
-        return normalized,result
-    if cfg.get("data_mode")=="flatfile":
-        from scrapers.flatfile import fetch_el_paso_properties
-        props=fetch_el_paso_properties(county_id,max_records=max_records); return props,None
-    if cfg.get("data_mode")=="arcgis" and cfg.get("arcgis_layer_url"):
-        layer=cfg["arcgis_layer_url"]; available=arcgis.layer_fields(layer) or []
-        configured=list(cfg.get("fields",{}).values()); out_fields=[]
-        for field in configured:
-            if isinstance(field,(list,tuple)):out_fields.extend([f for f in field if f in available])
-            elif field in available:out_fields.append(field)
-        out_fields=list(dict.fromkeys(out_fields))
-        if not out_fields:raise RuntimeError("configured field mapping has no fields present in source layer")
-        props=[arcgis.map_attributes(a,cfg.get("fields",{}),county_id,cfg.get("defaults",{})) for a in arcgis.query_layer(layer,cfg.get("where","1=1"),out_fields,max_records=max_records)]
-        return props,None
-    return [],None
 
 class RunMetrics:
-    __slots__=('county_id','discovered','downloaded','parsed','normalized','rejected','rejection_reasons','stored','scored','qualified','published','errors','field_coverage','vacancy_rejection_reasons','comparable_count')
-    def __init__(self,county_id:str)->None:
-        self.county_id=county_id; self.discovered=self.downloaded=self.parsed=self.normalized=self.rejected=self.stored=self.scored=self.qualified=self.published=0
-        self.rejection_reasons={}; self.errors=[]; self.field_coverage={}; self.vacancy_rejection_reasons={}; self.comparable_count=0
-    def to_counts(self):return {'discovered':self.discovered,'downloaded':self.downloaded,'parsed':self.parsed,'normalized':self.normalized,'rejected':self.rejected,'stored':self.stored,'scored':self.scored,'qualified':self.qualified,'published':self.published}
-    def record_rejection(self,reason):self.rejected+=1; self.rejection_reasons[reason]=self.rejection_reasons.get(reason,0)+1
-    def record_vacancy_rejection(self,reason):self.rejected+=1; self.rejection_reasons[reason]=self.rejection_reasons.get(reason,0)+1; self.vacancy_rejection_reasons[reason]=self.vacancy_rejection_reasons.get(reason,0)+1
+    COUNTERS = ('discovered','downloaded','parsed','normalized','rejected','skipped','stored','scored','qualified','held','failed','published')
 
-def _shape_for_bundle(row):return {k:row.get(k) for k in ('apn','address','county_id','lot_size_acres','asking_price','asking_price_basis','deal_score','estimated_arv_low','estimated_arv_high','estimated_profit_low','estimated_profit_high','recommended_offer_low','recommended_offer_high','market_velocity','competition_level','owner_state','zoning','tax_delinquent_years','valuation_basis','valuation_confidence','source','source_url','source_vendor','source_quality','verification_status','data_freshness')}
-def _provenance(cfg,county_id):
-    county=get_county(county_id) or {}; return {'source_url':cfg.get('arcgis_layer_url') or cfg.get('parcel_source_url') or cfg.get('data_url') or county.get('parcel_source_url'),'source_vendor':cfg.get('source_vendor') or county.get('source_vendor'),'source_quality':cfg.get('source_quality') or county.get('source_quality'),'verification_status':'pending_review','data_freshness':cfg.get('source_last_modified') or county.get('data_freshness')}
+    def __init__(self, county_id):
+        self.county_id = county_id
+        for key in self.COUNTERS: setattr(self, key, 0)
+        self.rejection_reasons = {}; self.hold_reasons = {}; self.errors = []
+        self.field_coverage = {}; self.vacancy_rejection_reasons = {}; self.comparable_count = 0
 
-def _qualification_rejection_reason(prop: Dict[str,Any], comps: list)->str:
-    if not comps:
-        market_value=prop.get('market_value') or prop.get('assessed_value') or 0; asking=prop.get('asking_price')
-        try: has_value=float(market_value)>0
-        except (TypeError,ValueError): has_value=False
-        if not has_value and asking is None:return 'missing_valuation_evidence'
-        if asking is not None:
-            try:
-                if float(asking)<=0 and not has_value:return 'missing_valuation_evidence'
-            except (TypeError,ValueError):return 'invalid_asking_price'
-        if prop.get('_source_comp_pool') is not None:return 'below_min_profit'
-    return 'below_min_profit'
+    def to_counts(self): return {key: getattr(self, key) for key in self.COUNTERS}
 
-def _vacancy_rejection_reason(prop:Dict[str,Any],county_id:str)->str:
-    from validation.vacancy import vacancy_decision
+    def record_rejection(self, reason):
+        self.rejected += 1
+        self.rejection_reasons[reason] = self.rejection_reasons.get(reason, 0) + 1
+
+    def record_vacancy_rejection(self, reason):
+        self.record_rejection(reason)
+        self.vacancy_rejection_reasons[reason] = self.vacancy_rejection_reasons.get(reason, 0) + 1
+
+    def record_hold(self, reason):
+        self.held += 1
+        self.hold_reasons[reason] = self.hold_reasons.get(reason, 0) + 1
+
+
+def _shape_for_bundle(row):
+    fields = ('id','apn','address','county_id','lot_size_acres','asking_price','asking_price_basis','deal_score',
+              'estimated_arv_low','estimated_arv_high','estimated_costs','estimated_profit_low','estimated_profit_high',
+              'recommended_offer_low','recommended_offer_high','zoning','latitude','longitude','valuation_basis',
+              'valuation_confidence','source','source_url','source_vendor','source_quality','verification_status',
+              'verified_at','verification_expires_at','valuation_model','data_freshness','comps')
+    return {key: row.get(key) for key in fields}
+
+
+def _provenance(cfg, county_id):
+    return {'source_url': source_url(cfg), 'source_vendor': cfg.get('source_vendor'),
+            'source_quality': cfg.get('source_quality'), 'verification_status': 'pending_review',
+            'data_freshness': cfg.get('source_last_modified') or cfg.get('data_freshness'),
+            'valuation_model': MODEL_VERSION}
+
+
+def _vacancy_rejection_reason(prop, county_id):
     accepted, reason = vacancy_decision(prop, county_id, _county_config(county_id))
     return '' if accepted else reason
 
 
-def _field_coverage(props:list)->Dict[str,Dict[str,int]]:
-    fields=('apn','lot_size_acres','market_value','assessed_value','asking_price','land_use','use_code','has_improvements','improvement_value','latitude','longitude','owner_name','owner_state','zoning','last_sale_price','last_sale_date')
-    return {field:{'populated':sum(1 for p in props if p.get(field) not in (None,'',' ')),'total':len(props)} for field in fields}
+def _field_coverage(props):
+    fields = ('apn','lot_size_acres','market_value','assessed_value','asking_price','land_use','use_code',
+              'has_improvements','improvement_value','latitude','longitude','last_sale_price','last_sale_date')
+    return {field: {'populated': sum(p.get(field) not in (None,'',' ') for p in props), 'total': len(props)} for field in fields}
 
-def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False,offline:bool=False)->Dict[str,Any]:
-    cfg=_county_config(county_id); m=RunMetrics(county_id); summary={'county_id':county_id,'counts':m.to_counts(),'status':'ok','error':''}
-    if not cfg:summary.update(status='skipped',error='County has no configured or discovered source');record_run(county_id,'skipped',summary['counts'],summary['error']);return summary
+
+def _source_manifest(cfg, county):
+    keys = ('county_id','arcgis_layer_url','data_url','parcel_source_url','fields','where','acreage_units',
+            'vacancy_codebook_url','vacant_use_codes','authority_reviewed','authority_evidence_url',
+            'authority_source_url','source_county_geoid','geoid','source_object_id_field')
+    config = {key: cfg.get(key) for key in keys}
+    config['defaults'] = {'county_state': (cfg.get('defaults') or {}).get('county_state')}
+    authorization_keys = ('validation_status','last_validated_at','validated_source_fingerprint',
+                          'validation_source_fields_checked','validation_pagination_checked','validation_sample_checked',
+                          'ingestion_authorized','authorized_source_fingerprint')
+    return {'source_config': config, 'source_authorization': {key: county.get(key) for key in authorization_keys},
+            'source_fingerprint': source_fingerprint(cfg),
+            'authorized_source_fingerprint': county.get('authorized_source_fingerprint'),
+            'source_validated_at': county.get('last_validated_at')}
+
+
+def run(county_id, mode='publish', max_records=5000, dry_run=False, offline=False):
+    cfg = _county_config(county_id); county = get_county(county_id) or {}; metrics = RunMetrics(county_id)
     dry_run = dry_run or mode == 'dry_run'
-    if mode not in {'publish', 'etl-only', 'dry_run'}:
+    summary = {'county_id': county_id, 'counts': metrics.to_counts(), 'status': 'ok', 'error': '', 'dry_run': dry_run}
+    if mode not in {'publish','etl-only','dry_run'}:
         return {**summary, 'status': 'error', 'error': 'Invalid run mode'}
-    if not offline:
-        from validation.gates import authorization_error
-        gate_error = authorization_error(get_county(county_id) or {}, cfg)
-        if gate_error:
-            return {**summary, 'status': 'skipped', 'error': gate_error}
+    reason = ('County has no configured source' if not cfg else 'offline mode: source not queried' if offline
+              else 'max_records must be between 1 and 5000' if not 1 <= max_records <= 5000
+              else authorization_error(county, cfg))
+    if reason:
+        summary.update(status='skipped', error=reason)
+        if not dry_run: record_run(county_id, 'skipped', summary['counts'], reason, audit=False)
+        return summary
+
+    db = get_backend(); run_id = None; manifest = _source_manifest(cfg, county)
+    audit_failures_before = len(db.audit_failures)
+    audit_available = not dry_run
+    audit_rows = []; candidates = []; rejected_apns = []; vacant_count = 0
+
+    def audit_warning(operation, exc):
+        nonlocal audit_available
+        db.warn_audit(operation, exc)
+        audit_available = False
+
+    def heartbeat():
+        if audit_available and run_id:
+            try: db.update_ingestion_run(run_id, county_id, 'running', metrics.to_counts(), metadata=manifest)
+            except Exception as exc: audit_warning('heartbeat', exc)
+
     try:
-        county_metadata=get_county(county_id)
-        if county_metadata and not dry_run: sync_county(county_metadata)
-        props,scrape_result=fetch_parcels(cfg,county_id,max_records=max_records) if not offline else ([],None)
-        if scrape_result:
-            m.discovered=scrape_result.discovered;m.downloaded=scrape_result.downloaded;m.parsed=scrape_result.parsed;m.normalized=scrape_result.normalized;m.rejected=scrape_result.rejected;m.rejection_reasons.update(scrape_result.rejection_reasons);m.errors.extend(scrape_result.errors)
-        else:m.downloaded=m.discovered=m.parsed=len(props);m.normalized=len(props)
-        if offline:summary.update(status='skipped',error='offline mode: source not queried',counts=m.to_counts());record_run(county_id,'skipped',summary['counts'],summary['error']);return summary
-        if cfg.get('arcgis_layer_url') and m.discovered==0:raise RuntimeError('source returned zero records; this is not treated as verified ETL success')
-        m.field_coverage=_field_coverage(props); vacant=[]
-        for p in props:
-            reason=_vacancy_rejection_reason(p,county_id)
-            if reason:m.record_vacancy_rejection(reason)
-            else:vacant.append(p)
-        for prop in vacant:
-            scoring_prop={**prop,'_source_comp_pool':props}
-            try: deal=score_and_enrich_deal(scoring_prop,[],cfg)
-            except Exception as exc:m.record_rejection(f'score_error: {exc}');continue
-            if deal is None:
-                comps=_source_comparables(scoring_prop);m.record_rejection(_qualification_rejection_reason(scoring_prop,comps));continue
-            deal.update(apn=prop.get('apn'),address=prop.get('address'),county_id=county_id);deal.update(_provenance(cfg,county_id))
+        if not dry_run:
+            init_db()
+            sync_county(county)
+            try:
+                run_id = db.ensure_active_ingestion_run(county_id, source_url(cfg))
+                heartbeat()
+            except Exception as exc: audit_warning('start_run', exc)
+        props, result = fetch_parcels(cfg, county_id, max_records=max_records)
+        if result:
+            for key in ('discovered','downloaded','parsed','normalized','rejected','skipped'):
+                setattr(metrics, key, getattr(result, key))
+            metrics.rejection_reasons.update(result.rejection_reasons)
+            metrics.errors.extend(result.errors)
+            audit_rows.extend(result.metadata.get('audit_records', []))
+        else:
+            metrics.discovered = metrics.downloaded = metrics.parsed = metrics.normalized = len(props)
+        heartbeat()
+        if not metrics.discovered:
+            metrics.errors.append('source_returned_zero_records')
+        if metrics.discovered and not props: metrics.errors.append('source_returned_no_usable_parcel_identities')
+        metrics.field_coverage = _field_coverage(props)
+        ambiguous = {row.get('normalized_payload',{}).get('apn') for row in audit_rows if row.get('hold_reason') == 'duplicate_county_apn'}
+        comp_pool = [prop for prop in props if prop.get('apn') not in ambiguous]
+        for index, original in enumerate(props):
+            prop = {**original, 'county_id': county_id, 'source_url': source_url(cfg),
+                    'source_fingerprint': manifest['source_fingerprint'], '_defer_audit': True}
+            accepted, vacancy_reason = vacancy_decision(prop, county_id, cfg)
+            if original.get('county_id') != county_id:
+                accepted, vacancy_reason = False, 'county_identity_mismatch'
+            prop.update(vacancy_status='qualified' if accepted else 'rejected',
+                        vacancy_evidence={'reason': vacancy_reason, 'field_mapping': prop.get('_field_sources') or {}})
+            item = {'source_record_id': prop.get('_source_record_id') or prop.get('apn'), 'source_url': source_url(cfg),
+                    'raw_payload': prop.get('_raw_payload') or {}, 'normalized_payload': prop}
+            audit_rows.append(item)
+            if not accepted:
+                metrics.record_vacancy_rejection(vacancy_reason)
+                item.update(status='rejected', rejection_reason=vacancy_reason)
+                if prop.get('apn'): rejected_apns.append(prop['apn'])
+                continue
+            vacant_count += 1
             if not dry_run:
                 try:
-                    deal['property_id']=save_property(prop); deal['source']='scrape'; deal['motivation_signals']=','.join(deal.get('motivation_signals',[])); deal_id=save_deal(deal); save_comps(deal_id,deal.get('comps',[])); m.comparable_count += len(deal.get('comps',[])); m.stored+=1
-                except Exception as exc:m.errors.append(f'save_error: {exc}');m.record_rejection('save_error');continue
-            else:m.comparable_count += len(deal.get('comps',[]))
-            m.scored+=1;m.qualified+=1
-        publish_rows=get_top_deals(limit=25,min_score=0,county_id=county_id) if mode=='publish' and not dry_run else []; publish_deals=[]
-        for row in publish_rows:
-            shaped=_shape_for_bundle(row)
+                    item['property_id'] = save_property(prop)
+                    metrics.stored += 1
+                except Exception as exc:
+                    metrics.failed += 1
+                    metrics.errors.append(f'property_persistence_error: {type(exc).__name__}')
+                    item.update(status='failed', hold_reason='property_persistence_error')
+                    continue
+            if prop.get('apn') in ambiguous:
+                metrics.record_hold('duplicate_county_apn')
+                item.update(status='held', hold_reason='duplicate_county_apn')
+                rejected_apns.append(prop['apn'])
+                continue
+            metrics.scored += 1
+            scoring = {**prop, '_source_comp_pool': comp_pool}
             try:
-                from database import get_deal_comps
-                shaped['comps']=get_deal_comps(row['id'])
-            except Exception as exc:m.errors.append(f'comps_read_error: {exc}');shaped['comps']=[]
-            publish_deals.append(shaped)
-        m.published=len(publish_deals)
-        if mode=='publish' and not dry_run:summary['bundle_path']=write_bundle(publish_deals,[county_id],status='ok',error='')
-        if m.errors:summary['status']='degraded'
-        elif m.normalized and m.qualified==0:summary['status']='degraded';summary['error']='No financially qualified candidates from the normalized source records'
-        else:summary['status']='ok'
-        if not summary['error']:summary['error']='; '.join(m.errors[:3])
-        summary['counts']=m.to_counts();summary['diagnostics']={'field_coverage':m.field_coverage,'vacancy':{'candidates':len(props),'accepted':len(vacant),'rejected':sum(m.vacancy_rejection_reasons.values()),'rejection_reasons':m.vacancy_rejection_reasons},'qualification':{'scored':m.scored,'qualified':m.qualified,'rejection_reasons':{k:v for k,v in m.rejection_reasons.items() if k not in m.vacancy_rejection_reasons}},'comparables':{'source_derived_rows':m.comparable_count}}
-        if m.rejection_reasons:summary['rejection_reasons']=m.rejection_reasons
-        record_run(county_id,summary['status'],summary['counts'],summary['error']); etl_status='ok' if m.normalized>0 and not m.errors else summary['status']
-        if not dry_run:mark_county_run(county_id,record_count=len(props),qualified_count=m.qualified,published_count=m.published,persisted_count=m.stored,status=etl_status,error=summary['error'])
+                deal = score_and_enrich_deal(scoring, [], cfg)
+                hold = qualification_reason(scoring, [])
+                if deal is None and hold == 'insufficient_verified_comparables':
+                    hold = qualification_reason(scoring, _source_comparables(scoring)) or 'below_min_profit'
+            except Exception as exc:
+                deal, hold = None, 'score_error'
+                metrics.errors.append(f'score_error: {type(exc).__name__}')
+            if deal is None:
+                metrics.record_hold(hold or 'financial_evidence_incomplete')
+                item.update(status='held', hold_reason=hold or 'financial_evidence_incomplete')
+                if prop.get('apn'): rejected_apns.append(prop['apn'])
+            else:
+                item['status'] = 'candidate'
+                deal.update(_provenance(cfg, county_id))
+                candidates.append((prop, deal, item))
+            if index % 50 == 0: heartbeat()
+
+        if not dry_run:
+            # Source rejection also revokes a previously verified assessment.
+            rejected_apns.extend(row.get('normalized_payload', {}).get('apn') for row in audit_rows if row.get('status') in {'rejected','skipped'})
+            db.hold_deals_for_parcels(county_id, [apn for apn in rejected_apns if apn])
+        audit_index = {}
+        if audit_available and run_id:
+            try:
+                db.record_ingestion_records(run_id, county_id, audit_rows)
+                if candidates:
+                    audit_index = {row['record_key']: row for row in db.get_ingestion_records(run_id, include_payloads=False)}
+            except Exception as exc: audit_warning('record_sources', exc)
+        for prop, deal, item in candidates:
+            if dry_run:
+                metrics.qualified += 1
+                metrics.comparable_count += len(deal.get('comps') or [])
+                continue
+            try:
+                key = record_key(source_url(cfg), item['source_record_id'], item['raw_payload'])
+                deal.update(property_id=item['property_id'], source='county_ingestion',
+                            ingestion_record_id=(audit_index.get(key) or {}).get('id'))
+                for comp in deal.get('comps') or []:
+                    key = record_key(comp.get('source_url'), comp.get('source_record_id'), {})
+                    comp['ingestion_record_id'] = (audit_index.get(key) or {}).get('id')
+                deal_id = save_deal(deal)
+                save_comps(deal_id, deal.get('comps') or [])
+                item.update(deal_id=deal_id, status='candidate')
+                metrics.qualified += 1
+                metrics.comparable_count += len(deal.get('comps') or [])
+            except Exception as exc:
+                metrics.errors.append(f'deal_persistence_error: {type(exc).__name__}')
+                metrics.record_hold('deal_persistence_error')
+                item.update(status='held', hold_reason='deal_persistence_error')
+            heartbeat()
+        if audit_available and run_id and candidates:
+            try: db.record_ingestion_records(run_id, county_id, audit_rows)
+            except Exception as exc: audit_warning('link_candidates', exc)
+        if metrics.errors: summary['status'] = 'degraded' if metrics.stored or dry_run else 'error'
+        # No new deal is published here, even when financial screening succeeds.
+        # Zero opportunities with real held/rejected records is an honest outcome.
+        if mode == 'publish' and not dry_run:
+            rows = [_shape_for_bundle(row) for row in get_top_deals(limit=100, min_score=0)]
+            summary['available_verified'] = len(rows)
+            summary['bundle_path'] = write_bundle(rows, [county_id], status=summary['status'], error='; '.join(metrics.errors[:3]))
     except Exception as exc:
-        summary['status']='error';summary['error']=str(exc);summary['counts']=m.to_counts();record_run(county_id,'error',summary['counts'],summary['error'])
-        if not dry_run:mark_county_run(county_id,record_count=m.normalized,persisted_count=m.stored,status='error',error=summary['error'])
+        summary['status'] = 'degraded' if metrics.stored else 'error'
+        metrics.errors.append(f'run_error: {type(exc).__name__}')
+
+    if len(db.audit_failures) > audit_failures_before:
+        metrics.errors.append('audit_unavailable: source provenance or run finalization requires reconciliation')
+        if summary['status'] == 'ok': summary['status'] = 'degraded'
+    summary.update(counts=metrics.to_counts(), error='; '.join(metrics.errors[:3]),
+                   rejection_reasons=metrics.rejection_reasons, hold_reasons=metrics.hold_reasons,
+                   diagnostics={'field_coverage': metrics.field_coverage, 'vacancy': {'accepted': vacant_count,
+                                'rejection_reasons': metrics.vacancy_rejection_reasons}, 'comparables': metrics.comparable_count})
+    if not dry_run:
+        entry = record_run(county_id, summary['status'], summary['counts'], summary['error'], run_id=run_id,
+                           source_url=source_url(cfg), metadata={**manifest, 'record_limit': max_records,
+                                                              'audit_gap': not audit_available})
+        summary.update(status=entry['status'], error=entry['error'], audit_run_id=entry.get('audit_run_id'), audit_status=entry['audit_status'])
+        try:
+            mark_county_run(county_id, record_count=metrics.discovered, qualified_count=metrics.qualified,
+                            published_count=metrics.published, persisted_count=metrics.stored,
+                            status=summary['status'], error=summary['error'])
+            updated_county = get_county(county_id)
+            if updated_county: sync_county(updated_county)
+        except Exception as exc:
+            summary['error'] += f'; county_summary_error: {type(exc).__name__}'
+            if summary['status'] == 'ok': summary['status'] = 'degraded'
     return summary
 
+
 class CountyRunner:
-    def __init__(self,county_id):self.county_id=county_id
-    def run(self,mode='publish',**kw):return run(self.county_id,mode=mode,**kw)
-COUNTRY_RUNNERS={cid:CountyRunner(cid) for cid in COUNTY_SCRAPERS}
+    def __init__(self, county_id): self.county_id = county_id
+    def run(self, mode='publish', **kwargs): return run(self.county_id, mode=mode, **kwargs)
+
+
+COUNTRY_RUNNERS = {cid: CountyRunner(cid) for cid in COUNTY_SCRAPERS}
