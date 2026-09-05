@@ -1,102 +1,50 @@
-name: DealScan statewide coverage audit
+name: dealscan-source-discovery
 
 on:
   workflow_dispatch:
     inputs:
       states:
-        description: 'Comma-separated states to audit'
-        required: false
+        description: 'Comma-separated states to research; discoveries are not ETL authorization'
+        type: string
         default: 'North Carolina,Florida,Washington'
-        type: string
       discovery_limit:
-        description: 'Maximum county source discoveries'
-        required: false
-        default: '25'
+        description: 'Maximum county discoveries, 0–100'
         type: string
-      etl_limit:
-        description: 'Maximum live ETL probes'
-        required: false
-        default: '5'
-        type: string
-      max_records:
-        description: 'Maximum records per ETL probe'
-        required: false
-        default: '5000'
-        type: string
+        default: '10'
 
 permissions:
   contents: read
 
 jobs:
-  statewide-audit:
+  research:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      DEALSCAN_DB_BACKEND: sqlite
+      DEALSCAN_REGISTRY_PATH: data/research-counties.json
+      STATES: ${{ inputs.states }}
+      DISCOVERY_LIMIT: ${{ inputs.discovery_limit }}
+    defaults:
+      run:
+        working-directory: pipeline
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: pip
-          cache-dependency-path: pipeline/requirements.txt
-      - name: Install pipeline dependencies
-        working-directory: pipeline
-        run: pip install -r requirements.txt
-      - name: Run dry-run statewide audit
-        working-directory: pipeline
-        env:
-          PYTHONPATH: .
-          DEALSCAN_AUDIT_STATES: ${{ inputs.states }}
-          DEALSCAN_DISCOVERY_LIMIT: ${{ inputs.discovery_limit }}
-          DEALSCAN_ETL_LIMIT: ${{ inputs.etl_limit }}
-          DEALSCAN_MAX_RECORDS: ${{ inputs.max_records }}
-        run: |
-          python - <<'PY' | tee statewide_audit.json
-          import json
-          import os
-          from discovery.national_source_worker import run_statewide_batch
-
-          states = [s.strip() for s in os.environ['DEALSCAN_AUDIT_STATES'].split(',') if s.strip()]
-          result = run_statewide_batch(
-              states=states,
-              discovery_limit=int(os.environ['DEALSCAN_DISCOVERY_LIMIT']),
-              etl_limit=int(os.environ['DEALSCAN_ETL_LIMIT']),
-              max_records=int(os.environ['DEALSCAN_MAX_RECORDS']),
-              mode='dry_run',
-          )
-          print(json.dumps(result, indent=2, sort_keys=True, default=str))
-          PY
-      - name: Publish audit summary
-        working-directory: pipeline
-        run: |
-          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-          from pathlib import Path
-
-          result = json.loads(Path('statewide_audit.json').read_text())
-          coverage = result.get('coverage', {})
-          totals = coverage.get('totals', {})
-          print('## DealScan statewide coverage audit')
-          print('')
-          print('**Mode:** dry-run (no publish)')
-          print('')
-          print('| Metric | Total |')
-          print('|---|---:|')
-          for key in ('expected_counties', 'enumerated_discoveries', 'matched_counties', 'source_discovered', 'verified'):
-              print(f"| {key.replace('_', ' ').title()} | {totals.get(key, 0)} |")
-          print('')
-          print('### Per-state coverage')
-          print('')
-          print('| State | Expected | Enumerated | Matched | Source discovered | Verified | Missing |')
-          print('|---|---:|---:|---:|---:|---:|---:|')
-          for state, row in sorted(coverage.get('states', {}).items()):
-              print(f"| {state} | {row.get('expected_counties', 0)} | {row.get('enumerated_discoveries', 0)} | {row.get('matched_counties', 0)} | {row.get('source_discovered', 0)} | {row.get('verified', 0)} | {row.get('missing_counties', 0)} |")
-          print('')
-          print(f"**Discovery attempted:** {result.get('discovery', {}).get('attempted', 0)}; **sources found:** {result.get('discovery', {}).get('found', 0)}")
-          print(f"**ETL attempted:** {result.get('etl', {}).get('attempted', 0)}; **ETL ok/degraded:** {result.get('etl', {}).get('ok', 0)}")
-          PY
-      - name: Upload audit artifact
+          cache-dependency-path: pipeline/requirements.lock.txt
+      - name: Install dependencies
+        run: pip install -r requirements.lock.txt
+      - name: Load official county geography
+        run: python main.py --refresh-universe
+      - name: Read-only source research (no ETL or publication)
+        run: python main.py --statewide-audit --states "$STATES" --discovery-limit "$DISCOVERY_LIMIT" --etl-limit 0 --report-file data/source-research-summary.json
+      - name: Upload minimized source research report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: statewide-coverage-audit
-          path: pipeline/statewide_audit.json
-          retention-days: 14
+          name: source-research-${{ github.run_id }}
+          path: pipeline/data/source-research-summary.json
+          if-no-files-found: ignore
+          retention-days: 7

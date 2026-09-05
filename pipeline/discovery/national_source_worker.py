@@ -99,17 +99,16 @@ def run_statewide_batch(states: Optional[Iterable[str]] = None, discovery_limit:
     targets.sort(key=lambda row: (str(row.get("state_fips") or ""), str(row.get("county_fips") or ""), str(row.get("county_id") or "")))
     etl_results=[]
     for county in targets[:_limit(etl_limit,5)]:
-        try: etl_results.append(run_county(county["county_id"],mode=mode,dry_run=not persist,max_records=max(1,min(int(max_records),10000))))
+        try: etl_results.append(run_county(county["county_id"],mode=mode,dry_run=not persist,max_records=max(1,min(int(max_records),5000))))
         except Exception as exc: etl_results.append({"county_id":county["county_id"],"status":"error","error":str(exc)[:300]})
     return {"states":sorted(wanted) if wanted else None,"statewide_queued":len(queued),"coverage":coverage,"discovery":discovery,"etl":{"attempted":len(etl_results),"ok":sum(1 for result in etl_results if result.get("status") == "ok"),"results":etl_results}}
 
 
 def run_national_batch(limit:int=10,max_records:int=5000,mode:str="publish")->Dict[str,Any]:
-    ensure_national_counties()
     candidates=[c for c in list_counties() if not authorization_error(c, county_config(c["county_id"], c))]
     candidates.sort(key=lambda c:(c.get("last_successful_run") is not None,c.get("last_successful_run") or "",c.get("state",""),c.get("county_name","")))
     results=[]
     for county in candidates[:_limit(limit,10)]:
-        try: results.append(run_county(county["county_id"],mode=mode,max_records=max(1,min(int(max_records),10000))))
+        try: results.append(run_county(county["county_id"],mode=mode,max_records=max(1,min(int(max_records),5000))))
         except Exception as exc: results.append({"county_id":county["county_id"],"status":"error","counts":{},"error":str(exc)[:300]})
     return {"attempted":len(results),"ok":sum(1 for r in results if r.get("status") == "ok"),"results":results}

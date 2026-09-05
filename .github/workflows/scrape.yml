@@ -5,104 +5,88 @@ on:
     - cron: '*/15 * * * *'
   workflow_dispatch:
     inputs:
-      discover_limit:
-        description: 'Maximum new counties to discover'
-        required: false
-        default: '50'
-      validate_live_limit:
-        description: 'Maximum counties to live-validate'
-        required: false
-        default: '50'
-      run_limit:
-        description: 'Maximum validated counties to ETL'
-        required: false
-        default: '20'
+      county_id:
+        description: 'Exact reviewed county to ingest (start with one pilot)'
+        type: string
+        default: el_paso_tx
+        required: true
+      max_records:
+        description: 'Record cap, 1–5000; use 250 for first production validation'
+        type: string
+        default: '250'
+        required: true
 
 permissions:
-  contents: write
+  contents: read
 
+# Shares a lock with the production smoke workflow; neither cancels primary writes.
 concurrency:
-  group: dealscan-national-pipeline
+  group: dealscan-production-ingestion
   cancel-in-progress: false
 
 jobs:
-  national:
+  ingest:
+    # Deliberate rollout gate: enable cron only after a real production smoke pass.
+    if: github.event_name == 'workflow_dispatch' || vars.ENABLE_PRODUCTION_INGESTION == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    environment: production
+    timeout-minutes: 30
     env:
+      DEALSCAN_ENV: production
       DEALSCAN_DB_BACKEND: supabase
+      DEALSCAN_REGISTRY_PATH: data/counties.json
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      COUNTY_ID: ${{ inputs.county_id || 'el_paso_tx' }}
+      MAX_RECORDS: ${{ inputs.max_records || '250' }}
+    defaults:
+      run:
+        working-directory: pipeline
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: pip
-          cache-dependency-path: pipeline/requirements.txt
+          cache-dependency-path: pipeline/requirements.lock.txt
       - name: Install dependencies
-        working-directory: pipeline
-        run: pip install -r requirements.txt pytest
-      - name: Verify production database configuration
-        working-directory: pipeline
-        env:
-          PYTHONPATH: .
+        run: pip install -r requirements.lock.txt
+      - name: Verify production configuration
         run: |
-          python - <<'PY'
-          import os
-          required = ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY")
-          missing = [name for name in required if not os.getenv(name)]
-          if missing:
-              raise SystemExit("Missing GitHub Actions secrets: " + ", ".join(missing))
-          print("Supabase production backend configured")
-          PY
+          test -n "$SUPABASE_URL" || { echo 'Missing SUPABASE_URL secret'; exit 1; }
+          test -n "$SUPABASE_SERVICE_ROLE_KEY" || { echo 'Missing SUPABASE_SERVICE_ROLE_KEY secret'; exit 1; }
       - name: Run pipeline tests
         working-directory: pipeline
         env:
           PYTHONPATH: .
-        run: pytest -q
-      - name: Initialize database
-        working-directory: pipeline
+        run: python -m pytest -q tests
+      - name: Verify migrated schema
         run: python main.py --setup-db
-      - name: Validate every registered county configuration
-        working-directory: pipeline
-        run: python main.py --validate
-      - name: Discover national sources
-        working-directory: pipeline
-        env:
-          DISCOVER_LIMIT: ${{ github.event.inputs.discover_limit || '50' }}
-        run: python main.py --discover-national "$DISCOVER_LIMIT"
-      - name: Live-validate national sources
-        working-directory: pipeline
-        env:
-          VALIDATE_LIVE_LIMIT: ${{ github.event.inputs.validate_live_limit || '50' }}
-        run: python main.py --validate-live "$VALIDATE_LIVE_LIMIT"
-      - name: Run national ETL batch
-        working-directory: pipeline
-        env:
-          RUN_LIMIT: ${{ github.event.inputs.run_limit || '20' }}
-        run: python main.py --run-national "$RUN_LIMIT" --max-records 5000
-      - name: Publish optional live bundle
-        id: publish_live
-        working-directory: pipeline
-        continue-on-error: true
-        env:
-          KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
-          KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}
-          REDIS_URL: ${{ secrets.REDIS_URL }}
-          REQUIRE_LIVE_PUBLISH: '0'
-        run: python publish_live.py
-      - name: Show coverage
-        working-directory: pipeline
-        run: python main.py --coverage
-      - name: Commit pipeline data and national registry artifacts
+      - name: Live-validate the exact source
+        run: python main.py --validate-live 1 --county "$COUNTY_ID"
+      - name: Explicitly authorize validated and reviewed source
+        run: python main.py --authorize-county "$COUNTY_ID"
+      - name: Bounded Supabase ingestion
+        run: python main.py --run --etl-only --county "$COUNTY_ID" --max-records "$MAX_RECORDS" --report-file data/ingestion-summary.json
+      - name: Verify this run's persisted source chain
         run: |
-          git config user.name "DealScan Pipeline"
-          git config user.email "pipeline@dealscan.app"
-          git add -f pipeline/data/registry.json pipeline/data/bundle.json pipeline/config/counties/registry.json
-          if git diff --cached --quiet; then
-            echo "No pipeline data changes to commit."
-          else
-            git commit -m "chore: national pipeline refresh $(date -u +%F-%H%M)"
-            git push origin HEAD:main
-          fi
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from validation.production_smoke import verify_ingestion
+          summary = json.loads(Path('data/ingestion-summary.json').read_text())
+          result = summary['results'][0]
+          checked = verify_ingestion(result['audit_run_id'], county_id=os.environ['COUNTY_ID'], max_records=int(os.environ['MAX_RECORDS']))
+          Path('data/ingestion-check.json').write_text(json.dumps(checked, indent=2))
+          print(json.dumps(checked))
+          PY
+      - name: Upload minimized operational summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ingestion-summary-${{ github.run_id }}
+          path: |
+            pipeline/data/ingestion-summary.json
+            pipeline/data/ingestion-check.json
+          if-no-files-found: ignore
+          retention-days: 7

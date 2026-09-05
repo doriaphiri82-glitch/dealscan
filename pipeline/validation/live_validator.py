@@ -88,8 +88,9 @@ def validate_county_live(county: dict) -> dict:
         return {'county_id': cid, 'status': 'unreachable', 'layer': layer, 'errors': [error], 'warnings': []}
 
 
-def validate_live_batch(limit: int = 25, include_validated: bool = False) -> dict:
+def validate_live_batch(limit: int = 25, include_validated: bool = False, county_id: str | None = None) -> dict:
     counties = [c for c in list_counties() if c.get('arcgis_layer_url') or c.get('parcel_source_url') or c.get('gis_url')]
+    if county_id is not None: counties = [county for county in counties if county['county_id'] == county_id]
     counties.sort(key=lambda c: (bool(c.get('last_validated_at')), c.get('last_validated_at') or '', c['county_id']))
     # Always revisit oldest validation first; successful sources cannot stay
     # authorized forever. include_validated is retained for CLI compatibility.

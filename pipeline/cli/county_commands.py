@@ -2,10 +2,10 @@
 DealScan - CLI commands for county management.
 
 Commands:
-  --probe-all      Probe all configured county sources
-  --expand         Generate priority expansion report
-  --health         Show county health dashboard
-  --counties       List configured counties
+  probe-all      Probe all configured county sources
+  expand         Generate priority expansion report
+  health         Show county health dashboard
+  counties       List configured counties
 """
 from __future__ import annotations
 
@@ -43,8 +43,10 @@ def _registry_status_display() -> None:
 def _probe_all_display() -> None:
     ensure_pilot_counties()
     print("\nProbing county data sources...\n")
+    results = []
     for county_id, cfg in COUNTY_SCRAPERS.items():
         county_results = probe_county_sources(county_id, cfg)
+        results.extend(county_results)
         for r in county_results:
             symbol = "✅" if r["reachable"] else "❌"
             print(f"  {symbol} {county_id:12} {r['source_type']:20} "
@@ -53,6 +55,8 @@ def _probe_all_display() -> None:
                 print(f"      detail: {r['detail'][:100]}")
             if r.get("error"):
                 print(f"      error: {r['error'][:100]}")
+
+    return {"attempted":len(results),"ok":sum(bool(r["reachable"]) for r in results),"scope":"source_probe_not_authorization"}
 
 
 def _health_display() -> None:
@@ -66,7 +70,7 @@ def _health_display() -> None:
     )
     print(f"\nDealScan Coverage Dashboard")
     print(f"Generated: {dashboard['generated_at']}")
-    print(f"\nNational Summary")
+    print(f"\nConfigured registry summary (not national live coverage)")
     print(f"  Total counties: {dashboard['total_counties']}")
     cov = dashboard.get("coverage_summary", {})
     print(f"  Active: {cov.get('active', 0)}")
@@ -94,8 +98,8 @@ def _expand_display() -> None:
     print("\nSuggested next steps:")
     print("  1. Use discovery/source_discovery.py to probe candidate counties")
     print("  2. Add discovered counties to pipeline/config/counties/national_registry.py")
-    print("  3. Run --probe-all to verify sources")
-    print("  4. Add adapter mapping to scrapers/arcgis_adapter.py or flatfile_adapter.py")
+    print("  3. Run --validate-live 1 --county COUNTY_ID, then review authority evidence")
+    print("  4. Authorize the exact reviewed source before any bounded ingestion")
 
 
 def add_county_commands(subparsers: argparse._SubParsersAction) -> None:

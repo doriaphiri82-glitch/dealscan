@@ -5,15 +5,15 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 REGISTRY_DIR=os.path.dirname(__file__)
-REGISTRY_PATH=os.path.join(REGISTRY_DIR,"registry.json")
+REGISTRY_PATH=os.getenv("DEALSCAN_REGISTRY_PATH",os.path.join(REGISTRY_DIR,"registry.json"))
 
 def _load_registry():
     try:
         with open(REGISTRY_PATH,encoding="utf-8") as f:return json.load(f)
-    except Exception:return {"counties":{},"meta":{"total":0,"by_state":{}}}
+    except FileNotFoundError:return {"counties":{},"meta":{"total":0,"by_state":{}}}
 
 def _save_registry(reg):
-    os.makedirs(REGISTRY_DIR,exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(REGISTRY_PATH)),exist_ok=True)
     tmp=REGISTRY_PATH+".tmp"
     with open(tmp,"w",encoding="utf-8") as f:json.dump(reg,f,indent=2)
     os.replace(tmp,REGISTRY_PATH)

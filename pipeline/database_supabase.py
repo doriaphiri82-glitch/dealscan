@@ -27,6 +27,7 @@ class SupabaseDatabase:
             raise RuntimeError('SUPABASE_URL must be an HTTPS origin without credentials or query parameters')
         self.base = self.url + '/rest/v1'
         self.headers = {'apikey': self.key, 'Authorization': f'Bearer {self.key}', 'Content-Type': 'application/json'}
+        if self.key.startswith('sb_secret_'): self.headers.pop('Authorization',None)
         self.timeout = max(1, min(float(os.getenv('SUPABASE_DB_TIMEOUT', '30')), 120))
         self.session = requests.Session()
         self._counties: dict[str, dict | None] = {}
@@ -72,24 +73,41 @@ class SupabaseDatabase:
         self.audit_failures.append(message)
         log.warning('Ingestion audit unavailable (%s); primary data retained, publication held', message)
 
-    def upsert_county(self, county: dict) -> None:
+    @staticmethod
+    def county_payload(county: dict) -> dict:
         cid = str(county.get('county_id') or '').strip()
         name = str(county.get('county_name') or '').strip()
-        if not cid or not name:
-            raise ValueError('County metadata requires county_id and county_name')
+        if not cid or not name: raise ValueError('County metadata requires county_id and county_name')
         known = {'county_id','county_name','state','state_fips','county_fips','coverage_status','data_source_type',
                  'gis_url','parcel_source_url','arcgis_layer_url','source_vendor','scraper_type','field_mapping',
                  'verification_status','validation_status','data_freshness','discovery_attempted_at','last_successful_run',
                  'last_run_status','last_run_error','record_count','qualified_count','published_count','persisted_count','notes'}
-        payload = {key: county.get(key) for key in known if key in county}
+        payload = {key: county.get(key) for key in known}
         payload.update(county_id=cid, county_name=name, field_mapping=county.get('field_mapping') or {},
-                       extra={**(county.get('extra') or {}), **{key: value for key, value in county.items() if key not in known and key != 'extra'}})
-        payload = json_safe(payload)
-        if self._counties.get(cid) == payload:
-            return
-        self._request('POST', 'counties', params={'on_conflict': 'county_id'},
-                      headers={**self.headers, 'Prefer': 'resolution=merge-duplicates'}, json=payload)
-        self._counties[cid] = payload
+                       extra={**(county.get('extra') or {}), **{key:value for key,value in county.items() if key not in known and key != 'extra'}})
+        return json_safe(payload)
+
+    def upsert_county(self, county: dict) -> None:
+        self.upsert_counties([county])
+
+    def upsert_counties(self, counties: list[dict]) -> int:
+        payloads = [self.county_payload(county) for county in counties]
+        changed = [payload for payload in payloads if self._counties.get(payload['county_id']) != payload]
+        for offset in range(0,len(changed),100):
+            batch = changed[offset:offset+100]
+            self._request('POST','counties',params={'on_conflict':'county_id'},
+                          headers={**self.headers,'Prefer':'resolution=merge-duplicates'},json=batch)
+            for payload in batch: self._counties[payload['county_id']] = payload
+        return len(changed)
+
+    def get_counties(self) -> list[dict]:
+        counties = []
+        for offset in range(0,6000,1000):
+            rows = self._request('GET','counties',params={'select':'*','order':'county_id.asc','offset':str(offset),'limit':'1000'}).json()
+            for row in rows:
+                counties.append({**(row.get('extra') or {}), **{key:value for key,value in row.items() if key not in {'extra','created_at','updated_at'}}})
+            if len(rows)<1000: return counties
+        raise RuntimeError('County registry exceeds bounded read limit')
 
     def ensure_county(self, county: dict) -> None:
         cid = str(county.get('county_id') or '')

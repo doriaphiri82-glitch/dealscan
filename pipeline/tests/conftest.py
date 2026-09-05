@@ -5,7 +5,7 @@ import pytest
 # Apply before test-module imports: database.py selects its backend on import.
 os.environ['PYTHON_DOTENV_DISABLED'] = '1'
 os.environ['DEALSCAN_DB_BACKEND'] = 'sqlite'
-for name in ('DEALSCAN_ENV', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'DEALSCAN_ACTIVE_AUDIT_RUN_ID', 'KV_REST_API_URL', 'KV_REST_API_TOKEN', 'REDIS_URL', 'EMAIL_API_KEY'):
+for name in ('DEALSCAN_ENV', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'DEALSCAN_ACTIVE_AUDIT_RUN_ID', 'SUPABASE_ANON_KEY', 'SUPABASE_PUBLISHABLE_KEY', 'REDIS_TOKEN', 'UPSTASH_REDIS_REST_TOKEN', 'OPENAI_API_KEY', 'KV_REST_API_URL', 'KV_REST_API_TOKEN', 'REDIS_URL', 'EMAIL_API_KEY'):
     os.environ.pop(name, None)
 
 
@@ -15,6 +15,8 @@ def isolated_runtime(monkeypatch, tmp_path):
     import runregistry
     import config.settings as settings
     import database
+    monkeypatch.delenv('GITHUB_RUN_ID',raising=False)
+    monkeypatch.delenv('GITHUB_RUN_ATTEMPT',raising=False)
     database.get_backend().clear_active_run()
     database.get_backend().audit_failures.clear()
     monkeypatch.setattr(registry, 'REGISTRY_PATH', str(tmp_path / 'counties.json'))

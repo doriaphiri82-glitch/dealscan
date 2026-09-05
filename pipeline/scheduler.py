@@ -1,77 +1,55 @@
-"""
-DealScan - Pipeline scheduling.
+"""Compatibility scheduler; all work delegates to the gated, bounded CLI.
 
-Two integration paths:
-  * GitHub Actions workflow (pipeline/.github/workflows/scrape.yml) runs
-    `python -m scheduler --run-once` on a cron. That's the production path:
-    it has real network access to county sources.
-  * Local `--watch` uses the `schedule` package for CLI demos / manual runs.
-
-`schedule` (in requirements.txt) is optional at import time so the module
-imports cleanly even if it's not installed in a given environment.
+Production scheduling belongs to .github/workflows/scrape.yml. The optional local
+watcher is never a second path around registry hydration or failure reporting.
 """
 from __future__ import annotations
-
 import argparse
+import os
 import time
-
-from runners import COUNTRY_RUNNERS
-
-
-def run_all_counties(mode: str = "publish") -> dict:
-    """Run every configured county scraper in order. Returns summary."""
-    results = {}
-    for county_id, runner in COUNTRY_RUNNERS.items():
-        try:
-            results[county_id] = runner.run(mode=mode)
-        except Exception as exc:  # keep going if one county fails
-            results[county_id] = {"status": "error", "error": str(exc)[:200]}
-    return results
+from main import main as pipeline_main, bounded
 
 
-def main():
-    parser = argparse.ArgumentParser(description="DealScan pipeline scheduler")
-    parser.add_argument("--run-once", action="store_true",
-                        help="Run all counties once and exit (CI cron)")
-    parser.add_argument("--watch", "-w", action="store_true",
-                        help="Run forever on a schedule (local)")
-    parser.add_argument("--county", "-c", choices=list(COUNTRY_RUNNERS.keys()),
-                        help="Run only one county")
-    parser.add_argument("--mode", "-m", default="publish",
-                        choices=["publish", "etl-only"],
-                        help="publish=write bundle; etl-only=no output")
-    args = parser.parse_args()
+def run_all_counties(mode: str = 'etl-only', county: str | None = None, max_records: int = 250) -> int:
+    if mode not in {'publish','etl-only'}: raise ValueError('Unsupported scheduler mode')
+    argv = ['--run','--max-records',str(max_records)]
+    if mode == 'etl-only': argv.append('--etl-only')
+    if county: argv.extend(['--county',county])
+    return pipeline_main(argv)
 
-    if args.county:
-        runner = COUNTRY_RUNNERS[args.county]
-        runner.run(mode=args.mode)
-        return
 
-    if args.run_once:
-        results = run_all_counties(mode=args.mode)
-        for cid, res in results.items():
-            print(f"{cid}: {res.get('status')} "
-                  f"(found={res.get('counts', {}).get('found', 0)}, "
-                  f"saved={res.get('counts', {}).get('saved', 0)})")
-        return
-
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='DealScan gated local scheduler')
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument('--run-once',action='store_true')
+    action.add_argument('--watch','-w',action='store_true',help='Local only; production uses GitHub Actions')
+    parser.add_argument('--county','-c')
+    parser.add_argument('--mode','-m',default='etl-only',choices=['publish','etl-only'])
+    parser.add_argument('--max-records',type=lambda v:bounded(v,1,5000),default=250)
+    args = parser.parse_args(argv)
     if args.watch:
+        if os.getenv('DEALSCAN_ENV') == 'production':
+            parser.error('Production scheduling must use the controlled ingestion workflow')
         try:
-            import schedule  # type: ignore
+            import schedule
         except ImportError:
-            print("schedule not installed - install (pip install schedule) "
-                  "or run with --run-once")
-            return
-        schedule.every().day.at("06:30").do(run_all_counties, mode=args.mode)
-        schedule.every().monday.at("02:00").do(run_all_counties, mode=args.mode)
-        print("Scheduler started. Ctrl+C to stop.")
-        while True:
-            schedule.run_pending()
-            time.sleep(60)
-        return
-
+            print('Install the pinned pipeline dependencies to use the local watcher')
+            return 1
+        def job():
+            code = run_all_counties(args.mode,args.county,args.max_records)
+            print(f'Scheduled ingestion exit_code={code}; no work or partial results are failures')
+        schedule.every().day.at('06:30').do(job)
+        print('Local scheduler started; no ingestion has run yet')
+        try:
+            while True:
+                schedule.run_pending()
+                time.sleep(30)
+        except KeyboardInterrupt:
+            return 130
+    if args.run_once or args.county:
+        return run_all_counties(args.mode,args.county,args.max_records)
     parser.print_help()
+    return 0
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__': raise SystemExit(main())

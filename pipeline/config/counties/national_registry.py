@@ -110,6 +110,7 @@ def ensure_national_counties() -> Dict[str, Dict[str, Any]]:
                            universe_refreshed_at=datetime.now(timezone.utc).isoformat())
     else:
         reg['meta']['universe_complete'] = bool(reg['meta'].get('universe_complete'))
+    reg['meta']['universe_refresh_status'] = 'ok' if discovered else 'unavailable'
     registry._save_registry(reg)
     return reg['counties']
 

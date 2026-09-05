@@ -1,79 +1,72 @@
 name: dealscan-production-smoke
 
 on:
-  # This test needs production Supabase secrets. Keep it explicit so a missing
-  # repository secret does not turn every normal code push red.
   workflow_dispatch:
+    inputs:
+      county_id:
+        description: 'Exact reviewed pilot county (no synthetic records are inserted)'
+        required: true
+        default: el_paso_tx
+        type: string
+      max_records:
+        description: 'Bounded real records, 1–5000'
+        required: true
+        default: '250'
+        type: string
+      app_url:
+        description: 'Actual deployed HTTPS application origin'
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: dealscan-production-smoke
+  group: dealscan-production-ingestion
   cancel-in-progress: false
 
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    environment: production
+    timeout-minutes: 30
     env:
+      DEALSCAN_ENV: production
       DEALSCAN_DB_BACKEND: supabase
+      DEALSCAN_REGISTRY_PATH: data/counties.json
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      PRODUCTION_APP_URL: ${{ inputs.app_url }}
+      COUNTY_ID: ${{ inputs.county_id }}
+      MAX_RECORDS: ${{ inputs.max_records }}
+    defaults:
+      run:
+        working-directory: pipeline
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: pip
-          cache-dependency-path: pipeline/requirements.txt
+          cache-dependency-path: pipeline/requirements.lock.txt
       - name: Install dependencies
-        working-directory: pipeline
-        run: pip install -r requirements.txt pytest
-      - name: Verify production credentials
-        working-directory: pipeline
+        run: pip install -r requirements.lock.txt
+      - name: Verify production configuration
         run: |
-          test -n "$SUPABASE_URL" || (echo 'Missing SUPABASE_URL GitHub secret' && exit 1)
-          test -n "$SUPABASE_SERVICE_ROLE_KEY" || (echo 'Missing SUPABASE_SERVICE_ROLE_KEY GitHub secret' && exit 1)
-      - name: Validate pipeline
-        working-directory: pipeline
-        env:
-          PYTHONPATH: .
-        run: pytest -q
-      - name: Initialize production database
-        working-directory: pipeline
+          test -n "$SUPABASE_URL" || { echo 'Missing SUPABASE_URL secret'; exit 1; }
+          test -n "$SUPABASE_SERVICE_ROLE_KEY" || { echo 'Missing SUPABASE_SERVICE_ROLE_KEY secret'; exit 1; }
+          test -n "$SUPABASE_PUBLISHABLE_KEY$SUPABASE_ANON_KEY" || { echo 'A public Supabase key is required for RLS verification'; exit 1; }
+      - name: Verify migrated schema
         run: python main.py --setup-db
-      - name: Refresh national county universe
-        working-directory: pipeline
-        run: python main.py --validate
-      - name: Live validate pilot sources
-        working-directory: pipeline
-        run: python main.py --validate-live 3 --include-validated
-      - name: Ingest one production county
-        working-directory: pipeline
-        run: python main.py --run-national 1 --max-records 250
-      - name: Verify persisted production data and audit trail
-        working-directory: pipeline
-        env:
-          PYTHONPATH: .
-        run: |
-          python - <<'PY'
-          import os
-          import requests
-          from database import get_top_deals
-          from config.counties.registry import list_counties
-          counties = list_counties()
-          deals = get_top_deals(limit=5, min_score=0)
-          successful = [c for c in counties if c.get('last_successful_run')]
-          base = os.environ['SUPABASE_URL'].rstrip('/') + '/rest/v1'
-          headers = {'apikey': os.environ['SUPABASE_SERVICE_ROLE_KEY'], 'Authorization': 'Bearer ' + os.environ['SUPABASE_SERVICE_ROLE_KEY']}
-          runs = requests.get(base + '/ingestion_runs', params={'select':'id,status,records_seen,records_persisted','order':'id.desc','limit':'5'}, headers=headers, timeout=30)
-          runs.raise_for_status(); audit_runs = runs.json()
-          records = requests.get(base + '/ingestion_records', params={'select':'id,run_id,status,property_id','order':'id.desc','limit':'5'}, headers=headers, timeout=30)
-          records.raise_for_status(); audit_records = records.json()
-          print(f'counties={len(counties)} successful_counties={len(successful)} deals={len(deals)} audit_runs={len(audit_runs)} audit_records={len(audit_records)}')
-          if not successful: raise SystemExit('Production smoke test failed: no county has a successful ETL run')
-          if not audit_runs: raise SystemExit('Production smoke test failed: ingestion_runs is empty')
-          if not audit_records and any((r.get('records_persisted') or 0) > 0 for r in audit_runs):
-              raise SystemExit('Production smoke test failed: persisted records have no ingestion_records provenance')
-          PY
+      - name: Validate, authorize, ingest, and verify the complete current-run chain
+        run: python main.py --production-smoke "$COUNTY_ID" --max-records "$MAX_RECORDS" --app-url "$PRODUCTION_APP_URL" --report-file data/smoke-summary.json
+      - name: Upload minimized smoke summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-smoke-${{ github.run_id }}
+          path: pipeline/data/smoke-summary.json
+          if-no-files-found: ignore
+          retention-days: 7
