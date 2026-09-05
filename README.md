@@ -2,75 +2,84 @@
 
 **AI-Powered Vacant Land Deal Finder**
 
-Find profitable land deals while you sleep. Our AI scans county records daily,
-identifies motivated sellers, calculates profit potential, and delivers the
-top 5-10 deals to your inbox every morning.
+DealScan discovers authoritative county parcel sources, screens vacant-land records for investment signals, scores opportunities, and exposes only verified deals through the web application.
 
 ## Project Structure
 
 ```
 dealscan/
-├── landing/          # Next.js landing page + waitlist
-│   ├── app/          # App router (pages, API routes)
-│   ├── components/   # React components
-│   └── data/         # Waitlist email storage
-├── pipeline/         # Python data pipeline (core engine)
-│   ├── config/       # County configs + settings
-│   ├── scrapers/     # County data collection
-│   ├── scoring/      # Deal scoring algorithm
-│   ├── delivery/     # Email delivery system
-│   ├── data/         # SQLite database
+├── landing/          # Next.js application, auth, dashboard and public API
+├── pipeline/         # Python discovery, validation, ETL and scoring engine
+│   ├── config/       # National county registry + source configuration
+│   ├── scrapers/     # ArcGIS/public-record adapters
+│   ├── scoring/      # Deal scoring and valuation evidence
+│   ├── delivery/     # Optional email delivery
 │   └── main.py       # Pipeline orchestrator
-└── dashboard/        # Web dashboard (future)
+├── docs/             # Architecture and pipeline documentation
+└── .github/workflows # CI, production ingestion and smoke validation
 ```
+
+## Production Architecture
+
+- **Supabase/Postgres:** durable source of truth for counties, properties, deals, comparables and ingestion audit history.
+- **GitHub Actions:** production ingestion every 15 minutes with bounded discovery/validation/ETL batches.
+- **Next.js/Vercel:** public site, authentication, dashboard and server-side API routes.
+- **Redis/Vercel KV:** optional low-latency cache; DealScan does not require it for primary deal reads.
+- **SQLite:** local development fallback only.
+
+Every production candidate retains source provenance. The pipeline records ETL runs in `ingestion_runs` and persisted source records in `ingestion_records`. Public deal endpoints filter for `verification_status=verified` and never fall back to hard-coded demo opportunities.
 
 ## Quick Start
 
-### Landing Page
+### Landing page
+
 ```bash
 cd landing
 npm install
 npm run dev
-# Visit http://localhost:3000
 ```
 
-### Data Pipeline
+### Local pipeline
+
 ```bash
 cd pipeline
-python3 main.py --setup-db   # Initialize database
-python3 main.py --demo       # Run with demo data
-python3 main.py --deliver    # Send deals to subscribers
+python3 main.py --setup-db
+python3 main.py --validate
+python3 main.py --run-national 1 --max-records 250
 ```
+
+For production Supabase mode, configure `DEALSCAN_DB_BACKEND=supabase`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY`. Never expose the service-role key to browser code.
+
+## Production validation
+
+The normal CI workflow verifies Python compilation/tests and the Next.js production build. The explicit production smoke workflow validates real Supabase credentials, live source validation, one bounded production ingestion, persisted deals, and the ingestion audit trail.
+
+## Data-quality policy
+
+DealScan is deliberately conservative. Missing, stale, malformed, or insufficiently verifiable county data is rejected rather than fabricated. A candidate must pass source, normalization, vacant-land and financial-evidence checks before it can become a public verified deal.
 
 ## Pricing Model
 
 | Tier | Price | Features |
 |------|-------|----------|
-| Free | $0/mo | 3 deals/week (48hr delay), community read-only |
-| Pro | $297/mo | 5-10 deals daily, full analysis, all tools |
-| Elite | $697/mo | Everything + 1-on-1 coaching, priority alerts |
+| Free | $0/mo | Limited verified opportunities |
+| Pro | $297/mo | Full deal analysis and expanded opportunities |
+| Elite | $697/mo | Everything + premium support/coaching |
 
-**Founding Members:** $197/mo locked forever (first 20 members)
-
-## Tech Stack
-
-- **Landing:** Next.js 14, Tailwind CSS, TypeScript
-- **Pipeline:** Python 3.11, SQLite, Requests, BeautifulSoup
-- **Email:** Resend/SendGrid
-- **Deployment:** Vercel (landing), Railway/Render (pipeline)
-- **Store:** Whop.com
-- **Community:** Discord
+Pricing is product configuration and can be changed independently of the ingestion engine.
 
 ## Status
 
-- [x] Landing page built
-- [x] Waitlist email collection
-- [x] Deal scoring algorithm
-- [x] Profit estimation engine
-- [x] Motivated seller detection
-- [x] Email delivery system
-- [x] Demo pipeline (3 test deals)
-- [ ] County scrapers (real data)
-- [ ] Whop store setup
-- [ ] Discord community
-- [ ] Deploy to production
+- [x] Next.js application and responsive UI
+- [x] Supabase authentication integration
+- [x] Protected dashboard routes
+- [x] Public verified-deals API
+- [x] National county discovery/validation pipeline
+- [x] Supabase production persistence adapter
+- [x] Ingestion provenance/audit trail
+- [x] Automated CI for Python + web build
+- [x] Scheduled production ingestion workflow
+- [x] Explicit production smoke test
+- [ ] Configure GitHub production Supabase secrets
+- [ ] Run first successful production national ingestion
+- [ ] Verify Vercel production environment variables/domain
