@@ -72,11 +72,8 @@ def cmd_bundle():
     print(f"generated_at={bundle.get('generated_at')} count={bundle.get('count')} counties={bundle.get('meta',{}).get('scraped_counties')} status={bundle.get('meta',{}).get('status')}")
     for d in bundle.get('deals',[]):print(f"  {d.get('deal_score',0):>3}/100 {d.get('county_id',''):12} {d.get('address','')}")
 
-def run_demo_pipeline():
-    from demo_pipeline import run;run()
-
 def main():
-    parser=argparse.ArgumentParser(description='DealScan AI Pipeline'); parser.add_argument('--setup-db',action='store_true'); parser.add_argument('--run',action='store_true'); parser.add_argument('--county','-c'); parser.add_argument('--etl-only',action='store_true'); parser.add_argument('--demo',action='store_true'); parser.add_argument('--probe',action='store_true'); parser.add_argument('--deliver',action='store_true'); parser.add_argument('--bundle',action='store_true'); parser.add_argument('--discover-national',type=int,metavar='N',help='Discover up to N new public ArcGIS sources'); parser.add_argument('--run-national',type=int,metavar='N',help='Run up to N discovered counties through ETL'); parser.add_argument('--validate-live',type=int,metavar='N',help='Live-validate up to N counties with discovered/configured sources'); parser.add_argument('--include-validated',action='store_true',help='Allow live validation to revisit recently validated counties'); parser.add_argument('--max-records',type=int,default=5000); parser.add_argument('--coverage',action='store_true'); parser.add_argument('--validate',action='store_true',help='Validate every registered county configuration without changing coverage state'); add_county_commands(parser.add_subparsers()); args=parser.parse_args()
+    parser=argparse.ArgumentParser(description='DealScan AI Pipeline'); parser.add_argument('--setup-db',action='store_true'); parser.add_argument('--run',action='store_true'); parser.add_argument('--county','-c'); parser.add_argument('--etl-only',action='store_true'); parser.add_argument('--probe',action='store_true'); parser.add_argument('--deliver',action='store_true'); parser.add_argument('--bundle',action='store_true'); parser.add_argument('--discover-national',type=int,metavar='N',help='Discover up to N new public ArcGIS sources'); parser.add_argument('--run-national',type=int,metavar='N',help='Run up to N discovered counties through ETL'); parser.add_argument('--validate-live',type=int,metavar='N',help='Live-validate up to N counties with discovered/configured sources'); parser.add_argument('--include-validated',action='store_true',help='Allow live validation to revisit recently validated counties'); parser.add_argument('--max-records',type=int,default=5000); parser.add_argument('--coverage',action='store_true'); parser.add_argument('--validate',action='store_true',help='Validate every registered county configuration without changing coverage state'); add_county_commands(parser.add_subparsers()); args=parser.parse_args()
     if args.setup_db:init_db();print('Database initialized.')
     elif args.probe:cmd_probe()
     elif args.validate:cmd_validate()
@@ -86,7 +83,6 @@ def main():
     elif args.run_national is not None:cmd_run_national(args)
     elif args.bundle:cmd_bundle()
     elif args.run:cmd_run(args)
-    elif args.demo:init_db();run_demo_pipeline()
     elif args.deliver:print('Delivery requires EMAIL_API_KEY in .env. See pipeline README.')
     elif hasattr(args,'func'):args.func()
     else:parser.print_help()
