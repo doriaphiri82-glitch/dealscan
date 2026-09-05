@@ -1,25 +1,19 @@
 import { NextResponse } from 'next/server'
+import { publicSupabaseConfig } from '@/lib/supabase-config'
+import { supabaseRead } from '@/lib/public-deals'
 
 export const dynamic = 'force-dynamic'
+const headers = { 'Cache-Control': 'no-store, max-age=0' }
 
 export async function GET() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/$/, '')
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-
-  if (!url || !key) {
-    return NextResponse.json({ status: 'degraded', service: 'dealscan-web', database: 'not-configured' }, { status: 503 })
+  if (!publicSupabaseConfig()) {
+    return NextResponse.json({ status: 'degraded', service: 'dealscan-web', database: 'not-configured' }, { status: 503, headers })
   }
-
   try {
-    const response = await fetch(`${url}/rest/v1/counties?select=county_id&limit=1`, {
-      headers: { apikey: key, Authorization: `Bearer ${key}` },
-      cache: 'no-store',
-    })
-    if (!response.ok) {
-      return NextResponse.json({ status: 'degraded', service: 'dealscan-web', database: 'unavailable' }, { status: 503 })
-    }
-    return NextResponse.json({ status: 'ok', service: 'dealscan-web', database: 'ok' }, { status: 200 })
+    // Probe the same RLS-protected read path as the application, not a static URL.
+    await supabaseRead('deals', new URLSearchParams({ select: 'id', status: 'eq.discovered', verification_status: 'eq.verified', limit: '1' }))
+    return NextResponse.json({ status: 'ok', service: 'dealscan-web', database: 'ok' }, { headers })
   } catch {
-    return NextResponse.json({ status: 'degraded', service: 'dealscan-web', database: 'unavailable' }, { status: 503 })
+    return NextResponse.json({ status: 'degraded', service: 'dealscan-web', database: 'unavailable' }, { status: 503, headers })
   }
 }
