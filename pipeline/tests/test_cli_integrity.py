@@ -114,3 +114,22 @@ def test_legacy_runner_preserves_disabled_operation_failure(monkeypatch,tmp_path
     result=subprocess.run([sys.executable,str(script),'--deliver'],env=os.environ.copy(),capture_output=True,text=True,timeout=20)
     assert result.returncode==1
     assert not (tmp_path/'isolated.db').exists()
+
+
+@pytest.mark.parametrize('flag',['--authorize-county','--authorize-ingestion'])
+def test_runbook_authorization_flag_preserves_exact_county_gate(monkeypatch,flag):
+    calls=[]
+    monkeypatch.setattr(main,'pull_registry',lambda:None)
+    monkeypatch.setattr(main,'push_registry',lambda:None)
+    monkeypatch.setattr(main,'authorize_county',lambda cid:calls.append(cid) or {'authorized':False})
+    assert main.main([flag,'el_paso_tx'])==1
+    assert calls==['el_paso_tx']
+
+
+def test_production_readiness_runs_before_any_ingestion_and_defaults_to_read_only():
+    text=(Path(__file__).parents[2]/'.github/workflows/production-smoke.yml').read_text()
+    assert 'preflight_only:' in text and 'default: true' in text
+    assert text.index('validation.production_preflight') < text.index('--production-smoke')
+    assert 'if: ${{ !inputs.preflight_only }}' in text
+    install=text[text.index('- name: Install dependencies'):text.index('- name: Read-only production readiness')]
+    assert 'SUPABASE_SERVICE_ROLE_KEY' not in install

@@ -38,7 +38,9 @@ command does not create credentials or migrate tables automatically.
   `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. A server-only Vercel secret is
   not a public frontend variable.
 - Set a real `WAITLIST_CONTACT_EMAIL`, review `/privacy` and the retention/contact
-  process before collecting signups. Requests require explicit consent and a durable
+  process before collecting signups. The operator-provided contact is
+  **`doriaphiri82@gmail.com`**, set in `landing/vercel.json` for builds/runtime.
+  Requests require explicit consent and a durable
   private database write. They are not automated email-alert subscriptions.
 - Confirm `/api/health` returns 200 with `database=ok`. A configured but empty
   database is healthy; an unavailable/misconfigured one must return 503.
@@ -63,9 +65,25 @@ Review the exact county source and its authority evidence. Dispatch
 
 - exact reviewed county ID (initial default: `el_paso_tx`);
 - `max_records=250`;
-- the actual deployed HTTPS application origin.
+- the actual deployed HTTPS application origin;
+- initially leave **`preflight_only=true`** (the safe default). It only reads source,
+  schema/counts and deployed API state, reports missing secret names without values,
+  and never authorizes, ingests, creates fixtures or applies migrations.
 
-This command is also available from a securely configured operator environment:
+After read-only readiness passes and source authority/migrations have been reviewed,
+repeat with **`preflight_only=false`** to execute the real 250-record ingestion.
+The workflow refuses to continue when readiness fails. A preflight pass alone is
+not a completed production smoke, migration proof or authenticated-login test.
+
+Read-only readiness is also available locally (it can report missing credentials
+without selecting a fallback database):
+
+```bash
+python -m validation.production_preflight --county el_paso_tx --max-records 250 \
+  --app-url "$PRODUCTION_APP_URL" --report-file data/readiness-summary.json
+```
+
+The full smoke command is available from a securely configured operator environment:
 
 ```bash
 python main.py --production-smoke el_paso_tx --max-records 250 \

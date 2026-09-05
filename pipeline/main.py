@@ -60,7 +60,7 @@ def run_all(mode='publish',only='',max_records=5000):
 
 
 def production_smoke(county_id, max_records, app_url):
-    from validation.production_smoke import public_key, verify_ingestion, web_origin
+    from validation.production_smoke import public_key, verify_ingestion, verify_public_api, web_origin
     if os.getenv('DEALSCAN_DB_BACKEND')!='supabase' or os.getenv('DEALSCAN_ENV')!='production':
         raise RuntimeError('Production smoke requires DEALSCAN_ENV=production and DEALSCAN_DB_BACKEND=supabase')
     from database_supabase import SupabaseDatabase
@@ -68,12 +68,15 @@ def production_smoke(county_id, max_records, app_url):
         raise RuntimeError('The initialized database backend is not Supabase')
     # Reject missing deployment/RLS configuration before making ingestion writes.
     web_origin(app_url or ''); public_key(); init_db()
+    verify_public_api(get_backend(),app_url or '',expected_contact=os.getenv('WAITLIST_CONTACT_EMAIL') or None)
+    pull_registry(); ensure_pilot_counties()
     validation=validate_live_batch(1,True,county_id=county_id)
     push_registry()
     if not completed(validation,'valid'): return {'status':'error','stage':'validate','validation':validation}
     authorization=authorize_county(county_id); push_registry()
     if not authorization['authorized']: return {'status':'error','stage':'authorize','authorization':authorization}
     ingestion=run_county(county_id,mode='etl-only',max_records=max_records)
+    push_registry()
     if not completed(ingestion): return {'status':'error','stage':'ingest','ingestion':ingestion}
     verified=verify_ingestion(ingestion['audit_run_id'],county_id=county_id,max_records=max_records,app_url=app_url,require_web=True)
     return {'status':'verified','scope':'bounded_real_ingestion_and_public_api','ingestion':ingestion,'verification':verified,
@@ -87,7 +90,7 @@ def parser():
         action.add_argument('--'+flag,action='store_true')
     for flag in ('discover-national','run-national','validate-live','authorize-valid'):
         action.add_argument('--'+flag,type=bounded,metavar='N')
-    action.add_argument('--authorize-county')
+    action.add_argument('--authorize-county','--authorize-ingestion',dest='authorize_county',metavar='COUNTY_ID')
     action.add_argument('--verify-deal',type=lambda v:bounded(v,1,2**63-1),metavar='ID')
     action.add_argument('--verify-ingestion-run',type=lambda v:bounded(v,1,2**63-1),metavar='ID')
     action.add_argument('--production-smoke',metavar='COUNTY_ID')
@@ -113,7 +116,8 @@ def main(argv=None):
         p.error('--dry-run is supported only for ingestion and source discovery')
     mutable=any((args.run,args.run_national is not None,args.validate_live is not None,args.authorize_county,
                  args.authorize_valid is not None,args.discover_national is not None,args.refresh_universe,args.sync_registry,args.production_smoke)) and not args.dry_run
-    needs_registry = mutable or args.coverage or args.validate or args.probe or args.dry_run or hasattr(args,'func')
+    # The smoke owns registry writes only after its read-only access checks pass.
+    needs_registry = not args.production_smoke and (mutable or args.coverage or args.validate or args.probe or args.dry_run or hasattr(args,'func'))
     result={}; code=0; registry_loaded=False
     try:
         if needs_registry:

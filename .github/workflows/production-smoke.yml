@@ -9,7 +9,7 @@ on:
         default: el_paso_tx
         type: string
       max_records:
-        description: 'Bounded real records, 1–5000'
+        description: 'Bounded real records, 1–5000; start with 250'
         required: true
         default: '250'
         type: string
@@ -17,6 +17,11 @@ on:
         description: 'Actual deployed HTTPS application origin'
         required: true
         type: string
+      preflight_only:
+        description: 'Read-only readiness checks only; no authorization, ingestion or migrations'
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -34,13 +39,14 @@ jobs:
       DEALSCAN_ENV: production
       DEALSCAN_DB_BACKEND: supabase
       DEALSCAN_REGISTRY_PATH: data/counties.json
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      WAITLIST_CONTACT_EMAIL: doriaphiri82@gmail.com
       PRODUCTION_APP_URL: ${{ inputs.app_url }}
       COUNTY_ID: ${{ inputs.county_id }}
       MAX_RECORDS: ${{ inputs.max_records }}
+      # Management credentials are not injected merely to check their presence.
+      HAS_VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN != '' }}
+      HAS_SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN != '' }}
+      HAS_SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL != '' }}
     defaults:
       run:
         working-directory: pipeline
@@ -53,20 +59,28 @@ jobs:
           cache-dependency-path: pipeline/requirements.lock.txt
       - name: Install dependencies
         run: pip install -r requirements.lock.txt
-      - name: Verify production configuration
-        run: |
-          test -n "$SUPABASE_URL" || { echo 'Missing SUPABASE_URL secret'; exit 1; }
-          test -n "$SUPABASE_SERVICE_ROLE_KEY" || { echo 'Missing SUPABASE_SERVICE_ROLE_KEY secret'; exit 1; }
-          test -n "$SUPABASE_PUBLISHABLE_KEY$SUPABASE_ANON_KEY" || { echo 'A public Supabase key is required for RLS verification'; exit 1; }
-      - name: Verify migrated schema
-        run: python main.py --setup-db
+      - name: Read-only production readiness
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: python -m validation.production_preflight --county "$COUNTY_ID" --max-records "$MAX_RECORDS" --app-url "$PRODUCTION_APP_URL" --report-file data/readiness-summary.json
       - name: Validate, authorize, ingest, and verify the complete current-run chain
+        if: ${{ !inputs.preflight_only }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
         run: python main.py --production-smoke "$COUNTY_ID" --max-records "$MAX_RECORDS" --app-url "$PRODUCTION_APP_URL" --report-file data/smoke-summary.json
-      - name: Upload minimized smoke summary
+      - name: Upload minimized readiness and smoke summaries
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: production-smoke-${{ github.run_id }}
-          path: pipeline/data/smoke-summary.json
-          if-no-files-found: ignore
+          path: |
+            pipeline/data/readiness-summary.json
+            pipeline/data/smoke-summary.json
+          if-no-files-found: warn
           retention-days: 7

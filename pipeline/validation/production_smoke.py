@@ -6,11 +6,16 @@ import json
 import os
 from urllib.parse import urlsplit
 import requests
-from database import get_backend
 from database_supabase import SupabaseDatabase
 from persistence import json_safe
 from normalization import normalize, sale_date, source_identity
 from validation.gates import authorization_error, source_fingerprint, source_url
+
+
+def get_backend():
+    # Readiness checks can report missing credentials without initializing SQLite.
+    from database import get_backend as backend
+    return backend()
 
 
 class SmokeFailure(RuntimeError):
@@ -110,29 +115,39 @@ def verify_ingestion(run_id: int, *, county_id: str | None = None, max_records: 
               'records_seen':run['records_seen'],'properties_verified':len(properties),
               'audit_records':len(records),'web_api':'not_checked'}
     if app_url or require_web:
-        origin = web_origin(app_url or '')
-        key = public_key()
-        headers = {'apikey':key}
-        if not key.startswith('sb_publishable_'): headers['Authorization']='Bearer '+key
-        # No status filter: this actually exercises the deployed RLS predicate.
-        response = _get(db.base+'/deals',params={'select':'verification_status,status','limit':'5'},headers=headers)
-        _require(response.status_code==200,'Anonymous verified read failed')
-        rows = response.json()
-        _require(isinstance(rows,list) and all(row.get('verification_status')=='verified' and row.get('status')=='discovered' for row in rows),'RLS exposed an unverified assessment')
-        for table,column in [('properties','owner_name'),('ingestion_records','raw_payload')]:
-            response = _get(db.base+'/'+table,params={'select':column,'limit':'1'},headers=headers)
-            _require(response.status_code in (401,403),'A private database column is readable with the public key')
-        response = _get(origin+'/api/health')
-        _require(response.status_code==200 and response.json().get('database')=='ok','Deployed API health check failed')
-        _require(response.json().get('database_origin','').rstrip('/')==db.url.rstrip('/'), 'Deployed API is configured for a different database project')
-        response = _get(origin+'/api/deals',params={'limit':'5'})
-        _require(response.status_code==200,'Deployed public opportunities API failed')
-        body = response.json(); deals = body.get('deals')
-        _require(isinstance(deals,list) and body.get('meta',{}).get('storage_source')=='supabase','Public API is not reading the configured database')
-        _require(not _private_key_present(body),'Public API exposed private data')
-        expected = {(row['county_id'],row['apn']) for row in db.get_top_deals(limit=5,min_score=0)}
-        actual = {(row.get('county_id'),row.get('apn')) for row in deals}
-        _require(expected==actual,'Public API and current verified database snapshot disagree')
-        _require(all(row.get('verification_status')=='verified' for row in deals),'Public API exposed an unverified assessment')
-        result.update(web_api='verified',available_verified=len(deals))
+        public = verify_public_api(db, app_url or '')
+        result.update(web_api='verified',available_verified=public['available_verified'])
     return result
+
+
+def verify_public_api(db: SupabaseDatabase, app_url: str, *, expected_contact: str | None = None) -> dict:
+    """Read-only RLS/API assertions; does not authorize or ingest any source."""
+    origin = web_origin(app_url)
+    key = public_key()
+    headers = {'apikey':key}
+    if not key.startswith('sb_publishable_'): headers['Authorization']='Bearer '+key
+    # No status filter: this actually exercises the deployed RLS predicate.
+    response = _get(db.base+'/deals',params={'select':'verification_status,status','limit':'5'},headers=headers)
+    _require(response.status_code==200,'Anonymous verified read failed')
+    rows = response.json()
+    _require(isinstance(rows,list) and all(row.get('verification_status')=='verified' and row.get('status')=='discovered' for row in rows),'RLS exposed an unverified assessment')
+    for table,column in [('properties','owner_name'),('ingestion_records','raw_payload')]:
+        response = _get(db.base+'/'+table,params={'select':column,'limit':'1'},headers=headers)
+        _require(response.status_code in (401,403),'A private database column is readable with the public key')
+    response = _get(origin+'/api/health')
+    _require(response.status_code==200 and response.json().get('database')=='ok','Deployed API health check failed')
+    _require(response.json().get('database_origin','').rstrip('/')==db.url.rstrip('/'), 'Deployed API is configured for a different database project')
+    response = _get(origin+'/api/deals',params={'limit':'5'})
+    _require(response.status_code==200,'Deployed public opportunities API failed')
+    body = response.json(); deals = body.get('deals')
+    _require(isinstance(deals,list) and body.get('meta',{}).get('storage_source')=='supabase','Public API is not reading the configured database')
+    _require(not _private_key_present(body),'Public API exposed private data')
+    expected = {(row['county_id'],row['apn']) for row in db.get_top_deals(limit=5,min_score=0)}
+    actual = {(row.get('county_id'),row.get('apn')) for row in deals}
+    _require(expected==actual,'Public API and current verified database snapshot disagree')
+    _require(all(row.get('verification_status')=='verified' for row in deals),'Public API exposed an unverified assessment')
+    if expected_contact:
+        privacy = _get(origin+'/privacy')
+        _require(privacy.status_code == 200 and 'text/html' in privacy.headers.get('content-type',''), 'Deployed privacy notice is unavailable')
+        _require('mailto:'+expected_contact in privacy.text, 'Deployed operator contact does not match the configured contact')
+    return {'status':'verified','scope':'public_boundary_read_only','available_verified':len(deals),'operator_contact_checked':bool(expected_contact)}
