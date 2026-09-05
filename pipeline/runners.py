@@ -81,7 +81,7 @@ class RunMetrics:
         self.rejection_reasons={}; self.errors=[]; self.field_coverage={}; self.vacancy_rejection_reasons={}; self.comparable_count=0
     def to_counts(self):return {'discovered':self.discovered,'downloaded':self.downloaded,'parsed':self.parsed,'normalized':self.normalized,'rejected':self.rejected,'stored':self.stored,'scored':self.scored,'qualified':self.qualified,'published':self.published}
     def record_rejection(self,reason):self.rejected+=1; self.rejection_reasons[reason]=self.rejection_reasons.get(reason,0)+1
-    def record_vacancy_rejection(self,reason):self.rejected+=1; self.vacancy_rejection_reasons[reason]=self.vacancy_rejection_reasons.get(reason,0)+1; self.rejection_reasons[reason]=self.rejection_reasons.get(reason,0)+1
+    def record_vacancy_rejection(self,reason):self.rejection_reasons[reason]=self.rejection_reasons.get(reason,0)+1; self.vacancy_rejection_reasons[reason]=self.vacancy_rejection_reasons.get(reason,0)+1
 
 def _shape_for_bundle(row):return {k:row.get(k) for k in ('apn','address','county_id','lot_size_acres','asking_price','asking_price_basis','deal_score','estimated_arv_low','estimated_arv_high','estimated_profit_low','estimated_profit_high','recommended_offer_low','recommended_offer_high','market_velocity','competition_level','owner_state','zoning','tax_delinquent_years','valuation_basis','valuation_confidence','source','source_url','source_vendor','source_quality','verification_status','data_freshness')}
 def _provenance(cfg,county_id):
@@ -118,8 +118,6 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
     cfg=_county_config(county_id); m=RunMetrics(county_id); summary={'county_id':county_id,'counts':m.to_counts(),'status':'ok','error':''}
     if not cfg:summary.update(status='skipped',error='County has no configured or discovered source');record_run(county_id,'skipped',summary['counts'],summary['error']);return summary
     try:
-        # In Supabase mode, persist the authoritative registry record before any
-        # property/deal foreign keys are written. SQLite keeps its registry file.
         county_metadata=get_county(county_id)
         if county_metadata and not dry_run: sync_county(county_metadata)
         props,scrape_result=fetch_parcels(cfg,county_id,max_records=max_records) if not offline else ([],None)
