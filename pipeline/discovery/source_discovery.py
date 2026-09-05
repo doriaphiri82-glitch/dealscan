@@ -1,7 +1,8 @@
 """DealScan source discovery.
 
-Discovers configured sources and public ArcGIS Online parcel layers.
-Discovery is never treated as verification until extraction succeeds.
+Discovers configured sources, curated statewide portals, and public ArcGIS
+parcel layers. Discovery is never treated as verification until extraction
+succeeds.
 """
 from __future__ import annotations
 import re
@@ -9,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
 from scrapers.base import fetch, probe
+from discovery.statewide_sources import statewide_sources_for_state
 
 @dataclass
 class SourceCandidate:
@@ -26,6 +28,18 @@ def discover_arcgis_sources(county_cfg: Dict[str, Any]) -> List[SourceCandidate]
         else: out.append(SourceCandidate(f"{root}/arcgis/rest/services?f=json","arcgis_rest",.8,"ArcGIS REST services directory"))
     if county_cfg.get("arcgis_layer_url"): out.append(SourceCandidate(county_cfg["arcgis_layer_url"].rstrip("/"),"arcgis_layer",1.0,"Explicit layer URL"))
     return out
+
+def discover_statewide_sources(state: str) -> List[SourceCandidate]:
+    """Return curated statewide portals as discovery candidates, never verified sources."""
+    return [
+        SourceCandidate(
+            source.url,
+            source.source_type,
+            0.85,
+            f"{source.name}: statewide discovery hint; county extraction and ETL verification required",
+        )
+        for source in statewide_sources_for_state(state)
+    ]
 
 def discover_flatfile_sources(county_cfg: Dict[str, Any]) -> List[SourceCandidate]:
     return [SourceCandidate(county_cfg[k],"flatfile",.7,f"Configured {k}") for k in ("parcel_source_url","open_gov_url","data_url") if county_cfg.get(k)]
@@ -81,13 +95,7 @@ def _source_quality(field_map: Dict[str,str], meta: Dict[str,Any]) -> Dict[str,A
     return {"source_quality":tier,"source_quality_score":score,"useful_field_count":useful_count,"missing_useful_fields":[k for k in useful if k not in field_map]}
 
 def discover_arcgis_county_config(county_id: str, county_name: str, state: str) -> Optional[Dict[str,Any]]:
-    """Discover a public ArcGIS parcel layer for one county on demand.
-
-    Candidate ranking is intentionally conservative: an ArcGIS item being
-    reachable is not enough to register it as a parcel source. The item must
-    have parcel/property semantics and the layer must expose enough parcel
-    fields for DealScan's downstream ETL to be useful.
-    """
+    """Discover a public ArcGIS parcel layer for one county on demand."""
     county=_norm(county_name.replace(" County","")); st=_norm(state)
     q=f'("{county}" OR "{county_name}") AND (parcel OR parcels) AND ("{state}" OR {st})'
     url="https://www.arcgis.com/sharing/rest/search?f=json&num=100&q="+quote_plus(q)
@@ -119,9 +127,6 @@ def discover_arcgis_county_config(county_id: str, county_name: str, state: str) 
                     if lm.ok and isinstance(lm.body,dict): candidates.append((u,lm.body))
         for layer,lm in candidates:
             fm=_field_map(lm); quality=_source_quality(fm,lm)
-            # Reject generic ArcGIS layers that merely have geometry/object IDs.
-            # A discovered source should be useful for parcel ETL before it is
-            # persisted; live extraction/validation remains a separate step.
             if score < 6 or quality["source_quality_score"] < 55: continue
             if "apn" not in fm: continue
             modified=item.get("modified") or lm.get("lastEditDate") or lm.get("editingInfo",{}).get("lastEditDate")
