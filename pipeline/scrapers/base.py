@@ -6,6 +6,9 @@ Polite, cache-backed HTTP client + source probing + shared adapter interface.
 from __future__ import annotations
 
 import json
+import logging
+import math
+import tempfile
 import os
 import time
 import urllib.robotparser as robotparser
@@ -15,10 +18,13 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import requests
+from urllib3.exceptions import HTTPError as TransportError
 
 USER_AGENT = "DealScanBot/0.1 (+https://github.com/doriaphiri82-glitch/dealscan; land screening research)"
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "cache")
 DEFAULT_TTL = 7 * 24 * 3600
+DEFAULT_MAX_BYTES = 16 * 1024 * 1024
+log = logging.getLogger(__name__)
 MIN_DELAY = 2.0
 MAX_DELAY = 4.0
 
@@ -38,38 +44,53 @@ class FetchResult:
 
 def _cache_path(url: str, ns: str = "") -> str:
     import hashlib
-    h = hashlib.sha256(f"{ns}:{url}".encode()).hexdigest()[:24]
-    host = urlparse(url).netloc.replace(":", "_")
-    d = os.path.join(CACHE_DIR, host)
-    os.makedirs(d, exist_ok=True)
-    return os.path.join(d, f"{h}.cache")
+    # Never turn an untrusted hostname into a filesystem path.
+    host = hashlib.sha256(urlparse(url).netloc.encode()).hexdigest()[:16]
+    key = hashlib.sha256(f"{ns}:{url}".encode()).hexdigest()
+    return os.path.join(CACHE_DIR,host,key+'.cache')
 
 
-def _cached(url: str, ttl: int, ns: str = "") -> Optional[Any]:
-    p = _cache_path(url, ns)
-    if not os.path.exists(p) or time.time() - os.path.getmtime(p) > ttl:
-        return None
+def _cached(url: str, ttl: int, ns: str = "", max_bytes: int = DEFAULT_MAX_BYTES) -> Optional[Any]:
     try:
-        with open(p, "r", encoding="utf-8") as f:
-            envelope = json.load(f)
-        if envelope.get("b64"):
+        path = _cache_path(url,ns)
+        stat = os.stat(path)
+        age = time.time()-stat.st_mtime
+        if age<0 or age>ttl or stat.st_size>max_bytes*2+16384: return None
+        with open(path,encoding='utf-8') as source: envelope=json.load(source)
+        if not isinstance(envelope,dict) or 'body' not in envelope: return None
+        value=envelope['body']
+        if envelope.get('b64'):
             import base64
-            return base64.b64decode(envelope.get("body") or "")
-        return envelope.get("body")
-    except Exception:
+            value=base64.b64decode(value,validate=True)
+        size=len(value) if isinstance(value,bytes) else len(json.dumps(value,ensure_ascii=False,allow_nan=False).encode())
+        return value if size<=max_bytes else None
+    except FileNotFoundError: return None
+    except (OSError,ValueError,TypeError):
+        log.warning('Source cache read unavailable; performing a fresh request')
         return None
 
 
 def _store_cache(url: str, body: Any, ns: str = "") -> None:
+    temporary=None
     try:
-        stored = body
-        if isinstance(body, bytes):
+        stored=body
+        if isinstance(body,bytes):
             import base64
-            stored = base64.b64encode(body).decode("ascii")
-        with open(_cache_path(url, ns), "w", encoding="utf-8") as f:
-            json.dump({"url": url, "fetched_at": time.time(), "b64": isinstance(body, bytes), "body": stored}, f)
-    except Exception:
-        pass
+            stored=base64.b64encode(body).decode('ascii')
+        path=_cache_path(url,ns)
+        os.makedirs(os.path.dirname(path),mode=0o700,exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=os.path.dirname(path),delete=False) as target:
+            temporary=target.name
+            json.dump({'fetched_at':time.time(),'b64':isinstance(body,bytes),'body':stored},target,allow_nan=False,ensure_ascii=False)
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temporary,path)
+    except (OSError,ValueError,TypeError):
+        log.warning('Optional source cache write unavailable; fetched data remains usable')
+    finally:
+        if temporary:
+            try: os.unlink(temporary)
+            except OSError: pass
 
 
 def _politeness_delay(url: str) -> None:
@@ -83,104 +104,123 @@ def _politeness_delay(url: str) -> None:
     _last_request_at[host] = time.time()
 
 
-def _bounded_content(response, max_bytes: int) -> bytes:
+def _valid_url(url: str) -> bool:
     try:
-        size = response.headers.get('content-length')
-        if size and int(size) > max_bytes: raise ValueError('Response exceeds byte limit')
-        chunks, length = [], 0
-        for chunk in response.iter_content(chunk_size=65536):
-            length += len(chunk)
-            if length > max_bytes: raise ValueError('Response exceeds byte limit')
-            chunks.append(chunk)
-        return b''.join(chunks)
+        parsed=urlparse(url)
+        return isinstance(url,str) and not any(ord(char)<32 or ord(char)==127 for char in url) and parsed.scheme in {'https','http'} and bool(parsed.hostname) and not (parsed.username or parsed.password) and (parsed.port is None or 1<=parsed.port<=65535)
+    except (TypeError,ValueError): return False
+
+
+def _bounded_content(response, max_bytes: int, deadline: float | None = None) -> bytes:
+    try:
+        size=response.headers.get('content-length')
+        if size and int(size)>max_bytes: raise ValueError('Response exceeds byte limit')
+        raw=getattr(response,'raw',None)
+        read1=getattr(raw,'read1',None)
+        def chunks():
+            if callable(read1):
+                # read1 returns available data, rather than waiting to fill a large
+                # buffer while a slow peer keeps resetting the socket timeout.
+                while True:
+                    if deadline is not None and time.monotonic()>deadline: raise TimeoutError()
+                    chunk=read1(65536,decode_content=True)
+                    if not chunk: break
+                    yield chunk
+            else:
+                yield from response.iter_content(chunk_size=65536)
+        content=bytearray()
+        for chunk in chunks():
+            if deadline is not None and time.monotonic()>deadline: raise TimeoutError()
+            if len(content)+len(chunk)>max_bytes: raise ValueError('Response exceeds byte limit')
+            content.extend(chunk)
+        return bytes(content)
     finally:
         response.close()
 
 
 def robots_allows(url: str) -> bool:
+    if not _valid_url(url): return False
     try:
-        parsed = urlparse(url)
-        rp = robotparser.RobotFileParser()
-        response = _session.get(f'{parsed.scheme}://{parsed.netloc}/robots.txt',timeout=(5,10),allow_redirects=False,stream=True)
+        parsed=urlparse(url)
+        response=_session.get(f'{parsed.scheme}://{parsed.netloc}/robots.txt',timeout=(5,10),allow_redirects=False,stream=True)
         if response.status_code in (404,410):
             response.close()
             return True
-        if response.status_code != 200:
+        if response.status_code!=200:
             response.close()
             return False
-        rp.parse(_bounded_content(response,65536).decode('utf-8',errors='replace').splitlines())
+        rp=robotparser.RobotFileParser()
+        rp.parse(_bounded_content(response,65536,time.monotonic()+10).decode('utf-8',errors='replace').splitlines())
         return rp.can_fetch(USER_AGENT,url)
-    except (requests.RequestException,ValueError):
-        return False
+    except (requests.RequestException,TransportError,OSError,ValueError): return False
 
 
-def fetch(url: str, ttl: int = DEFAULT_TTL, as_json: bool = False,
-          respect_robots: bool = True, retries: int = 2,
-          timeout: int = 30, raw: bool = False, max_bytes: int | None = None) -> FetchResult:
-    parsed = urlparse(url)
-    if parsed.scheme not in {'https','http'} or not parsed.hostname or parsed.username or parsed.password:
-        return FetchResult(ok=False,error='Invalid source URL')
-    if max_bytes is not None and not 1<=max_bytes<=128*1024*1024:
-        return FetchResult(ok=False,error='Invalid response byte cap')
-    ns = "raw" if raw else ""
-    cached = _cached(url, ttl, ns) if ttl > 0 else None
-    if cached is not None:
-        if max_bytes is not None and isinstance(cached,bytes) and len(cached)>max_bytes:
-            return FetchResult(ok=False,error="Cached response exceeds byte limit")
-        return FetchResult(ok=True, status=200, body=cached, from_cache=True)
+def _json(content: bytes):
+    def constant(_): raise ValueError('Nonfinite JSON value')
+    def pairs(items):
+        result={}
+        for key,value in items:
+            if key in result: raise ValueError('Duplicate JSON field')
+            result[key]=value
+        return result
+    return json.loads(content,parse_constant=constant,object_pairs_hook=pairs)
+
+
+def _network(method: str,url: str,*,payload=None,raw=False,as_json=False,
+             timeout=30,retries=2,max_bytes=DEFAULT_MAX_BYTES) -> FetchResult:
+    if not _valid_url(url): return FetchResult(False,error='Invalid source URL')
+    if type(max_bytes) is not int or not 1<=max_bytes<=128*1024*1024:
+        return FetchResult(False,error='Invalid response byte cap')
+    if type(retries) is not int or not 0<=retries<=3 or not isinstance(timeout,(int,float)) or isinstance(timeout,bool) or not math.isfinite(timeout) or not 0<timeout<=120:
+        return FetchResult(False,error='Invalid request timeout or retry budget')
+    for attempt in range(retries+1):
+        _politeness_delay(url)
+        response=None
+        try:
+            deadline=time.monotonic()+timeout
+            options={'timeout':(min(5,timeout),min(10,timeout)),'allow_redirects':False,'stream':True}
+            response=_session.post(url,data=payload,**options) if method=='POST' else _session.get(url,**options)
+            if response.status_code!=200:
+                status=response.status_code
+                response.close()
+                if status in (429,500,502,503,504) and attempt<retries:
+                    time.sleep(2**attempt*5)
+                    continue
+                return FetchResult(False,status,error=f'HTTP {status}')
+            content=_bounded_content(response,max_bytes,deadline)
+            body=content if raw else _json(content) if as_json or 'json' in response.headers.get('content-type','') else content.decode(response.encoding or 'utf-8')
+            if time.monotonic()>deadline: raise TimeoutError()
+            return FetchResult(True,200,body)
+        except (ValueError,UnicodeError):
+            return FetchResult(False,error='Invalid or oversized source response')
+        except (requests.RequestException,TransportError,OSError) as exc:
+            if attempt>=retries: return FetchResult(False,error=type(exc).__name__)
+            time.sleep(2**attempt*5)
+        finally:
+            if response is not None: response.close()
+    return FetchResult(False,error='unreachable')
+
+
+def fetch(url: str,ttl: int=DEFAULT_TTL,as_json: bool=False,respect_robots: bool=True,
+          retries: int=2,timeout: int=30,raw: bool=False,max_bytes: int | None=DEFAULT_MAX_BYTES) -> FetchResult:
+    max_bytes=DEFAULT_MAX_BYTES if max_bytes is None else max_bytes
+    if not _valid_url(url): return FetchResult(False,error='Invalid source URL')
+    if type(max_bytes) is not int or not 1<=max_bytes<=128*1024*1024:
+        return FetchResult(False,error='Invalid response byte cap')
+    # A text/JSON/raw request must never reuse an incompatible cached value.
+    ns='v2-'+('raw' if raw else 'json' if as_json else 'auto')
+    cached=_cached(url,ttl,ns,max_bytes) if ttl>0 else None
+    if cached is not None: return FetchResult(True,200,cached,from_cache=True)
     if respect_robots and not robots_allows(url):
-        return FetchResult(ok=False, error="robots.txt disallows this URL")
-    for attempt in range(retries + 1):
-        _politeness_delay(url)
-        try:
-            resp = _session.get(url, timeout=timeout, allow_redirects=False, **({"stream":True} if max_bytes is not None else {}))
-            if resp.status_code == 200:
-                if max_bytes is not None:
-                    content = _bounded_content(resp,max_bytes)
-                    body = content if raw else json.loads(content) if as_json or 'application/json' in resp.headers.get('content-type','') else content.decode(resp.encoding or 'utf-8')
-                elif raw:
-                    body = resp.content
-                elif as_json:
-                    body = resp.json()
-                else:
-                    ctype = resp.headers.get("content-type", "")
-                    body = resp.json() if "application/json" in ctype else resp.text
-                if ttl > 0:
-                    _store_cache(url, body, ns)
-                return FetchResult(ok=True, status=200, body=body)
-            if max_bytes is not None: resp.close()
-            if resp.status_code in (429, 500, 502, 503, 504) and attempt < retries:
-                time.sleep(2 ** attempt * 5)
-                continue
-            return FetchResult(ok=False, status=resp.status_code, error=f"HTTP {resp.status_code}")
-        except ValueError:
-            return FetchResult(ok=False,error="Invalid or oversized source response")
-        except requests.RequestException as exc:
-            if attempt >= retries:
-                return FetchResult(ok=False, error=type(exc).__name__)
-            time.sleep(2 ** attempt * 5)
-    return FetchResult(ok=False, error="unreachable")
+        return FetchResult(False,error='robots.txt disallows or cannot verify this URL')
+    result=_network('GET',url,raw=raw,as_json=as_json,timeout=timeout,retries=retries,max_bytes=max_bytes)
+    if result.ok and ttl>0: _store_cache(url,result.body,ns)
+    return result
 
 
-def post_json(url: str, payload: Dict[str, Any], timeout: int = 30,
-              retries: int = 1) -> FetchResult:
-    for attempt in range(retries + 1):
-        _politeness_delay(url)
-        try:
-            resp = _session.post(url, data=payload, timeout=timeout, allow_redirects=False)
-            if resp.status_code == 200:
-                return FetchResult(ok=True, status=200, body=resp.json())
-            if resp.status_code in (429, 500, 502, 503, 504) and attempt < retries:
-                time.sleep(5)
-                continue
-            return FetchResult(ok=False, status=resp.status_code, error=f"HTTP {resp.status_code}")
-        except ValueError:
-            return FetchResult(ok=False,error="Invalid or oversized source response")
-        except requests.RequestException as exc:
-            if attempt >= retries:
-                return FetchResult(ok=False, error=type(exc).__name__)
-            time.sleep(5)
-    return FetchResult(ok=False, error="unreachable")
+def post_json(url: str,payload: Dict[str,Any],timeout: int=30,retries: int=1,
+              max_bytes: int=DEFAULT_MAX_BYTES) -> FetchResult:
+    return _network('POST',url,payload=payload,as_json=True,timeout=timeout,retries=retries,max_bytes=max_bytes)
 
 
 @dataclass

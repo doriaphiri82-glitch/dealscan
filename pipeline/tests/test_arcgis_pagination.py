@@ -55,3 +55,36 @@ def test_non_paginatable_services_are_quarantined(monkeypatch):
     meta = layer_metadata(); meta['advancedQueryCapabilities']['supportsPagination'] = False
     with pytest.raises(RuntimeError, match='ordered pagination'):
         list(arcgis.query_layer('https://county.example/0', '1=1', ['APN'], metadata=meta))
+
+
+@pytest.mark.parametrize('pages',[[page([2,1],False)],[page([1,3]),page([2,4],False)]])
+def test_source_must_actually_obey_ordering_within_and_between_pages(monkeypatch,pages):
+    responses=iter(pages)
+    monkeypatch.setattr(arcgis,'post_json',lambda *a:next(responses))
+    with pytest.raises(RuntimeError,match='ordered object-ID'):
+        list(arcgis.query_layer('https://county.example/0','1=1',['APN'],page_size=2,metadata=layer_metadata()))
+
+
+def test_large_object_ids_are_not_rounded_through_floats(monkeypatch):
+    ids=[2**53,2**53+1]
+    monkeypatch.setattr(arcgis,'post_json',lambda *a:page(ids,False))
+    assert [r['OBJECTID'] for r in arcgis.query_layer('https://county.example/0','1=1',['APN'],metadata=layer_metadata())]==ids
+
+
+@pytest.mark.parametrize('invalid',[True,1.5,'not-an-id',-1,2**63])
+def test_invalid_object_ids_are_retained_as_malformed_evidence_not_parcel_identities(monkeypatch,invalid):
+    monkeypatch.setattr(arcgis,'post_json',lambda *a:page([invalid],False))
+    rows=list(arcgis.query_layer('https://county.example/0','1=1',['APN'],metadata=layer_metadata()))
+    assert list(rows[0])==['_malformed_feature']
+
+
+def test_identifier_representation_changes_do_not_bypass_duplicate_detection(monkeypatch):
+    monkeypatch.setattr(arcgis,'post_json',lambda *a:page([1,'01'],False))
+    with pytest.raises(RuntimeError,match='repeated'):
+        list(arcgis.query_layer('https://county.example/0','1=1',['APN'],metadata=layer_metadata()))
+
+
+def test_nonexistent_declared_object_id_is_not_treated_as_valid_pagination():
+    meta=layer_metadata();meta['objectIdField']='MISSING'
+    with pytest.raises(RuntimeError,match='ordered pagination'):
+        list(arcgis.query_layer('https://county.example/0','1=1',['APN'],metadata=meta))

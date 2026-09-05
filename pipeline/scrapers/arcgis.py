@@ -10,6 +10,7 @@ config.counties.COUNTIES[c]['sources']['arcgis']['fields'].
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, Iterator, List, Optional
 
 from .base import fetch, post_json, probe, ProbeResult  # noqa: F401
@@ -92,8 +93,20 @@ def layer_fields(layer_url: str) -> Optional[List[str]]:
 
 
 def object_id_field(metadata: dict) -> str:
-    return str(metadata.get('objectIdField') or next((field['name'] for field in metadata.get('fields', [])
-               if field.get('type') == 'esriFieldTypeOID'), ''))
+    fields=[field for field in metadata.get('fields',[]) if isinstance(field,dict) and isinstance(field.get('name'),str)]
+    declared=metadata.get('objectIdField')
+    if isinstance(declared,str) and declared:
+        matches=[field['name'] for field in fields if field['name'].casefold()==declared.casefold()]
+        return matches[0] if len(matches)==1 else ''
+    candidates=[field['name'] for field in fields if field.get('type')=='esriFieldTypeOID']
+    return candidates[0] if len(candidates)==1 else ''
+
+
+def _oid_number(value) -> int | None:
+    if type(value) is int: result=value
+    elif isinstance(value,str) and re.fullmatch(r'[0-9]+',value): result=int(value)
+    else: return None
+    return result if 0<=result<=2**63-1 else None
 
 
 def query_count(layer_url: str, where: str = '1=1') -> int:
@@ -117,15 +130,18 @@ def resolve_field_mapping(field_map: Dict[str, Any],
     """
     if not source_fields:
         return dict(field_map)
-    actual = {str(name).strip().lower(): name for name in source_fields
+    actual = {str(name).strip().casefold(): name for name in source_fields
               if name not in (None, "")}
+
+    if len(actual)!=len([name for name in source_fields if name not in (None,'')]):
+        raise ValueError('Ambiguous source field casing')
 
     def resolve(value: Any) -> Any:
         if isinstance(value, (list, tuple)):
             return [resolve(part) for part in value]
-        if not isinstance(value, str) or not value or "." in value:
+        if not isinstance(value, str) or not value:
             return value
-        return actual.get(value.strip().lower(), value)
+        return actual.get(value.strip().casefold(), value)
 
     return {pipeline_field: resolve(src_field)
             for pipeline_field, src_field in field_map.items()}
@@ -139,8 +155,9 @@ def query_layer(layer_url: str, where: str, out_fields: List[str],
     Never mistake a service-imposed page cap for exhaustion, accept a repeated
     page, or exceed a caller's bound. Unsupported pagination is quarantined.
     """
-    if max_records <= 0 or page_size <= 0:
-        return
+    if type(max_records) is not int or type(page_size) is not int or not 0<=max_records<=5000 or page_size<=0:
+        raise ValueError('Invalid ArcGIS record or page bound')
+    if max_records==0: return
     meta = metadata if metadata is not None else layer_metadata(layer_url)
     oid = object_id_field(meta)
     capabilities = meta.get('advancedQueryCapabilities') or {}
@@ -153,6 +170,7 @@ def query_layer(layer_url: str, where: str, out_fields: List[str],
     fields = list(dict.fromkeys([*out_fields, oid]))
     offset = 0
     seen = set()
+    previous = None
     if diagnostics is not None:
         diagnostics.update(pages=0, record_limit=limit, object_id_field=oid)
     while offset < max_records:
@@ -179,15 +197,19 @@ def query_layer(layer_url: str, where: str, out_fields: List[str],
             return
         for feature in features:
             attrs = feature.get('attributes') if isinstance(feature, dict) else None
-            if not isinstance(attrs, dict) or attrs.get(oid) is None:
+            numeric_id=_oid_number(attrs.get(oid)) if isinstance(attrs,dict) else None
+            if numeric_id is None:
                 # Reject this one malformed source record in the adapter, while
                 # keeping valid siblings and the raw payload available for audit.
                 yield {'_malformed_feature': feature}
                 continue
-            identity = str(attrs[oid])
+            identity = numeric_id
             if identity in seen:
                 raise RuntimeError('ArcGIS pagination repeated an object ID')
+            if previous is not None and identity<=previous:
+                raise RuntimeError('ArcGIS source ignored ordered object-ID pagination')
             seen.add(identity)
+            previous=identity
             yield attrs
         offset += len(features)
         if body.get('exceededTransferLimit') is False:

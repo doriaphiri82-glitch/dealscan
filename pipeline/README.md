@@ -77,3 +77,11 @@ classes do not constitute live-validated, production-authorized flat-file covera
 Email CLI delivery is disabled. Optional provider utilities require actual consent,
 a real unsubscribe URL and explicit enabling; they report provider acceptance,
 not confirmed inbox delivery. Waitlist requests do not become alert subscriptions.
+
+
+HTTP reads and ArcGIS query responses enforce a 16 MiB default expanded-byte cap,
+a per-request deadline, bounded retries and no redirects. Bulk readers have their
+own explicit cap. JSON duplicate keys and nonfinite JSON constants are errors.
+Optional private caches are atomic, size-bounded and separated by response format;
+cache failure does not falsify a successful uncached read. ArcGIS pagination must
+actually produce strictly increasing, valid object IDs, including 64-bit IDs.
