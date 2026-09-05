@@ -42,15 +42,18 @@ def _statewide_queue(states: Optional[Iterable[str]] = None) -> List[Dict[str, A
     return _statewide_snapshot(states)["queue"]
 
 
-def discover_and_register(limit:int=25, states: Optional[Iterable[str]] = None)->Dict[str,Any]:
+def discover_and_register(limit:int=25, states: Optional[Iterable[str]] = None, statewide_queue: Optional[List[Dict[str, Any]]] = None)->Dict[str,Any]:
     """Discover sources fairly, prioritizing authoritative statewide enumeration."""
     ensure_national_counties()
-    try:
-        statewide = _statewide_queue(states)
-        statewide_error = None
-    except Exception as exc:
-        statewide = []
-        statewide_error = str(exc)[:300]
+    statewide_error = None
+    if statewide_queue is None:
+        try:
+            statewide = _statewide_queue(states)
+        except Exception as exc:
+            statewide = []
+            statewide_error = str(exc)[:300]
+    else:
+        statewide = list(statewide_queue)
     queued_ids = {row["county_id"] for row in statewide}
     wanted = {str(state).strip().lower() for state in states} if states else None
     candidates=[c for c in list_counties() if c.get("coverage_status")!="tier_5" and ((not c.get("arcgis_layer_url") and not c.get("parcel_source_url")) or c.get("validation_status") in {"invalid","unreachable"})]
@@ -85,9 +88,10 @@ def run_statewide_batch(states: Optional[Iterable[str]] = None, discovery_limit:
     queue = snapshot["queue"]
     wanted = {str(state).strip().lower() for state in states} if states else None
     queued = [row for row in queue if not wanted or str(row.get("state") or "").strip().lower() in wanted]
-    discovery = discover_and_register(limit=_limit(discovery_limit), states=states)
+    discovery = discover_and_register(limit=_limit(discovery_limit), states=states, statewide_queue=queued)
     discovered_ids = {row.get("county_id") for row in discovery.get("results", []) if row.get("status") == "discovered" and row.get("county_id") in {q.get("county_id") for q in queued}}
     refreshed = {str(row.get("county_id")): row for row in list_counties()}
+    coverage = build_statewide_coverage_report(snapshot["reconciled"], snapshot["census"].values(), refreshed.values(), states=states)
     targets = [refreshed[cid] for cid in discovered_ids if cid in refreshed]
     targets.sort(key=lambda row: (str(row.get("state_fips") or ""), str(row.get("county_fips") or ""), str(row.get("county_id") or "")))
     etl_results = []
@@ -97,7 +101,7 @@ def run_statewide_batch(states: Optional[Iterable[str]] = None, discovery_limit:
         except Exception as exc:
             etl_results.append({"county_id": county["county_id"], "status": "error", "error": str(exc)[:300]})
     ok = sum(1 for result in etl_results if result.get("status") in {"ok", "degraded"})
-    return {"states": sorted(wanted) if wanted else None, "statewide_queued": len(queued), "coverage": snapshot["coverage"], "discovery": discovery, "etl": {"attempted": len(etl_results), "ok": ok, "results": etl_results}}
+    return {"states": sorted(wanted) if wanted else None, "statewide_queued": len(queued), "coverage": coverage, "discovery": discovery, "etl": {"attempted": len(etl_results), "ok": ok, "results": etl_results}}
 
 
 def run_national_batch(limit:int=10,max_records:int=5000,mode:str="publish")->Dict[str,Any]:
