@@ -10,10 +10,12 @@ from discovery.statewide_queue import build_county_discovery_queue
 from discovery.statewide_sources import all_statewide_sources
 from discovery.statewide_coverage import build_statewide_coverage_report
 from runners import run as run_county
+from validation.gates import authorization_error
+from config.source_config import county_config
 
 
 def _limit(value:int,default:int=25)->int:
-    try:return max(1,min(int(value),250))
+    try:return max(0,min(int(value),250))
     except (TypeError,ValueError):return default
 
 
@@ -24,12 +26,11 @@ def _statewide_snapshot(states: Optional[Iterable[str]] = None) -> Dict[str, Any
         return {"census": {}, "reconciled": [], "queue": [], "coverage": {"states": {}, "totals": {}}}
     wanted = {str(state).strip().lower() for state in states} if states else None
     candidates: List[Dict[str, Any]] = []
-    for source in all_statewide_sources():
-        if source.source_type != "arcgis_layer":
+    source_states = sorted({source.state for source in all_statewide_sources() if source.source_type == 'arcgis_layer'})
+    for state in source_states:
+        if wanted and state.lower() not in wanted:
             continue
-        if wanted and source.state.lower() not in wanted:
-            continue
-        candidates.extend(enumerate_statewide_counties(source.state))
+        candidates.extend(enumerate_statewide_counties(state))
     reconciled = reconcile_enumerated_statewide_counties(candidates, census.values())
     registry = list_counties()
     queue = build_county_discovery_queue(reconciled, registry)
@@ -68,7 +69,7 @@ def discover_and_register(limit:int=25, states: Optional[Iterable[str]] = None, 
             if not cfg:
                 results.append({"county_id":cid,"status":"not_found","statewide_hint":cid in statewide_by_id}); continue
             fields=cfg.get("fields",{});quality=cfg.get("source_quality","partial");freshness=cfg.get("source_last_modified");layer_url=cfg.get("arcgis_layer_url")
-            patch={"data_source_type":"arcgis","gis_url":cfg.get("arcgis_root"),"parcel_source_url":layer_url,"arcgis_layer_url":layer_url,"source_vendor":"esri","scraper_type":"arcgis","verification_status":"discovered_not_verified","coverage_status":"tier_1","field_mapping":fields,"data_freshness":str(freshness) if freshness is not None else None,"notes":f"Public ArcGIS source discovered; live validation pending; source quality={quality}","extra":{"arcgis_layer_url":layer_url,"discovery_source":cfg.get("discovery_source"),"discovery_score":cfg.get("discovery_score"),"field_count":len(fields),"source_quality":quality,"source_quality_score":cfg.get("source_quality_score",0),"useful_field_count":cfg.get("useful_field_count",0),"missing_useful_fields":cfg.get("missing_useful_fields",[]),"source_last_modified":freshness,"statewide_source_hint":statewide_by_id.get(cid,{}).get("source_url")}}
+            patch={"data_source_type":"arcgis","gis_url":cfg.get("arcgis_root"),"parcel_source_url":layer_url,"arcgis_layer_url":layer_url,"source_vendor":"esri","scraper_type":"arcgis","verification_status":"discovered_not_verified","coverage_status":"tier_1","validation_status":"pending","ingestion_authorized":False,"validated_source_fingerprint":None,"authorized_source_fingerprint":None,"last_validated_at":None,"field_mapping":fields,"data_freshness":str(freshness) if freshness is not None else None,"notes":f"Public ArcGIS source discovered; live validation pending; source quality={quality}","extra":{"arcgis_layer_url":layer_url,"discovery_source":cfg.get("discovery_source"),"discovery_score":cfg.get("discovery_score"),"field_count":len(fields),"source_quality":quality,"source_quality_score":cfg.get("source_quality_score",0),"useful_field_count":cfg.get("useful_field_count",0),"missing_useful_fields":cfg.get("missing_useful_fields",[]),"source_last_modified":freshness,"statewide_source_hint":statewide_by_id.get(cid,{}).get("source_url")}}
             if persist: update_county(cid,**patch)
             found+=1;results.append({"county_id":cid,"status":"discovered","url":layer_url,"field_count":len(fields),"discovery_score":cfg.get("discovery_score"),"source_quality":quality,"source_quality_score":cfg.get("source_quality_score",0),"source_last_modified":freshness,"statewide_hint":cid in statewide_by_id,"registry_patch":patch})
         except Exception as exc: results.append({"county_id":cid,"status":"error","error":str(exc)[:300],"statewide_hint":cid in statewide_by_id})
@@ -92,22 +93,23 @@ def run_statewide_batch(states: Optional[Iterable[str]] = None, discovery_limit:
     coverage = build_statewide_coverage_report(snapshot["reconciled"], snapshot["census"].values(), refreshed.values(), states=states)
     # Discovery is deliberately not ETL authorization. A newly discovered source
     # must pass live validation first; only validation_status=valid can enter ETL.
-    valid_ids = {str(q.get("county_id")) for q in queued if str(refreshed.get(str(q.get("county_id")), {}).get("validation_status") or "").lower() == "valid"}
-    targets = [refreshed[cid] for cid in valid_ids if cid in refreshed]
+    targets = [row for row in refreshed.values()
+               if (not wanted or str(row.get('state') or '').strip().lower() in wanted)
+               and not authorization_error(row, county_config(row['county_id'], row))]
     targets.sort(key=lambda row: (str(row.get("state_fips") or ""), str(row.get("county_fips") or ""), str(row.get("county_id") or "")))
     etl_results=[]
     for county in targets[:_limit(etl_limit,5)]:
         try: etl_results.append(run_county(county["county_id"],mode=mode,dry_run=not persist,max_records=max(1,min(int(max_records),10000))))
         except Exception as exc: etl_results.append({"county_id":county["county_id"],"status":"error","error":str(exc)[:300]})
-    return {"states":sorted(wanted) if wanted else None,"statewide_queued":len(queued),"coverage":coverage,"discovery":discovery,"etl":{"attempted":len(etl_results),"ok":sum(1 for result in etl_results if result.get("status") in {"ok","degraded"}),"results":etl_results}}
+    return {"states":sorted(wanted) if wanted else None,"statewide_queued":len(queued),"coverage":coverage,"discovery":discovery,"etl":{"attempted":len(etl_results),"ok":sum(1 for result in etl_results if result.get("status") == "ok"),"results":etl_results}}
 
 
 def run_national_batch(limit:int=10,max_records:int=5000,mode:str="publish")->Dict[str,Any]:
     ensure_national_counties()
-    candidates=[c for c in list_counties() if c.get("validation_status")=="valid" and (c.get("arcgis_layer_url") or c.get("parcel_source_url") or c.get("arcgis_root"))]
+    candidates=[c for c in list_counties() if not authorization_error(c, county_config(c["county_id"], c))]
     candidates.sort(key=lambda c:(c.get("last_successful_run") is not None,c.get("last_successful_run") or "",c.get("state",""),c.get("county_name","")))
     results=[]
     for county in candidates[:_limit(limit,10)]:
         try: results.append(run_county(county["county_id"],mode=mode,max_records=max(1,min(int(max_records),10000))))
         except Exception as exc: results.append({"county_id":county["county_id"],"status":"error","counts":{},"error":str(exc)[:300]})
-    return {"attempted":len(results),"ok":sum(1 for r in results if r.get("status") in ("ok","degraded")),"results":results}
+    return {"attempted":len(results),"ok":sum(1 for r in results if r.get("status") == "ok"),"results":results}

@@ -22,16 +22,16 @@ def _recompute_meta(reg):
     counties=reg.setdefault("counties",{}); by_state={}
     for c in counties.values():
         state=c.get("state","Unknown"); by_state[state]=by_state.get(state,0)+1
-    reg["meta"]={"total":len(counties),"by_state":by_state}
+    reg["meta"]={**reg.get("meta",{}),"total":len(counties),"by_state":by_state}
 
 def _entry(county_id:str,county_name:str,state:str,state_fips:str,county_fips:str,geoid:str,population:Optional[int]=None,data_source_type:Optional[str]=None,assessor_url:Optional[str]=None,gis_url:Optional[str]=None,parcel_source_url:Optional[str]=None,tax_source_url:Optional[str]=None,delinquent_tax_source_url:Optional[str]=None,zoning_source_url:Optional[str]=None,source_vendor:Optional[str]=None,scraper_type:Optional[str]=None,verification_status="not_implemented",coverage_status="tier_0",last_successful_run:Optional[str]=None,last_record_count:Optional[int]=None,data_freshness:Optional[str]=None,field_mapping:Optional[Dict[str,str]]=None,notes:Optional[str]=None,extra:Optional[Dict[str,Any]]=None):
     entry={"county_id":county_id,"county_name":county_name,"state":state,"state_fips":state_fips,"county_fips":county_fips,"geoid":geoid,"population":population,"data_source_type":data_source_type,"assessor_url":assessor_url,"gis_url":gis_url,"parcel_source_url":parcel_source_url,"tax_source_url":tax_source_url,"delinquent_tax_source_url":delinquent_tax_source_url,"zoning_source_url":zoning_source_url,"source_vendor":source_vendor,"scraper_type":scraper_type,"verification_status":verification_status,"coverage_status":coverage_status,"last_successful_run":last_successful_run,"last_record_count":last_record_count,"last_published_count":None,"data_freshness":data_freshness,"field_mapping":field_mapping or {},"notes":notes or ""}
     entry.update(extra or {}); return entry
 
-def register_county(county_id:str,county_name:str,state:str,state_fips:str,county_fips:str,geoid:str,population:Optional[int]=None,data_source_type:Optional[str]=None,assessor_url:Optional[str]=None,gis_url:Optional[str]=None,parcel_source_url:Optional[str]=None,tax_source_url:Optional[str]=None,delinquent_tax_source_url:Optional[str]=None,zoning_source_url:Optional[str]=None,source_vendor:Optional[str]=None,scraper_type:Optional[str]=None,verification_status="not_implemented",coverage_status="tier_0",last_successful_run:Optional[str]=None,last_record_count:Optional[int]=None,data_freshness:Optional[str]=None,field_mapping:Optional[Dict[str,str]]=None,notes:Optional[str]=None,extra:Optional[Dict[str,Any]]=None,arcgis_layer_url:Optional[str]=None):
+def register_county(county_id:str,county_name:str,state:str,state_fips:str,county_fips:str,geoid:str,population:Optional[int]=None,data_source_type:Optional[str]=None,assessor_url:Optional[str]=None,gis_url:Optional[str]=None,parcel_source_url:Optional[str]=None,tax_source_url:Optional[str]=None,delinquent_tax_source_url:Optional[str]=None,zoning_source_url:Optional[str]=None,source_vendor:Optional[str]=None,scraper_type:Optional[str]=None,verification_status="not_implemented",coverage_status="tier_0",last_successful_run:Optional[str]=None,last_record_count:Optional[int]=None,data_freshness:Optional[str]=None,field_mapping:Optional[Dict[str,str]]=None,notes:Optional[str]=None,extra:Optional[Dict[str,Any]]=None,arcgis_layer_url:Optional[str]=None, **source_metadata):
     """Register one county, including ArcGIS layer identity when supplied."""
     reg=_load_registry(); counties=reg.setdefault("counties",{})
-    extras=dict(extra or {})
+    extras={**(extra or {}), **source_metadata}
     if arcgis_layer_url is not None: extras["arcgis_layer_url"]=arcgis_layer_url
     counties[county_id]=_entry(county_id,county_name,state,state_fips,county_fips,geoid,population,data_source_type,assessor_url,gis_url,parcel_source_url,tax_source_url,delinquent_tax_source_url,zoning_source_url,source_vendor,scraper_type,verification_status,coverage_status,last_successful_run,last_record_count,data_freshness,field_mapping,notes,extras)
     _recompute_meta(reg); _save_registry(reg); return counties[county_id]
@@ -54,13 +54,19 @@ def list_counties(state:Optional[str]=None):
 def update_county(county_id,**fields):
     reg=_load_registry(); entry=reg.get("counties",{}).get(county_id)
     if not entry:return None
-    entry.update({k:v for k,v in fields.items() if v is not None}); _recompute_meta(reg); _save_registry(reg); return entry
+    identity_keys = {'arcgis_layer_url', 'parcel_source_url', 'data_url', 'field_mapping', 'where', 'acreage_units',
+                     'authority_reviewed', 'authority_source_url', 'authority_evidence_url', 'source_county_geoid'}
+    if any(key in fields and fields[key] != entry.get(key) for key in identity_keys):
+        entry.update(validation_status='pending', ingestion_authorized=False,
+                     validated_source_fingerprint=None, authorized_source_fingerprint=None)
+    entry.update(fields)
+    _recompute_meta(reg); _save_registry(reg); return entry
 
-def mark_county_validation(county_id:str, *, status:str, errors:Optional[List[str]]=None, warnings:Optional[List[str]]=None, source_fields_checked:bool=False, sample_checked:int=0):
+def mark_county_validation(county_id:str, *, status:str, errors:Optional[List[str]]=None, warnings:Optional[List[str]]=None, source_fields_checked:bool=False, sample_checked:int=0, pagination_checked:bool=False, fingerprint:Optional[str]=None):
     entry=get_county(county_id)
     if not entry:return None
     now=datetime.now(timezone.utc).isoformat()
-    return update_county(county_id,last_validated_at=now,validation_status=str(status),validation_errors=(errors or [])[:20],validation_warnings=(warnings or [])[:20],validation_source_fields_checked=bool(source_fields_checked),validation_sample_checked=max(0,int(sample_checked)))
+    return update_county(county_id,last_validated_at=now,validation_status=str(status),validation_errors=(errors or [])[:20],validation_warnings=(warnings or [])[:20],validation_source_fields_checked=bool(source_fields_checked),validation_sample_checked=max(0,int(sample_checked)),validation_pagination_checked=pagination_checked,validated_source_fingerprint=fingerprint if status=='valid' else None,ingestion_authorized=False,authorized_source_fingerprint=None)
 
 def mark_county_run(county_id:str, *, record_count:int, qualified_count:int=0, published_count:int=0, persisted_count:int=0, status:str="ok", error:str=""):
     entry=get_county(county_id)

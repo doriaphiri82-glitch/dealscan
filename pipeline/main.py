@@ -14,9 +14,9 @@ def _print_run_summary(summary):
     c=summary.get("counts",{}); print(f"[{summary.get('county_id','?')}] {summary.get('status','unknown')} found={c.get('discovered',0)} downloaded={c.get('downloaded',0)} parsed={c.get('parsed',0)} normalized={c.get('normalized',0)} rejected={c.get('rejected',0)} stored={c.get('stored',0)} scored={c.get('scored',0)} qualified={c.get('qualified',0)} published={c.get('published',0)}")
     if summary.get("error"): print(f"  ERROR: {summary['error'][:300]}")
 
-def run_all(mode='publish',only=''):
+def run_all(mode='publish',only='',max_records=5000):
     ensure_national_counties(); ids=[only] if only else list(COUNTY_SCRAPERS.keys())
-    for cid in ids:_print_run_summary(run_county(cid,mode=mode))
+    for cid in ids:_print_run_summary(run_county(cid,mode=mode,max_records=max_records))
 
 def cmd_probe():
     ensure_national_counties(); print("Probing configured county data sources...\n")
@@ -25,7 +25,7 @@ def cmd_probe():
     print("\nSource probe complete.")
 
 def cmd_run(args):
-    init_db(); run_all(mode='etl-only' if args.etl_only else 'publish',only=args.county or '')
+    init_db(); run_all(mode='etl-only' if args.etl_only else 'publish',only=args.county or '',max_records=args.max_records)
 
 def cmd_discover(args):
     from discovery.national_source_worker import discover_and_register
@@ -73,8 +73,16 @@ def cmd_bundle():
     for d in bundle.get('deals',[]):print(f"  {d.get('deal_score',0):>3}/100 {d.get('county_id',''):12} {d.get('address','')}")
 
 def main():
-    parser=argparse.ArgumentParser(description='DealScan AI Pipeline'); parser.add_argument('--setup-db',action='store_true'); parser.add_argument('--run',action='store_true'); parser.add_argument('--county','-c'); parser.add_argument('--etl-only',action='store_true'); parser.add_argument('--probe',action='store_true'); parser.add_argument('--deliver',action='store_true'); parser.add_argument('--bundle',action='store_true'); parser.add_argument('--discover-national',type=int,metavar='N',help='Discover up to N new public ArcGIS sources'); parser.add_argument('--run-national',type=int,metavar='N',help='Run up to N discovered counties through ETL'); parser.add_argument('--validate-live',type=int,metavar='N',help='Live-validate up to N counties with discovered/configured sources'); parser.add_argument('--include-validated',action='store_true',help='Allow live validation to revisit recently validated counties'); parser.add_argument('--max-records',type=int,default=5000); parser.add_argument('--coverage',action='store_true'); parser.add_argument('--validate',action='store_true',help='Validate every registered county configuration without changing coverage state'); add_county_commands(parser.add_subparsers()); args=parser.parse_args()
-    if args.setup_db:init_db();print('Database initialized.')
+    parser=argparse.ArgumentParser(description='DealScan AI Pipeline'); parser.add_argument('--setup-db',action='store_true'); parser.add_argument('--run',action='store_true'); parser.add_argument('--county','-c'); parser.add_argument('--etl-only',action='store_true'); parser.add_argument('--probe',action='store_true'); parser.add_argument('--deliver',action='store_true'); parser.add_argument('--bundle',action='store_true'); parser.add_argument('--discover-national',type=int,metavar='N',help='Discover up to N new public ArcGIS sources'); parser.add_argument('--run-national',type=int,metavar='N',help='Run up to N discovered counties through ETL'); parser.add_argument('--validate-live',type=int,metavar='N',help='Live-validate up to N counties with discovered/configured sources'); parser.add_argument('--include-validated',action='store_true',help='Allow live validation to revisit recently validated counties'); parser.add_argument('--max-records',type=int,default=5000); parser.add_argument('--coverage',action='store_true'); parser.add_argument('--validate',action='store_true',help='Validate every registered county configuration without changing coverage state'); parser.add_argument('--authorize-county'); parser.add_argument('--authorize-valid',type=int,metavar='N'); add_county_commands(parser.add_subparsers()); args=parser.parse_args()
+    if getattr(args, 'authorize_county', None):
+        from validation.gates import authorize_county
+        result = authorize_county(args.authorize_county)
+        print(result)
+        if not result['authorized']: raise SystemExit(1)
+    elif getattr(args, 'authorize_valid', None) is not None:
+        from validation.gates import authorize_validated_batch
+        print(authorize_validated_batch(args.authorize_valid))
+    elif args.setup_db:init_db();print('Database initialized.')
     elif args.probe:cmd_probe()
     elif args.validate:cmd_validate()
     elif args.validate_live is not None:cmd_validate_live(args)

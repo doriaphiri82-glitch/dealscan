@@ -98,7 +98,7 @@ def fetch(url: str, ttl: int = DEFAULT_TTL, as_json: bool = False,
           respect_robots: bool = True, retries: int = 2,
           timeout: int = 30, raw: bool = False) -> FetchResult:
     ns = "raw" if raw else ""
-    cached = _cached(url, ttl, ns)
+    cached = _cached(url, ttl, ns) if ttl > 0 else None
     if cached is not None:
         return FetchResult(ok=True, status=200, body=cached, from_cache=True)
     if respect_robots and not robots_allows(url):
@@ -115,15 +115,16 @@ def fetch(url: str, ttl: int = DEFAULT_TTL, as_json: bool = False,
                 else:
                     ctype = resp.headers.get("content-type", "")
                     body = resp.json() if "application/json" in ctype else resp.text
-                _store_cache(url, body, ns)
+                if ttl > 0:
+                    _store_cache(url, body, ns)
                 return FetchResult(ok=True, status=200, body=body)
-            if resp.status_code in (429, 503) and attempt < retries:
+            if resp.status_code in (429, 500, 502, 503, 504) and attempt < retries:
                 time.sleep(2 ** attempt * 5)
                 continue
             return FetchResult(ok=False, status=resp.status_code, error=f"HTTP {resp.status_code}")
         except requests.RequestException as exc:
             if attempt >= retries:
-                return FetchResult(ok=False, error=str(exc)[:200])
+                return FetchResult(ok=False, error=type(exc).__name__)
             time.sleep(2 ** attempt * 5)
     return FetchResult(ok=False, error="unreachable")
 
@@ -136,13 +137,13 @@ def post_json(url: str, payload: Dict[str, Any], timeout: int = 30,
             resp = _session.post(url, data=payload, timeout=timeout)
             if resp.status_code == 200:
                 return FetchResult(ok=True, status=200, body=resp.json())
-            if resp.status_code == 429 and attempt < retries:
+            if resp.status_code in (429, 500, 502, 503, 504) and attempt < retries:
                 time.sleep(5)
                 continue
             return FetchResult(ok=False, status=resp.status_code, error=f"HTTP {resp.status_code}")
         except requests.RequestException as exc:
             if attempt >= retries:
-                return FetchResult(ok=False, error=str(exc)[:200])
+                return FetchResult(ok=False, error=type(exc).__name__)
             time.sleep(5)
     return FetchResult(ok=False, error="unreachable")
 

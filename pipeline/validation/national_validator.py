@@ -26,32 +26,8 @@ _PILOT_SOURCE_KEYS = (
 
 
 def _config_for(county: Dict[str, Any]) -> Dict[str, Any]:
-    county_id = county["county_id"]
-    cfg = dict(COUNTY_SCRAPERS.get(county_id) or {})
-    pilot = PILOT_COUNTIES.get(county_id)
-
-    # Pilot source identity is authoritative. County-specific scraper configs
-    # still supply field mappings and other adapter details, but cannot silently
-    # replace a committed pilot endpoint with stale duplicated metadata.
-    if pilot:
-        for key in _PILOT_SOURCE_KEYS:
-            if pilot.get(key) not in (None, ""):
-                cfg[key] = pilot[key]
-        if pilot.get("arcgis_layer_url"):
-            # Keep the validator's root aligned with the canonical FeatureServer
-            # just like the production runner, preventing endpoint drift.
-            cfg["arcgis_root"] = pilot["arcgis_layer_url"]
-            cfg["data_mode"] = "arcgis"
-            cfg["scraper_type"] = "arcgis"
-
-    cfg.setdefault("scraper_type", county.get("scraper_type"))
-    cfg.setdefault("data_source_type", county.get("data_source_type"))
-    cfg.setdefault("parcel_source_url", county.get("parcel_source_url"))
-    cfg.setdefault("gis_url", county.get("gis_url"))
-    cfg.setdefault("arcgis_root", county.get("gis_url"))
-    cfg.setdefault("arcgis_layer_url", county.get("arcgis_layer_url"))
-    cfg.setdefault("fields", county.get("field_mapping") or {})
-    return cfg
+    from config.source_config import county_config
+    return county_config(county['county_id'], county)
 
 
 def validate_all_counties() -> Dict[str, Any]:

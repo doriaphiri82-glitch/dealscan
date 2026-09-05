@@ -9,7 +9,7 @@ import math
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 
-REQUIRED_PROPERTY_FIELDS = ("apn", "address", "lot_size_acres", "market_value", "owner_name")
+REQUIRED_PROPERTY_FIELDS = ("apn", "lot_size_acres")
 NUMERIC_FIELDS = ("lot_size_acres", "assessed_value", "market_value", "tax_amount", "improvement_value", "latitude", "longitude")
 
 
@@ -98,7 +98,7 @@ def validate_county_config(county_id: str, cfg: Mapping[str, Any], source_fields
             if not source:
                 continue
             value = _record_value(record, source)
-            if field in ("apn", "address", "owner_name") and not _nonempty(value):
+            if field == "apn" and not _nonempty(value):
                 issues.append(f"{field} missing")
             if field == "lot_size_acres" and _nonempty(value) and not _numeric(value):
                 issues.append("lot_size_acres not numeric")

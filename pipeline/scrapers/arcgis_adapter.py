@@ -1,117 +1,69 @@
-"""ArcGIS FeatureServer / MapServer adapter for DealScan."""
+"""ArcGIS adapters use the same proven pagination contract as live validation."""
 from __future__ import annotations
-from typing import Any, Dict, List, Optional
-from scrapers.base import post_json
-from scrapers.arcgis import layer_fields
+from typing import Any, Optional
+from scrapers import arcgis
 from scrapers.adapter import BaseScraperAdapter
 
 
 class ArcGISFeatureServerAdapter(BaseScraperAdapter):
     def __init__(self) -> None:
         self.last_error: Optional[str] = None
-        self.source_fields: List[str] = []
-        self.resolved_fields: Dict[str, Any] = {}
+        self.source_fields: list[str] = []
+        self.resolved_fields: dict[str, Any] = {}
+        self.query_diagnostics: dict = {}
 
     @staticmethod
-    def _out_fields(cfg: Dict[str, Any]) -> List[str]:
-        configured = cfg.get("out_fields")
-        if configured is None:
-            configured = list((cfg.get("fields") or {}).values())
-        fields: List[str] = []
-        for value in configured:
-            values = value if isinstance(value, (list, tuple)) else [value]
-            for item in values:
-                item = str(item).strip() if item is not None else ""
-                if item and item not in fields:
-                    fields.append(item)
-        return fields
+    def _out_fields(cfg: dict) -> list[str]:
+        configured = cfg.get('out_fields') or list((cfg.get('fields') or {}).values())
+        return list(dict.fromkeys(str(field) for value in configured
+                    for field in (value if isinstance(value, (list, tuple)) else [value]) if field))
 
     @staticmethod
-    def _resolve_field_names(cfg: Dict[str, Any], actual_fields: Optional[List[str]]) -> None:
-        if not actual_fields:
-            return
-        lookup = {str(name).lower(): str(name) for name in actual_fields}
+    def _resolve_field_names(cfg: dict, actual_fields: Optional[list[str]]) -> None:
+        cfg['fields'] = arcgis.resolve_field_mapping(cfg.get('fields') or {}, actual_fields)
+        if cfg.get('out_fields'):
+            lookup = {field.casefold(): field for field in actual_fields or []}
+            cfg['out_fields'] = [lookup.get(str(value).casefold(), value) for value in cfg['out_fields']]
 
-        def resolve(value: Any) -> Any:
-            if isinstance(value, (list, tuple)):
-                return [lookup.get(str(item).lower(), str(item)) for item in value]
-            if not value:
-                return value
-            return lookup.get(str(value).lower(), str(value))
-
-        if cfg.get("fields"):
-            cfg["fields"] = {canonical: resolve(source) for canonical, source in cfg["fields"].items()}
-        if cfg.get("out_fields") is not None:
-            cfg["out_fields"] = [resolve(value) for value in cfg["out_fields"]]
-
-    def discover(self, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def discover(self, cfg: dict) -> list[dict]:
         self.last_error = None
-        self.source_fields = []
-        self.resolved_fields = {}
-        layer_url = cfg.get("arcgis_layer_url")
-        if not layer_url:
-            self.last_error = "missing arcgis_layer_url"
+        self.query_diagnostics = {}
+        layer = cfg.get('arcgis_layer_url')
+        if not layer:
+            self.last_error = 'missing arcgis_layer_url'
             return []
+        records = []
         try:
-            actual_fields = layer_fields(str(layer_url).rstrip("/"))
-            if actual_fields is None:
-                self.last_error = "layer metadata lookup failed or returned no metadata"
-                return []
-            if not actual_fields:
-                self.last_error = "layer metadata contains no fields"
-                return []
-            self.source_fields = [str(name) for name in actual_fields]
-            self._resolve_field_names(cfg, actual_fields)
-            self.resolved_fields = dict(cfg.get("fields") or {})
+            metadata = arcgis.layer_metadata(layer, live=True)
+            self.source_fields = [field['name'] for field in metadata.get('fields', []) if field.get('name')]
+            if not self.source_fields:
+                raise RuntimeError('layer metadata contains no fields')
+            self._resolve_field_names(cfg, self.source_fields)
+            self.resolved_fields = dict(cfg.get('fields') or {})
+            cfg['object_id_field'] = arcgis.object_id_field(metadata)
+            if any(field not in self.source_fields for field in self._out_fields(cfg)):
+                raise RuntimeError('configured fields no longer exist in source schema')
+            for attrs in arcgis.query_layer(layer, cfg.get('where', '1=1'), self._out_fields(cfg),
+                    max_records=int(cfg.get('max_records', 5000)), metadata=metadata, diagnostics=self.query_diagnostics):
+                records.append(attrs)
         except Exception as exc:
-            self.last_error = f"layer metadata lookup failed: {exc}"
-            return []
-        where = cfg.get("where", "1=1")
-        out_fields = self._out_fields(cfg)
-        max_records = max(1, int(cfg.get("max_records", 5000)))
-        records: List[Dict[str, Any]] = []
-        offset = 0
-        page_size = min(1000, max_records)
-        while offset < max_records:
-            payload = {"where": where, "outFields": ",".join(out_fields) if out_fields else "*", "returnGeometry": "false", "f": "json", "resultOffset": offset, "resultRecordCount": min(page_size, max_records - offset)}
-            r = post_json(f"{layer_url}/query", payload)
-            if not r.ok or not isinstance(r.body, dict):
-                self.last_error = f"query request failed: {r.error or 'unknown error'}"
-                break
-            if r.body.get("error"):
-                self.last_error = f"ArcGIS error: {r.body['error']}"
-                break
-            feats = r.body.get("features") or []
-            for feature in feats:
-                attrs = feature.get("attributes") or {}
-                if attrs:
-                    records.append(attrs)
-            got = len(feats)
-            if got == 0 or got < min(page_size, max_records - offset):
-                break
-            offset += got
+            self.last_error = str(exc)[:200]
         return records
 
-    def parse(self, raw: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def parse(self, raw: dict) -> list[dict]:
         return [raw]
 
-    def validate(self, record: Dict[str, Any]) -> bool:
-        apn = record.get("apn") or record.get("PARCEL_ID") or record.get("GEO_ID")
-        if not apn:
-            for key in ("TAXPIN", "PARCELNO", "PARCEL_ID", "APN", "ACCOUNT", "ACCOUNT_NO", "PROP_ID"):
-                apn = record.get(key)
-                if apn:
-                    break
-        return bool(apn and str(apn).strip())
+    def validate(self, record: dict) -> bool:
+        # No fallback to a differently named raw identifier after normalization.
+        return bool(record.get('apn') and str(record['apn']).strip())
 
-    def run(self, cfg: Dict[str, Any], max_records: int = 5000):
+    def run(self, cfg: dict, max_records: int = 5000):
         result, normalized = super().run(cfg, max_records=max_records)
-        result.metadata["source_url"] = cfg.get("arcgis_layer_url")
-        result.metadata["source_fields"] = self.source_fields
-        result.metadata["resolved_fields"] = self.resolved_fields
-        result.metadata["partial_results"] = bool(self.last_error and normalized)
+        result.metadata.update(source_url=cfg.get('arcgis_layer_url'), source_fields=self.source_fields,
+                               resolved_fields=self.resolved_fields, partial_results=bool(self.last_error and normalized),
+                               pagination=self.query_diagnostics)
         if self.last_error:
-            result.errors.append(f"source_error: {self.last_error}")
+            result.errors.append(f'source_error: {self.last_error}')
         return result, normalized
 
 
@@ -120,5 +72,4 @@ class ArcGISMapServerAdapter(ArcGISFeatureServerAdapter):
 
 
 class ArcGISHubAdapter(ArcGISFeatureServerAdapter):
-    """ArcGIS Hub sources use the same FeatureServer REST query contract."""
     pass

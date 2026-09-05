@@ -20,6 +20,7 @@ def isolated_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(runregistry, 'BUNDLE_PATH', str(tmp_path / 'bundle.json'))
     monkeypatch.setattr(settings, 'DATABASE_PATH', str(tmp_path / 'local.db'))
     monkeypatch.setattr(database, 'DATABASE_PATH', str(tmp_path / 'local.db'))
+    monkeypatch.setattr('scrapers.base.CACHE_DIR', str(tmp_path / 'http-cache'))
 
     def no_network(*args, **kwargs):
         raise AssertionError('Offline tests must mock network transport')

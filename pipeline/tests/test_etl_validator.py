@@ -51,10 +51,10 @@ def test_missing_source_field_is_rejected():
 
 def test_missing_required_mapping_is_rejected():
     cfg = _cfg()
-    del cfg["fields"]["owner_name"]
+    del cfg["fields"]["apn"]
     report = validate_county_config("test_aa", cfg)
     assert report["valid"] is False
-    assert "missing required field mappings: owner_name" in report["errors"]
+    assert "missing required field mappings: apn" in report["errors"]
 
 
 def test_invalid_sample_numeric_is_rejected():

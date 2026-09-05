@@ -77,14 +77,33 @@ def find_layer_via_hub(hub_root: str,
     return best
 
 
+def layer_metadata(layer_url: str, *, live: bool = False) -> Dict[str, Any]:
+    r = fetch(f"{layer_url.rstrip('/')}?f=json", ttl=0 if live else 3600, as_json=True, respect_robots=False)
+    if not r.ok or not isinstance(r.body, dict) or r.body.get('error'):
+        raise RuntimeError('ArcGIS layer metadata unavailable')
+    return r.body
+
+
 def layer_fields(layer_url: str) -> Optional[List[str]]:
-    """Return the layer's actual field names from its metadata endpoint."""
-    r = fetch(f"{layer_url}?f=json", ttl=24 * 3600, as_json=True,
-              respect_robots=False)
-    if not r.ok or not isinstance(r.body, dict):
+    try:
+        return [field['name'] for field in layer_metadata(layer_url).get('fields', []) if field.get('name')]
+    except RuntimeError:
         return None
-    return [f.get("name") for f in r.body.get("fields") or []
-            if f.get("name")]
+
+
+def object_id_field(metadata: dict) -> str:
+    return str(metadata.get('objectIdField') or next((field['name'] for field in metadata.get('fields', [])
+               if field.get('type') == 'esriFieldTypeOID'), ''))
+
+
+def query_count(layer_url: str, where: str = '1=1') -> int:
+    response = post_json(layer_url.rstrip('/') + '/query', {'f': 'json', 'where': where, 'returnCountOnly': 'true'})
+    if not response.ok or not isinstance(response.body, dict) or response.body.get('error'):
+        raise RuntimeError('ArcGIS count query failed')
+    count = response.body.get('count')
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise RuntimeError('ArcGIS count query returned an invalid count')
+    return count
 
 
 def resolve_field_mapping(field_map: Dict[str, Any],
@@ -113,38 +132,68 @@ def resolve_field_mapping(field_map: Dict[str, Any],
 
 
 def query_layer(layer_url: str, where: str, out_fields: List[str],
-                max_records: int = 5000,
-                page_size: int = 1000) -> Iterator[Dict[str, Any]]:
-    """Query a layer with pagination and fail loudly on API/network errors."""
+                max_records: int = 5000, page_size: int = 1000,
+                *, metadata: Optional[dict] = None, diagnostics: Optional[dict] = None) -> Iterator[Dict[str, Any]]:
+    """Stable OID pagination shared by live validation and ETL.
+
+    Never mistake a service-imposed page cap for exhaustion, accept a repeated
+    page, or exceed a caller's bound. Unsupported pagination is quarantined.
+    """
+    if max_records <= 0 or page_size <= 0:
+        return
+    meta = metadata if metadata is not None else layer_metadata(layer_url)
+    oid = object_id_field(meta)
+    capabilities = meta.get('advancedQueryCapabilities') or {}
+    if not oid or capabilities.get('supportsPagination') is not True or capabilities.get('supportsOrderBy') is not True:
+        raise RuntimeError('ArcGIS source does not support verified ordered pagination')
+    limit = meta.get('maxRecordCount')
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+        raise RuntimeError('ArcGIS source has no valid record limit')
+    size = min(page_size, limit, 1000)
+    fields = list(dict.fromkeys([*out_fields, oid]))
     offset = 0
-    fields = ",".join(out_fields) if out_fields else "*"
+    seen = set()
+    if diagnostics is not None:
+        diagnostics.update(pages=0, record_limit=limit, object_id_field=oid)
     while offset < max_records:
-        payload = {
-            "where": where,
-            "outFields": fields,
-            "returnGeometry": "false",
-            "f": "json",
-            "resultOffset": offset,
-            "resultRecordCount": min(page_size, max_records - offset),
-        }
-        r = post_json(f"{layer_url}/query", payload)
-        if not r.ok:
-            raise RuntimeError(
-                f"ArcGIS query request failed: {r.error or 'unknown error'}"
-            )
-        if not isinstance(r.body, dict):
-            raise RuntimeError("ArcGIS query returned a non-object response")
-        if r.body.get("error"):
-            raise RuntimeError(f"ArcGIS query error: {r.body['error']}")
-        feats = r.body.get("features") or []
-        for f in feats:
-            attrs = f.get("attributes") or {}
-            if attrs:
-                yield attrs
-        got = len(feats)
-        if got == 0 or got < min(page_size, max_records - offset):
+        requested = min(size, max_records - offset)
+        payload = {'where': where, 'outFields': ','.join(fields) if out_fields else '*',
+                   'returnGeometry': 'false', 'f': 'json', 'orderByFields': f'{oid} ASC',
+                   'resultOffset': offset, 'resultRecordCount': requested}
+        response = post_json(layer_url.rstrip('/') + '/query', payload)
+        if not response.ok:
+            raise RuntimeError('ArcGIS query request failed')
+        body = response.body
+        if not isinstance(body, dict) or body.get('error'):
+            raise RuntimeError('ArcGIS query returned an API error or invalid response')
+        features = body.get('features')
+        if not isinstance(features, list):
+            raise RuntimeError('ArcGIS query did not return a features array')
+        if len(features) > requested:
+            raise RuntimeError('ArcGIS source ignored the requested record limit')
+        if diagnostics is not None:
+            diagnostics['pages'] += 1
+        if not features:
+            if body.get('exceededTransferLimit'):
+                raise RuntimeError('ArcGIS pagination made no progress')
             return
-        offset += got
+        for feature in features:
+            attrs = feature.get('attributes') if isinstance(feature, dict) else None
+            if not isinstance(attrs, dict) or attrs.get(oid) is None:
+                # Reject this one malformed source record in the adapter, while
+                # keeping valid siblings and the raw payload available for audit.
+                yield {'_malformed_feature': feature}
+                continue
+            identity = str(attrs[oid])
+            if identity in seen:
+                raise RuntimeError('ArcGIS pagination repeated an object ID')
+            seen.add(identity)
+            yield attrs
+        offset += len(features)
+        if body.get('exceededTransferLimit') is False:
+            return
+        if len(features) < requested and not body.get('exceededTransferLimit'):
+            return
 
 
 def map_attributes(attrs: Dict[str, Any], field_map: Dict[str, Any],

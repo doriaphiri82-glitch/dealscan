@@ -27,22 +27,9 @@ def _adapter_for(cfg: Dict[str,Any])->Optional[BaseScraperAdapter]:
     return None
 
 def _county_config(county_id:str)->Dict[str,Any]:
-    cfg=dict(COUNTY_SCRAPERS.get(county_id) or {})
-    pilot=PILOT_COUNTIES.get(county_id)
-    if pilot:
-        for key in _AUTHORITATIVE_PILOT_SOURCE_KEYS:
-            value=pilot.get(key)
-            if value is not None: cfg[key]=value
-        if pilot.get("arcgis_layer_url"):
-            cfg["arcgis_root"]=pilot["arcgis_layer_url"]; cfg["data_mode"]="arcgis"; cfg["scraper_type"]="arcgis"
-    if not cfg:
-        if pilot: cfg=dict(pilot)
-        else: cfg=dict(get_county(county_id) or {})
-        if cfg.get("arcgis_layer_url"):cfg["data_mode"]="arcgis"; cfg["scraper_type"]="arcgis"
-        elif cfg.get("arcgis_root") or cfg.get("parcel_source_url"): cfg["data_mode"]="arcgis"; cfg["scraper_type"]="arcgis"
-        if cfg.get("field_mapping"):cfg["fields"]=cfg["field_mapping"]
-    if cfg: cfg["county_id"]=county_id
-    return cfg
+    from config.source_config import county_config
+    return county_config(county_id)
+
 
 def _resolve_hub_layer(cfg:Dict[str,Any])->Dict[str,Any]:
     if cfg.get("arcgis_layer_url"): return cfg
@@ -113,6 +100,14 @@ def _field_coverage(props:list)->Dict[str,Dict[str,int]]:
 def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False,offline:bool=False)->Dict[str,Any]:
     cfg=_county_config(county_id); m=RunMetrics(county_id); summary={'county_id':county_id,'counts':m.to_counts(),'status':'ok','error':''}
     if not cfg:summary.update(status='skipped',error='County has no configured or discovered source');record_run(county_id,'skipped',summary['counts'],summary['error']);return summary
+    dry_run = dry_run or mode == 'dry_run'
+    if mode not in {'publish', 'etl-only', 'dry_run'}:
+        return {**summary, 'status': 'error', 'error': 'Invalid run mode'}
+    if not offline:
+        from validation.gates import authorization_error
+        gate_error = authorization_error(get_county(county_id) or {}, cfg)
+        if gate_error:
+            return {**summary, 'status': 'skipped', 'error': gate_error}
     try:
         county_metadata=get_county(county_id)
         if county_metadata and not dry_run: sync_county(county_metadata)

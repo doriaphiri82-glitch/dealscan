@@ -1,4 +1,5 @@
 from validation import live_validator
+from helpers import layer_metadata
 
 
 def _cfg():
@@ -15,7 +16,8 @@ def test_live_validator_accepts_matching_layer(monkeypatch):
     cfg=_cfg()
     monkeypatch.setattr(live_validator,"_config",lambda _:cfg)
     monkeypatch.setattr(live_validator,"_resolve_layer",lambda _:cfg["arcgis_layer_url"])
-    monkeypatch.setattr(live_validator.arcgis,"layer_fields",lambda _: ["APN","SITUS_ADDR","ACRES","VALUE","OWNER"])
+    monkeypatch.setattr(live_validator.arcgis,"layer_metadata",lambda *a,**k: layer_metadata(["APN","SITUS_ADDR","ACRES","VALUE","OWNER"]))
+    monkeypatch.setattr(live_validator.arcgis,"query_count",lambda *a,**k:1)
     monkeypatch.setattr(live_validator.arcgis,"query_layer",lambda *a,**k:[{"APN":"1","SITUS_ADDR":"1 Main","ACRES":2,"VALUE":10000,"OWNER":"Owner"}])
     _patch_persistence(monkeypatch)
     result=live_validator.validate_county_live(county)
@@ -28,7 +30,8 @@ def test_live_validator_resolves_source_field_casing(monkeypatch):
     cfg={**_cfg(),"fields":{"apn":"apn","address":"situs_addr","lot_size_acres":"acres","market_value":"value","owner_name":"owner"}}
     monkeypatch.setattr(live_validator,"_config",lambda _:cfg)
     monkeypatch.setattr(live_validator,"_resolve_layer",lambda _:cfg["arcgis_layer_url"])
-    monkeypatch.setattr(live_validator.arcgis,"layer_fields",lambda _: ["APN","SITUS_ADDR","ACRES","VALUE","OWNER"])
+    monkeypatch.setattr(live_validator.arcgis,"layer_metadata",lambda *a,**k: layer_metadata(["APN","SITUS_ADDR","ACRES","VALUE","OWNER"]))
+    monkeypatch.setattr(live_validator.arcgis,"query_count",lambda *a,**k:1)
     captured={}
     def query(*args,**kwargs):
         captured["fields"]=args[2]
@@ -45,7 +48,8 @@ def test_live_validator_rejects_empty_live_layer(monkeypatch):
     cfg=_cfg()
     monkeypatch.setattr(live_validator,"_config",lambda _:cfg)
     monkeypatch.setattr(live_validator,"_resolve_layer",lambda _:cfg["arcgis_layer_url"])
-    monkeypatch.setattr(live_validator.arcgis,"layer_fields",lambda _: ["APN","SITUS_ADDR","ACRES","VALUE","OWNER"])
+    monkeypatch.setattr(live_validator.arcgis,"layer_metadata",lambda *a,**k: layer_metadata(["APN","SITUS_ADDR","ACRES","VALUE","OWNER"]))
+    monkeypatch.setattr(live_validator.arcgis,"query_count",lambda *a,**k:1)
     monkeypatch.setattr(live_validator.arcgis,"query_layer",lambda *a,**k:[])
     _patch_persistence(monkeypatch)
     result=live_validator.validate_county_live(county)
