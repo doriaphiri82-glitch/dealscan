@@ -38,6 +38,9 @@ def _config_for(county: Dict[str, Any]) -> Dict[str, Any]:
             if pilot.get(key) not in (None, ""):
                 cfg[key] = pilot[key]
         if pilot.get("arcgis_layer_url"):
+            # Keep the validator's root aligned with the canonical FeatureServer
+            # just like the production runner, preventing endpoint drift.
+            cfg["arcgis_root"] = pilot["arcgis_layer_url"]
             cfg["data_mode"] = "arcgis"
             cfg["scraper_type"] = "arcgis"
 
