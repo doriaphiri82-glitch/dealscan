@@ -23,17 +23,6 @@ from config.counties.registry import (
 from config.counties.national_registry import ensure_pilot_counties, PILOT_COUNTIES
 from monitoring.health import build_county_health, coverage_tier_name, _registry_health
 
-REGTEST_PATH = os.path.join(os.path.dirname(__file__), "test_registry.json")
-
-@pytest.fixture(autouse=True)
-def _isolate_registry(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DEALSCAN_TEST_REGISTRY", "1")
-    import config.counties.registry as reg_mod
-    monkeypatch.setattr(reg_mod, "REGISTRY_PATH", REGTEST_PATH, raising=False)
-    if os.path.exists(REGTEST_PATH): os.remove(REGTEST_PATH)
-    yield
-    if os.path.exists(REGTEST_PATH): os.remove(REGTEST_PATH)
-
 
 def test_register_and_get_county() -> None:
     register_county(county_id="test_aa", county_name="Test County", state="Arizona", state_fips="04", county_fips="999", geoid="04999", population=1000, scraper_type="arcgis", verification_status="verified", coverage_status="tier_4")

@@ -149,74 +149,18 @@ def query_layer(layer_url: str, where: str, out_fields: List[str],
 
 def map_attributes(attrs: Dict[str, Any], field_map: Dict[str, Any],
                    county_id: str, defaults: Dict[str, Any]) -> Dict[str, Any]:
-    """Map raw ArcGIS attributes to the pipeline Property dict shape."""
-    attr_index = {str(key).lower(): key for key in attrs}
-
-    def get(src_field: Any) -> Any:
-        if isinstance(src_field, (list, tuple)):
-            values = [get(part) for part in src_field]
-            values = [str(v).strip() for v in values if v not in (None, "") and str(v).strip()]
-            return ", ".join(values) if values else None
-        if not src_field:
-            return None
-        if "." in str(src_field):
-            cur: Any = attrs
-            for part in str(src_field).split("."):
-                if isinstance(cur, dict):
-                    key = attr_index.get(part.lower()) if cur is attrs else next(
-                        (k for k in cur if str(k).lower() == part.lower()), None)
-                    cur = cur.get(key) if key is not None else None
-                else:
-                    return None
-            return cur
-        actual_key = attr_index.get(str(src_field).lower())
-        return attrs.get(actual_key) if actual_key is not None else None
-
-    out = dict(defaults)
-    for pipeline_field, src_field in field_map.items():
-        out[pipeline_field] = get(src_field)
-    out["lot_size_acres"] = _to_float(out.get("lot_size_acres"))
-    out["assessed_value"] = _to_float(out.get("assessed_value"))
-    out["market_value"] = _to_float(out.get("market_value"))
-    out["tax_amount"] = _to_float(out.get("tax_amount"))
-    out["improvement_value"] = _to_float(out.get("improvement_value"))
-    out["tax_delinquent_years"] = _to_int(out.get("tax_delinquent_years"))
-    out["year_acquired"] = _to_int(out.get("year_acquired"))
-    out["latitude"] = _to_float(out.get("latitude"))
-    out["longitude"] = _to_float(out.get("longitude"))
-    out["county_id"] = county_id
-    return out
+    from normalization import normalize
+    return normalize(attrs, {'fields': field_map, 'county_id': county_id, 'defaults': defaults})
 
 
-VACANT_LAND_USE_CODES = {
-    "cochise_az": ["0011", "9700", "0012", "0013", "0014", "0001", "0002", "0003"],
-    "mohave_az": ["0011", "9700", "VAC", "VACANT", "0001", "0002", "0003"],
-    "el_paso_tx": ["0011", "9700", "VAC", "VACANT"],
-    "hudson_co": ["0011", "9700", "VAC", "VACANT"],
-    "socorro_nm": ["0011", "9700", "VAC", "VACANT"],
-}
+# Retained as a compatibility name; undocumented cross-county numeric codes
+# are not vacancy evidence. Reviewed codebooks belong in source configuration.
+VACANT_LAND_USE_CODES: Dict[str, List[str]] = {}
 
 
 def is_vacant_residential(prop: Dict[str, Any], county_id: str) -> bool:
-    """Return True only when the source provides a credible vacant-land signal."""
-    lu = str(prop.get("land_use") or "").strip().lower()
-    zoning = str(prop.get("zoning") or "").strip().lower()
-    code = str(prop.get("use_code") or prop.get("land_use") or "").strip().upper()
-    imp = prop.get("has_improvements")
-    improvement_value = prop.get("improvement_value")
-    has_imp = imp is True or imp in (1, "1", "Y", "YES", "Yes", "true", "True")
-    no_imp = imp is False or imp == 0 or imp in ("0", "N", "NO", "No", "NONE", "false", "False")
-    if has_imp:
-        return "vacant" in lu or "unimproved" in lu
-    if no_imp:
-        if "residential" in lu or "res" in zoning or "residential" in zoning:
-            return True
-        if "vacant" in lu or "unimproved" in lu:
-            return True
-        return code in {str(x).upper() for x in VACANT_LAND_USE_CODES.get(county_id, [])}
-    if "vacant" in lu or "unimproved" in lu or "vacant" in zoning:
-        return True
-    return code in {str(x).upper() for x in VACANT_LAND_USE_CODES.get(county_id, [])}
+    from validation.vacancy import vacancy_decision
+    return vacancy_decision(prop, county_id)[0]
 
 
 def export_snapshot(props: List[Dict[str, Any]], path: str) -> str:

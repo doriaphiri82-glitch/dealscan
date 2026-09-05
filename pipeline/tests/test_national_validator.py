@@ -1,9 +1,10 @@
-from config.counties.national_registry import PILOT_COUNTIES
+from config.counties.national_registry import PILOT_COUNTIES, ensure_pilot_counties
 from scrapers.counties import COUNTY_SCRAPERS
 from validation.national_validator import _config_for, validate_all_counties
 
 
 def test_national_validation_returns_all_registered_counties():
+    ensure_pilot_counties()
     report = validate_all_counties()
     assert report["counts"]["total"] == len(report["results"])
     assert report["counts"]["total"] >= 3
@@ -12,6 +13,7 @@ def test_national_validation_returns_all_registered_counties():
 
 
 def test_national_validation_does_not_claim_etl_from_source_configuration():
+    ensure_pilot_counties()
     report = validate_all_counties()
     for row in report["results"]:
         if row["status"] == "ready":

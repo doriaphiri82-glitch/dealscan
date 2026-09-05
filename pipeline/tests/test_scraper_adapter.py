@@ -166,8 +166,8 @@ def test_normalization_does_not_infer_improvements_when_value_missing():
     assert "has_improvements" not in normalized or normalized["has_improvements"] is None
 
 
-def test_mohave_arizona_vacant_code_0003_is_supported():
-    assert is_vacant_residential(
+def test_numeric_code_requires_a_documented_county_codebook():
+    assert not is_vacant_residential(
         {"use_code": "0003", "land_use": "0003", "has_improvements": False},
         "mohave_az",
     )
@@ -182,7 +182,10 @@ def test_normalized_source_pool_enables_real_comparables():
         "latitude": 35.20,
         "longitude": -114.00,
         "has_improvements": False,
-        "land_use": "0003",
+        "land_use": "Vacant land",
+        "county_id": "fixture_county",
+        "source_url": "https://county.example/parcel",
+        "sale_qualified": True, "vacant_at_sale": True,
     }
     comp = {
         "apn": "COMP-1",
@@ -193,16 +196,20 @@ def test_normalized_source_pool_enables_real_comparables():
         "latitude": 35.205,
         "longitude": -114.005,
         "has_improvements": False,
-        "land_use": "0003",
+        "land_use": "Vacant land",
+        "county_id": "fixture_county",
+        "source_url": "https://county.example/parcel",
+        "sale_qualified": True, "vacant_at_sale": True,
     }
     pool = [target, comp]
     target["_source_comp_pool"] = pool
-    result = score_and_enrich_deal(target, [], {"market_velocity": 0.5})
-    assert result is not None
-    assert result["valuation_basis"] == "comparable_sales"
-    assert result["comps"]
-    assert result["comps"][0]["source"] == "county_parcel_last_sale"
-    assert result["comps"][0]["source_apn"] == "COMP-1"
+    from scoring.deal_scorer import _source_comparables
+    candidates = _source_comparables(target)
+    assert len(candidates) == 1
+    assert candidates[0]["source"] == "county_parcel_last_sale"
+    assert candidates[0]["source_apn"] == "COMP-1"
+    # One sale and no asking-price/cost evidence cannot become an opportunity.
+    assert score_and_enrich_deal(target, [], {}) is None
 
 
 def test_source_comparables_exclude_stale_sales_and_self():
@@ -217,5 +224,6 @@ def test_source_comparables_exclude_stale_sales_and_self():
     stale = dict(target, apn="STALE", last_sale_price=18000, last_sale_date="2010-01-01", latitude=35.201, longitude=-114.001)
     self_sale = dict(target, last_sale_price=19000, last_sale_date="2025-01-01")
     target["_source_comp_pool"] = [target, stale, self_sale]
-    result = score_and_enrich_deal(target, [], {})
-    assert result["comps"] == []
+    from scoring.deal_scorer import _source_comparables
+    assert _source_comparables(target) == []
+    assert score_and_enrich_deal(target, [], {}) is None

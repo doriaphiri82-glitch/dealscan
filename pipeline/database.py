@@ -51,7 +51,7 @@ def get_deal_comps(deal_id: int) -> List[dict]:
     conn=get_connection(); conn.row_factory=sqlite3.Row; cur=conn.cursor(); cur.execute('SELECT address,sale_price,sale_date,distance_miles,lot_size_acres,price_per_acre FROM comps WHERE deal_id=? ORDER BY distance_miles ASC',(deal_id,)); out=[dict(r) for r in cur.fetchall()]; conn.close(); return out
 
 def get_top_deals(limit=10,min_score=40,county_id: Optional[str]=None) -> List[dict]:
-    conn=get_connection(); conn.row_factory=sqlite3.Row; cur=conn.cursor(); sql='''SELECT d.*,p.apn,p.county_id,p.address,p.lot_size_acres,p.owner_name,p.owner_state,p.tax_delinquent_years,p.zoning FROM deals d JOIN properties p ON d.property_id=p.id WHERE d.status='discovered' AND d.deal_score>=?'''; args=[min_score]
+    conn=get_connection(); conn.row_factory=sqlite3.Row; cur=conn.cursor(); sql='''SELECT d.*,p.apn,p.county_id,p.address,p.lot_size_acres,p.owner_name,p.owner_state,p.tax_delinquent_years,p.zoning FROM deals d JOIN properties p ON d.property_id=p.id WHERE d.status='discovered' AND d.verification_status='verified' AND d.deal_score>=?'''; args=[min_score]
     if county_id: sql+=' AND p.county_id=?'; args.append(county_id)
     sql+=' ORDER BY d.deal_score DESC LIMIT ?'; args.append(limit); cur.execute(sql,args); out=[dict(r) for r in cur.fetchall()]; conn.close(); return out
 

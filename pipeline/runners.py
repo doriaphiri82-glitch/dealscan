@@ -85,7 +85,7 @@ class RunMetrics:
 
 def _shape_for_bundle(row):return {k:row.get(k) for k in ('apn','address','county_id','lot_size_acres','asking_price','asking_price_basis','deal_score','estimated_arv_low','estimated_arv_high','estimated_profit_low','estimated_profit_high','recommended_offer_low','recommended_offer_high','market_velocity','competition_level','owner_state','zoning','tax_delinquent_years','valuation_basis','valuation_confidence','source','source_url','source_vendor','source_quality','verification_status','data_freshness')}
 def _provenance(cfg,county_id):
-    county=get_county(county_id) or {}; return {'source_url':cfg.get('arcgis_layer_url') or cfg.get('parcel_source_url') or cfg.get('data_url') or county.get('parcel_source_url'),'source_vendor':cfg.get('source_vendor') or county.get('source_vendor'),'source_quality':cfg.get('source_quality') or county.get('source_quality'),'verification_status':county.get('verification_status'),'data_freshness':cfg.get('source_last_modified') or county.get('data_freshness')}
+    county=get_county(county_id) or {}; return {'source_url':cfg.get('arcgis_layer_url') or cfg.get('parcel_source_url') or cfg.get('data_url') or county.get('parcel_source_url'),'source_vendor':cfg.get('source_vendor') or county.get('source_vendor'),'source_quality':cfg.get('source_quality') or county.get('source_quality'),'verification_status':'pending_review','data_freshness':cfg.get('source_last_modified') or county.get('data_freshness')}
 
 def _qualification_rejection_reason(prop: Dict[str,Any], comps: list)->str:
     if not comps:
@@ -101,14 +101,10 @@ def _qualification_rejection_reason(prop: Dict[str,Any], comps: list)->str:
     return 'below_min_profit'
 
 def _vacancy_rejection_reason(prop:Dict[str,Any],county_id:str)->str:
-    imp=prop.get('has_improvements'); lu=str(prop.get('land_use') or '').strip().lower(); zoning=str(prop.get('zoning') or '').strip().lower(); code=str(prop.get('use_code') or prop.get('land_use') or '').strip().upper(); has_imp=imp is True or imp in (1,'1','Y','YES','Yes','true','True')
-    if has_imp:return 'improved_property'
-    if any(token in lu for token in ('vacant','unimproved')) or 'vacant' in zoning:return ''
-    if imp is False or imp == 0 or imp in ('0','N','NO','No','NONE','false','False'):
-        if 'residential' in lu or 'res' in zoning or 'residential' in zoning:return ''
-        if code in {str(x).upper() for x in arcgis.VACANT_LAND_USE_CODES.get(county_id, [])}:return ''
-        return 'no_supported_vacancy_classification'
-    return 'missing_vacancy_signal'
+    from validation.vacancy import vacancy_decision
+    accepted, reason = vacancy_decision(prop, county_id, _county_config(county_id))
+    return '' if accepted else reason
+
 
 def _field_coverage(props:list)->Dict[str,Dict[str,int]]:
     fields=('apn','lot_size_acres','market_value','assessed_value','asking_price','land_use','use_code','has_improvements','improvement_value','latitude','longitude','owner_name','owner_state','zoning','last_sale_price','last_sale_date')

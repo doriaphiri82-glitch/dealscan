@@ -90,7 +90,8 @@ class SupabaseDatabase:
         pid = int(data["property_id"]); existing = self._request("GET", "deals", params={"property_id": f"eq.{pid}", "select": "id", "order": "id.desc", "limit": "1"}).json()
         fields = ["deal_score","asking_price","estimated_arv_low","estimated_arv_high","estimated_costs","estimated_profit_low","estimated_profit_high","recommended_offer_low","recommended_offer_high","motivation_signals","motivation_score","market_velocity","competition_level","status","notes","source","source_url","source_vendor","source_quality","verification_status","data_freshness","valuation_basis","valuation_confidence"]
         payload = {k: data.get(k) for k in fields}
-        if payload.get("verification_status") == "source_verified": payload["verification_status"] = "verified"
+        payload["status"] = data.get("status") or "discovered"
+        payload["verification_status"] = data.get("verification_status") or "pending_review"
         if existing:
             did = int(existing[0]["id"]); self._request("PATCH", "deals", params={"id": f"eq.{did}"}, json=payload); return did
         payload["property_id"] = pid; rows = self._request("POST", "deals", headers={**self.headers, "Prefer": "return=representation"}, json=payload).json()

@@ -1,274 +1,217 @@
-"""
-DealScan AI - Deal Scoring Algorithm
-Scores each deal 1-100 based on multiple weighted factors.
-"""
-from datetime import datetime
+"""Conservative, reproducible land screening. Missing evidence never becomes money."""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
 from math import asin, cos, radians, sin, sqrt
-from typing import List, Dict, Any, Optional
-from config.settings import SCORING_WEIGHTS, MIN_PROFIT_ESTIMATE
+from statistics import median
+from typing import Any, Optional
+from urllib.parse import urlsplit
 
-_COMP_INDEX_CACHE: Dict[str, Any] = {}
+from config.settings import MIN_PROFIT_ESTIMATE, SCORING_WEIGHTS
+from normalization import boolean, number, sale_date
+from validation.vacancy import vacancy_decision
+
+MIN_COMPARABLES = 3
+MAX_COMP_AGE_DAYS = 3 * 365
+MAX_COMP_DISTANCE_MILES = 10
+MODEL_VERSION = 'vacant_land_comps_v1'
 
 
-def calculate_deal_score(deal_data: Dict) -> int:
-    """Calculate a deal score from 1-100."""
-    scores = {}
-    asking = deal_data.get('asking_price', 1)
-    profit_mid = (deal_data.get('estimated_profit_low', 0) + deal_data.get('estimated_profit_high', 0)) / 2
-    if asking > 0:
-        ratio = profit_mid / asking
-        if ratio >= 5: scores['profit_ratio'] = 100
-        elif ratio >= 3: scores['profit_ratio'] = 90
-        elif ratio >= 2: scores['profit_ratio'] = 70
-        elif ratio >= 1: scores['profit_ratio'] = 50
-        elif ratio >= 0.5: scores['profit_ratio'] = 30
-        else: scores['profit_ratio'] = 10
-    else:
-        scores['profit_ratio'] = 0
-    signals = deal_data.get('motivation_signals', [])
-    signal_count = len(signals) if isinstance(signals, list) else 0
-    high_value = {'tax_delinquent', 'probate', 'inherited'}
-    high_count = sum(1 for s in signals if s in high_value) if isinstance(signals, list) else 0
-    scores['motivation_signals'] = min(100, (signal_count * 20) + (high_count * 15))
-    velocity = deal_data.get('market_velocity')
+def _url(value: Any) -> bool:
     try:
-        scores['market_velocity'] = max(0, min(100, int(float(velocity) * 100))) if velocity is not None else 50
-    except (TypeError, ValueError):
-        scores['market_velocity'] = 50
-    comp_map = {'low': 90, 'medium': 60, 'high': 30}
-    scores['competition'] = comp_map.get(deal_data.get('competition_level'), 50)
-    acc = 50
-    if deal_data.get('has_road_access') is True: acc += 20
-    if deal_data.get('utilities_nearby') is True: acc += 15
-    if deal_data.get('is_buildable') is True: acc += 15
-    scores['accessibility'] = min(100, acc)
-    total = sum(scores.get(f, 0) * w for f, w in SCORING_WEIGHTS.items())
-    confidence = deal_data.get('valuation_confidence', 1.0)
-    try:
-        confidence = max(0.5, min(1.0, float(confidence)))
-    except (TypeError, ValueError):
-        confidence = 0.5
-    total *= confidence
-    return max(1, min(100, int(total)))
+        parsed = urlsplit(str(value or ''))
+        return parsed.scheme in {'https', 'http'} and bool(parsed.hostname) and not parsed.username and not parsed.password
+    except ValueError:
+        return False
 
 
 def _number(value: Any) -> Optional[float]:
-    try:
-        result = float(value)
-        return result if result == result else None
-    except (TypeError, ValueError):
-        return None
+    return number(value)
 
 
 def _sale_year(value: Any) -> Optional[int]:
-    if value in (None, '', ' '):
-        return None
-    if isinstance(value, datetime):
-        return value.year
-    text = str(value).strip()
-    for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%Y/%m/%d', '%m/%d/%y'):
-        try:
-            return datetime.strptime(text[:10], fmt).year
-        except ValueError:
-            pass
-    try:
-        year = int(float(text))
-        return year if 1900 <= year <= 2100 else None
-    except (TypeError, ValueError):
-        return None
+    parsed = sale_date(value)
+    return parsed.year if parsed else None
 
 
 def _distance_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Great-circle distance for parcel coordinates."""
-    r = 3958.7613
     p1, p2 = radians(lat1), radians(lat2)
-    dp, dl = radians(lat2 - lat1), radians(lon2 - lon1)
-    a = sin(dp / 2) ** 2 + cos(p1) * cos(p2) * sin(dl / 2) ** 2
-    return 2 * r * asin(min(1.0, sqrt(a)))
+    a = sin(radians(lat2 - lat1) / 2) ** 2 + cos(p1) * cos(p2) * sin(radians(lon2 - lon1) / 2) ** 2
+    return 2 * 3958.7613 * asin(min(1.0, sqrt(a)))
 
 
-def _source_comparables(property_data: Dict) -> List[Dict]:
-    """Build conservative comps from real sale fields in the same source pool.
-
-    These are explicitly *source-derived last-sale comparables*, not fabricated
-    comps and not a substitute for recorder-level transaction qualification.
-    A sale must have a positive price/acreage, usable coordinates, and a recent
-    sale year. Size and distance filters reduce obvious mismatches.
-    """
-    pool = property_data.get('_source_comp_pool')
-    if not isinstance(pool, list) or not pool:
-        return []
-    target_lat = _number(property_data.get('latitude'))
-    target_lon = _number(property_data.get('longitude'))
-    target_acres = _number(property_data.get('lot_size_acres'))
-    if target_lat is None or target_lon is None or target_acres is None or target_acres <= 0:
-        return []
-
-    cache_key = str(id(pool))
-    index = _COMP_INDEX_CACHE.get(cache_key)
-    if index is None:
-        bins: Dict[int, List[Dict]] = {}
-        for row in pool:
-            lat = _number(row.get('latitude'))
-            if lat is None:
-                continue
-            bins.setdefault(int(lat * 10), []).append(row)
-        index = bins
-        _COMP_INDEX_CACHE.clear()
-        _COMP_INDEX_CACHE[cache_key] = index
-
-    target_apn = str(property_data.get('apn') or '').strip()
-    current_year = datetime.now().year
-    min_year = current_year - 7
-    target_bin = int(target_lat * 10)
-    candidates: List[Dict] = []
-    for bucket in range(target_bin - 2, target_bin + 3):
-        for row in index.get(bucket, []):
-            if row is property_data:
-                continue
-            row_apn = str(row.get('apn') or '').strip()
-            if target_apn and row_apn and target_apn == row_apn:
-                continue
-            acres = _number(row.get('lot_size_acres'))
-            sale_price = _number(row.get('last_sale_price'))
-            lat = _number(row.get('latitude'))
-            lon = _number(row.get('longitude'))
-            sale_year = _sale_year(row.get('last_sale_date'))
-            if acres is None or acres <= 0 or sale_price is None or sale_price <= 0:
-                continue
-            if lat is None or lon is None or sale_year is None or sale_year < min_year:
-                continue
-            if acres < target_acres * 0.25 or acres > target_acres * 4:
-                continue
-            distance = _distance_miles(target_lat, target_lon, lat, lon)
-            if distance > 10:
-                continue
-            candidates.append({
-                'address': row.get('address') or row.get('apn') or 'Unknown parcel',
-                'sale_price': sale_price,
-                'sale_date': row.get('last_sale_date'),
-                'distance_miles': round(distance, 2),
-                'lot_size_acres': acres,
-                'price_per_acre': round(sale_price / acres, 2),
-                'source': 'county_parcel_last_sale',
-                'source_apn': row.get('apn'),
-            })
-
-    candidates.sort(key=lambda c: (c['distance_miles'], abs(c['lot_size_acres'] - target_acres)))
-    return candidates[:8]
-
-
-def calculate_profit_estimate(comps: List[Dict], lot_size_acres: float, asking_price: float,
-                               assessed_value: float = 0, market_value: float = 0) -> Dict:
-    """Estimate ARV/profit and record the strength of the valuation evidence."""
-    empty = {'estimated_arv_low': 0, 'estimated_arv_high': 0, 'estimated_costs': 0,
-             'estimated_profit_low': 0, 'estimated_profit_high': 0,
-             'valuation_basis': 'unavailable', 'valuation_confidence': 0.5}
-    if not comps:
-        source_value = market_value if market_value and market_value > 0 else assessed_value
-        if source_value and source_value > 0:
-            arv_low = source_value * 0.85
-            arv_high = source_value * 1.05
-            estimated_costs = arv_low * 0.12
-            return {
-                'estimated_arv_low': round(arv_low), 'estimated_arv_high': round(arv_high),
-                'estimated_costs': round(estimated_costs),
-                'estimated_profit_low': round(max(0, arv_low - asking_price - estimated_costs)),
-                'estimated_profit_high': round(max(0, arv_high - asking_price - estimated_costs)),
-                'valuation_basis': 'market_value' if market_value and market_value > 0 else 'assessed_value',
-                'valuation_confidence': 0.75 if market_value and market_value > 0 else 0.65,
-            }
-        return empty
-    prices_per_acre = []
-    for comp in comps:
-        try:
-            acres = float(comp.get('lot_size_acres', 0) or 0)
-            sale_price = float(comp.get('sale_price', 0) or 0)
-            if acres > 0 and sale_price > 0: prices_per_acre.append(sale_price / acres)
-        except (TypeError, ValueError):
+def valid_comparables(comps: list[dict], lot_size_acres: float) -> list[dict]:
+    """Only recent, identified, qualified vacant-land sales can influence value."""
+    now = datetime.now(timezone.utc)
+    valid, seen = [], set()
+    for comp in comps or []:
+        price, acres, distance = (number(comp.get(key)) for key in ('sale_price', 'lot_size_acres', 'distance_miles'))
+        sold = sale_date(comp.get('sale_date'))
+        source_id = comp.get('source_record_id') or comp.get('source_apn')
+        identity = (comp.get('source_url'), source_id)
+        if not _url(comp.get('source_url')) or not source_id or identity in seen:
             continue
-    if not prices_per_acre: return empty
-    prices_per_acre.sort()
-    median_ppa = prices_per_acre[len(prices_per_acre) // 2]
-    arv_low = median_ppa * lot_size_acres * 0.80
-    arv_high = median_ppa * lot_size_acres
-    estimated_costs = arv_low * 0.08
-    return {
-        'estimated_arv_low': round(arv_low), 'estimated_arv_high': round(arv_high),
-        'estimated_costs': round(estimated_costs),
-        'estimated_profit_low': round(max(0, arv_low - asking_price - estimated_costs)),
-        'estimated_profit_high': round(max(0, arv_high - asking_price - estimated_costs)),
-        'valuation_basis': 'comparable_sales',
-        'valuation_confidence': min(1.0, 0.75 + len(prices_per_acre) * 0.05),
-    }
+        if boolean(comp.get('sale_qualified')) is not True or boolean(comp.get('vacant_at_sale')) is not True:
+            continue
+        if price is None or price <= 0 or acres is None or acres <= 0 or distance is None or not 0 <= distance <= MAX_COMP_DISTANCE_MILES:
+            continue
+        if sold is None or not now - timedelta(days=MAX_COMP_AGE_DAYS) <= sold <= now:
+            continue
+        if not lot_size_acres * 0.25 <= acres <= lot_size_acres * 4:
+            continue
+        seen.add(identity)
+        valid.append({**comp, 'sale_price': price, 'lot_size_acres': acres,
+                      'sale_date': sold.isoformat(), 'distance_miles': distance,
+                      'price_per_acre': price / acres, 'source_record_id': str(source_id)})
+    return valid
 
 
-def calculate_recommended_offer(asking_price: float, profit_low: float, profit_high: float) -> Dict:
-    """Calculate recommended offer range (60-80% of asking)."""
-    if asking_price <= 0: return {'recommended_offer_low': 0, 'recommended_offer_high': 0}
-    offer_low = asking_price * 0.60
-    offer_high = min(asking_price * 0.80, (profit_low + profit_high) / 2 + asking_price - 2000)
-    offer_low = min(offer_low, offer_high * 0.85)
-    return {'recommended_offer_low': round(max(0, offer_low)), 'recommended_offer_high': round(max(0, offer_high))}
+def _source_comparables(property_data: dict) -> list[dict]:
+    pool = property_data.get('_source_comp_pool')
+    if not isinstance(pool, list):
+        return []
+    lat, lon, acres = (number(property_data.get(key)) for key in ('latitude', 'longitude', 'lot_size_acres'))
+    if lat is None or lon is None or acres is None or acres <= 0 or not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return []
+    candidates = []
+    for row in pool:
+        if row.get('county_id') != property_data.get('county_id') or row.get('apn') == property_data.get('apn'):
+            continue
+        row_lat, row_lon = number(row.get('latitude')), number(row.get('longitude'))
+        if row_lat is None or row_lon is None or not (-90 <= row_lat <= 90 and -180 <= row_lon <= 180):
+            continue
+        if not vacancy_decision(row, row.get('county_id', ''))[0]:
+            continue
+        candidates.append({
+            'address': row.get('address'), 'sale_price': row.get('last_sale_price'),
+            'sale_date': row.get('last_sale_date'), 'lot_size_acres': row.get('lot_size_acres'),
+            'distance_miles': _distance_miles(lat, lon, row_lat, row_lon),
+            'source': 'county_parcel_last_sale', 'source_url': row.get('source_url'),
+            'source_record_id': row.get('_source_record_id') or row.get('apn'),
+            'source_apn': row.get('apn'), 'county_id': row.get('county_id'),
+            'sale_qualified': row.get('sale_qualified'), 'vacant_at_sale': row.get('vacant_at_sale'),
+        })
+    valid = valid_comparables(candidates, acres)
+    return sorted(valid, key=lambda row: row['distance_miles'])[:8]
 
 
-def detect_motivation_signals(property_data: Dict) -> List[str]:
-    """Detect motivated seller signals from property data."""
+def calculate_profit_estimate(comps: list[dict], lot_size_acres: float, asking_price: float,
+                              assessed_value: float = 0, market_value: float = 0,
+                              *, estimated_costs: Optional[float] = None) -> dict:
+    """Median real sale $/acre × area; low case has a documented 20% discount.
+
+    Assessed/market values are intentionally NOT resale evidence. Profit needs
+    an explicit complete cost estimate and a real acquisition/asking price.
+    Losses remain negative instead of being clipped to zero.
+    """
+    empty = {key: None for key in ('estimated_arv_low', 'estimated_arv_high', 'estimated_costs', 'estimated_profit_low', 'estimated_profit_high')}
+    empty.update(valuation_basis='unavailable', valuation_confidence=0.0)
+    acres, asking, costs = number(lot_size_acres), number(asking_price), number(estimated_costs)
+    if acres is None or acres <= 0:
+        return empty
+    valid = valid_comparables(comps, acres)
+    if len(valid) < MIN_COMPARABLES:
+        return empty
+    high = round(median(comp['price_per_acre'] for comp in valid) * acres, 2)
+    low = round(high * 0.8, 2)
+    result = {**empty, 'estimated_arv_low': low, 'estimated_arv_high': high,
+              'valuation_basis': 'comparable_sales', 'valuation_confidence': min(0.9, 0.6 + len(valid) * 0.05)}
+    if asking is None or asking <= 0 or costs is None or costs < 0:
+        return result
+    result.update(estimated_costs=costs, estimated_profit_low=round(low - asking - costs, 2),
+                  estimated_profit_high=round(high - asking - costs, 2))
+    return result
+
+
+def calculate_recommended_offer(asking_price: float, profit_low: float, profit_high: float) -> dict:
+    """Screening proposal, not a seller quote: 60–80% of sourced asking price."""
+    asking = number(asking_price)
+    if asking is None or asking <= 0 or number(profit_low) is None or number(profit_high) is None:
+        return {'recommended_offer_low': None, 'recommended_offer_high': None}
+    return {'recommended_offer_low': round(asking * .6, 2), 'recommended_offer_high': round(asking * .8, 2)}
+
+
+def detect_motivation_signals(property_data: dict) -> list[str]:
     signals = []
-    if property_data.get('tax_delinquent_years', 0) >= 2: signals.append('tax_delinquent')
-    owner_state = property_data.get('owner_state', '')
-    county_state = property_data.get('county_state', '')
-    if owner_state and county_state and owner_state != county_state: signals.append('absentee_owner')
-    year_acq = property_data.get('year_acquired')
-    if year_acq and (datetime.now().year - year_acq) >= 10: signals.append('long_ownership')
-    if not property_data.get('has_improvements', False): signals.append('no_improvements')
-    land_use = str(property_data.get('land_use') or '').lower()
-    if 'vacant' in land_use or 'unimproved' in land_use: signals.append('vacant_land')
-    owner_name = str(property_data.get('owner_name') or '').lower()
-    if any(t in owner_name for t in ['estate', 'trust', 'heirs', 'executor']): signals.append('probate')
+    delinquent = number(property_data.get('tax_delinquent_years'))
+    if delinquent is not None and delinquent >= 2:
+        signals.append('tax_delinquent')
+    # Without source-normalized state codes, do not compare 'AZ' to 'Arizona'.
+    owner = str(property_data.get('owner_state') or '').strip().upper()
+    county = str(property_data.get('county_state') or '').strip().upper()
+    if len(owner) == len(county) == 2 and owner != county:
+        signals.append('absentee_owner')
+    acquired = number(property_data.get('year_acquired'))
+    year = datetime.now(timezone.utc).year
+    if acquired is not None and 1800 <= acquired <= year - 10:
+        signals.append('long_ownership')
+    if boolean(property_data.get('has_improvements')) is False:
+        signals.append('no_improvements')
+    if vacancy_decision(property_data, property_data.get('county_id', ''))[0]:
+        signals.append('vacant_land')
+    # An owner named 'Trust' or 'Estate' is not evidence of probate/motivation.
     return signals
 
 
-def score_and_enrich_deal(property_data: Dict, comps: List[Dict], county_config: Dict) -> Dict:
-    """Full pipeline: detect signals, calculate profit, score the deal."""
-    if not comps:
-        comps = _source_comparables(property_data)
-    signals = detect_motivation_signals(property_data)
-    raw_market = property_data.get('market_value')
-    raw_assessed = property_data.get('assessed_value')
-    try: market_value = float(raw_market or 0)
-    except (TypeError, ValueError): market_value = 0.0
-    try: assessed_value = float(raw_assessed or 0)
-    except (TypeError, ValueError): assessed_value = 0.0
-    value_is_official = market_value > 0 or assessed_value > 0
-    asking_price = property_data.get('asking_price')
-    asking_price_basis = 'source' if asking_price is not None else 'screening_assumption'
-    if asking_price is None:
-        asking_price = market_value * 0.6 if market_value > 0 else 0
-    else:
-        try: asking_price = float(asking_price)
-        except (TypeError, ValueError): asking_price = 0.0
-        if asking_price <= 0:
-            return None
-    if asking_price <= 0: return None
-    lot_size = property_data.get('lot_size_acres', 0) or 0
-    try: lot_size = float(lot_size)
-    except (TypeError, ValueError): lot_size = 0.0
-    profit_data = calculate_profit_estimate(comps, lot_size, asking_price, assessed_value=assessed_value, market_value=market_value)
-    if profit_data['estimated_profit_low'] < MIN_PROFIT_ESTIMATE: return None
-    offer_data = calculate_recommended_offer(asking_price, profit_data['estimated_profit_low'], profit_data['estimated_profit_high'])
-    comp_count = len(comps)
-    competition = 'low' if 0 < comp_count <= 2 else 'medium' if comp_count <= 5 else 'high'
-    valuation_confidence = profit_data.get('valuation_confidence', 0.5)
-    if not value_is_official and not comps: valuation_confidence = min(valuation_confidence, 0.5)
-    deal_data = {
-        'asking_price': asking_price, 'asking_price_basis': asking_price_basis,
-        'motivation_signals': signals, 'motivation_score': len(signals) / 5.0,
-        'market_velocity': county_config.get('market_velocity'), 'competition_level': competition,
-        'has_road_access': property_data.get('has_road_access'), 'utilities_nearby': property_data.get('utilities_nearby'),
-        'is_buildable': property_data.get('is_buildable'), 'valuation_confidence': valuation_confidence,
-        'comps': comps,
-        **profit_data, **offer_data,
+def calculate_deal_score(deal_data: dict) -> int:
+    asking = number(deal_data.get('asking_price'))
+    low, high = number(deal_data.get('estimated_profit_low')), number(deal_data.get('estimated_profit_high'))
+    ratio = (low + high) / (2 * asking) if asking and low is not None and high is not None else 0
+    profit_score = next((score for threshold, score in [(5,100),(3,90),(2,70),(1,50),(.5,30)] if ratio >= threshold), 0)
+    signals = deal_data.get('motivation_signals') or []
+    scores = {'profit_ratio': profit_score, 'motivation_signals': min(100, len(set(signals)) * 20),
+              'market_velocity': 0, 'competition': 0,
+              'accessibility': sum(1 for key in ('has_road_access', 'utilities_nearby', 'is_buildable') if deal_data.get(key) is True) * (100 / 3)}
+    confidence = number(deal_data.get('valuation_confidence')) or 0
+    return max(0, min(100, int(sum(scores.get(key, 0) * weight for key, weight in SCORING_WEIGHTS.items()) * confidence)))
+
+
+def qualification_reason(property_data: dict, comps: list[dict]) -> str:
+    asking = number(property_data.get('asking_price'))
+    if asking is None or asking <= 0:
+        return 'missing_source_asking_price'
+    sources = property_data.get('_field_sources') or {}
+    if not sources.get('asking_price') or not _url(property_data.get('asking_price_source_url') or property_data.get('source_url')):
+        return 'untraceable_asking_price'
+    if boolean(property_data.get('costs_complete')) is not True or not _url(property_data.get('costs_source_url')) or number(property_data.get('estimated_costs')) is None:
+        return 'missing_complete_cost_evidence'
+    acres = number(property_data.get('lot_size_acres')) or 0
+    if acres <= 0 or len(valid_comparables(comps, acres)) < MIN_COMPARABLES:
+        return 'insufficient_verified_comparables'
+    return ''
+
+
+def score_and_enrich_deal(property_data: dict, comps: list[dict], county_config: dict) -> Optional[dict]:
+    if not vacancy_decision(property_data, property_data.get('county_id', ''), county_config)[0]:
+        return None
+    # Do not scan an entire county for comps when basic financial inputs are absent.
+    initial_reason = qualification_reason(property_data, [])
+    if initial_reason and initial_reason != 'insufficient_verified_comparables':
+        return None
+    comps = comps or _source_comparables(property_data)
+    if qualification_reason(property_data, comps):
+        return None
+    asking, acres, costs = (number(property_data.get(key)) for key in ('asking_price', 'lot_size_acres', 'estimated_costs'))
+    valid = valid_comparables(comps, acres)
+    profit = calculate_profit_estimate(valid, acres, asking, estimated_costs=costs)
+    if profit['estimated_profit_low'] is None or profit['estimated_profit_low'] < MIN_PROFIT_ESTIMATE:
+        return None
+    evidence = {
+        'model_version': MODEL_VERSION, 'asking_price_basis': 'source',
+        'asking_price': asking, 'asking_price_field': property_data['_field_sources']['asking_price'],
+        'asking_price_source_url': property_data.get('asking_price_source_url') or property_data['source_url'],
+        'costs_complete': True, 'estimated_costs': costs, 'costs_source_url': property_data['costs_source_url'],
+        'lot_size_acres': acres, 'low_value_factor': .8,
+        'arv_formula': 'median(qualified sale_price / sale_acres) * subject_acres; low = high * 0.8',
+        'profit_formula': 'ARV - sourced asking price - sourced complete costs',
+        'offer_formula': 'sourced asking price * [0.6, 0.8]; proposal, not seller quote',
+        'comparable_count': len(valid),
     }
-    deal_data['deal_score'] = calculate_deal_score(deal_data)
-    return deal_data
+    signals = detect_motivation_signals(property_data)
+    deal = {**profit, **calculate_recommended_offer(asking, profit['estimated_profit_low'], profit['estimated_profit_high']),
+            'asking_price': asking, 'asking_price_basis': 'source', 'financial_evidence': evidence,
+            'motivation_signals': signals, 'motivation_score': min(1, len(signals) / 5),
+            'market_velocity': None, 'competition_level': None, 'comps': valid,
+            'verification_status': 'pending_review', 'status': 'discovered'}
+    deal['deal_score'] = calculate_deal_score(deal)
+    return deal

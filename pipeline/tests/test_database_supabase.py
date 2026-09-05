@@ -29,7 +29,7 @@ def test_property_and_deal_round_trip_payloads(monkeypatch):
     assert any(x[0]=="POST" and x[1].endswith("/properties") for x in calls)
     assert any(x[0]=="POST" and x[1].endswith("/deals") for x in calls)
 
-def test_source_verified_deal_is_promoted_to_verified(monkeypatch):
+def test_source_validation_never_promotes_a_deal_to_verified(monkeypatch):
     db = SupabaseDatabase("https://example.supabase.co", "service-key"); captured={}
     def fake_request(method, url, headers=None, timeout=None, **kwargs):
         if url.endswith("/deals") and method == "GET": return FakeResponse([])
@@ -40,7 +40,7 @@ def test_source_verified_deal_is_promoted_to_verified(monkeypatch):
     monkeypatch.setattr("database_supabase.requests.request", fake_request)
     did = db.save_deal({"property_id":42,"deal_score":81,"verification_status":"source_verified"})
     assert did == 88
-    assert captured["payload"]["verification_status"] == "verified"
+    assert captured["payload"]["verification_status"] == "source_verified"
 
 def test_get_top_deals_requires_verified_publication(monkeypatch):
     db = SupabaseDatabase("https://example.supabase.co", "service-key"); calls=[]
