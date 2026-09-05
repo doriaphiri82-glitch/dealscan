@@ -10,13 +10,41 @@ def _response(body):
 def test_statewide_portals_are_discovery_candidates_only():
     candidates = source_discovery.discover_statewide_sources("North Carolina")
     assert len(candidates) == 1
-    assert candidates[0].source_type == "statewide_portal"
+    assert candidates[0].source_type == "arcgis_layer"
     assert candidates[0].confidence < 1.0
     assert "verification" in candidates[0].notes
 
 
 def test_unknown_state_has_no_statewide_candidates():
     assert source_discovery.discover_statewide_sources("Not A State") == []
+
+
+def test_statewide_arcgis_layer_enumerates_distinct_counties(monkeypatch):
+    requested = []
+
+    def fake_fetch(url, **kwargs):
+        requested.append(url)
+        return _response({
+            "features": [
+                {"attributes": {"cntyname": "Alpha County", "cntyfips": "1"}},
+                {"attributes": {"cntyname": "Beta County", "cntyfips": "002"}},
+                {"attributes": {"cntyname": "Alpha County", "cntyfips": "001"}},
+            ]
+        })
+
+    monkeypatch.setattr(source_discovery, "fetch", fake_fetch)
+    result = source_discovery.enumerate_statewide_counties("North Carolina")
+
+    assert len(result) == 2
+    assert result[0]["county_fips"] == "001"
+    assert result[0]["county_name"] == "Alpha County"
+    assert result[0]["discovery_status"] == "DISCOVERED_NOT_VERIFIED"
+    assert result[0]["verified"] is False
+    assert "returnDistinctValues=true" in requested[0]
+
+
+def test_unknown_state_has_no_enumerated_counties():
+    assert source_discovery.enumerate_statewide_counties("Not A State") == []
 
 
 def test_discovery_rejects_generic_geometry_layer(monkeypatch):
