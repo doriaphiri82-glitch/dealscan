@@ -21,6 +21,32 @@ class SupabaseDatabase:
             raise RuntimeError(f"Supabase {method} {table} failed ({response.status_code}): {response.text[:1000]}")
         return response
 
+    def record_ingestion_run(self, county_id: str, status: str, counts: Dict[str, Any], error: str = "", source_url: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> int:
+        """Write one durable ETL audit record without exposing service credentials to clients."""
+        status_map = {"ok": "completed", "degraded": "partial", "error": "failed", "skipped": "partial"}
+        payload = {
+            "county_id": county_id,
+            "run_type": "scheduled" if os.getenv("GITHUB_ACTIONS") else "manual",
+            "status": status_map.get(status, "failed"),
+            "source_url": source_url,
+            "records_seen": int(counts.get("discovered", 0) or 0),
+            "records_normalized": int(counts.get("normalized", 0) or 0),
+            "records_persisted": int(counts.get("stored", 0) or 0),
+            "records_rejected": int(counts.get("rejected", 0) or 0),
+            "error_message": error or None,
+            "started_at": None,
+            "completed_at": "now()",
+            "metadata": metadata or {},
+        }
+        # PostgREST does not evaluate SQL expressions inside JSON payloads.
+        # Omit timestamps and let database defaults/triggers populate them.
+        payload.pop("started_at", None)
+        payload.pop("completed_at", None)
+        rows = self._request("POST", "ingestion_runs", headers={**self.headers, "Prefer": "return=representation"}, json=payload).json()
+        if not rows:
+            raise RuntimeError("Supabase ingestion run insert returned no row")
+        return int(rows[0]["id"])
+
     def upsert_county(self, county: Dict[str, Any]) -> None:
         """Persist authoritative registry metadata; never invent county identity fields."""
         county_id = str(county.get("county_id") or "").strip()
@@ -59,9 +85,6 @@ class SupabaseDatabase:
         existing = self._request("GET", "deals", params={"property_id": f"eq.{pid}", "select": "id", "order": "id.desc", "limit": "1"}).json()
         fields = ["deal_score","asking_price","estimated_arv_low","estimated_arv_high","estimated_costs","estimated_profit_low","estimated_profit_high","recommended_offer_low","recommended_offer_high","motivation_signals","motivation_score","market_velocity","competition_level","status","notes","source","source_url","source_vendor","source_quality","verification_status","data_freshness","valuation_basis","valuation_confidence"]
         payload = {k: data.get(k) for k in fields}
-        # A source_verified county has passed live source/field/sample validation.
-        # Once a current ETL record is successfully persisted, promote that deal
-        # to the verified publication state required by the public API/RLS gate.
         if payload.get("verification_status") == "source_verified":
             payload["verification_status"] = "verified"
         if existing:
@@ -84,7 +107,6 @@ class SupabaseDatabase:
         return self._request("GET", "comps", params={"deal_id": f"eq.{int(deal_id)}", "select": "address,sale_price,sale_date,distance_miles,lot_size_acres,price_per_acre", "order": "distance_miles.asc"}).json()
 
     def get_top_deals(self, limit: int = 10, min_score: int = 40, county_id: Optional[str] = None) -> List[dict]:
-        # Keep server-side publication queries aligned with the browser RLS contract.
         params = {"status": "eq.discovered", "verification_status": "eq.verified", "deal_score": f"gte.{int(min_score)}", "select": "*,properties!inner(apn,county_id,address,lot_size_acres,owner_name,owner_state,tax_delinquent_years,zoning)", "order": "deal_score.desc", "limit": str(int(limit))}
         if county_id: params["properties.county_id"] = f"eq.{county_id}"
         rows = self._request("GET", "deals", params=params).json(); out = []
