@@ -11,7 +11,7 @@
       "data_source_type": "arcgis",
       "assessor_url": "https://www.cochise.az.gov/departments/assessor",
       "gis_url": "https://gis-cochise.opendata.arcgis.com",
-      "parcel_source_url": "https://gis-cochise.opendata.arcgis.com/datasets/parcel-cochise-county-tax-information",
+      "parcel_source_url": "https://services6.arcgis.com/Yxem0VOcqSy8T6TE/arcgis/rest/services/Cad_Parcel_TaxInfo/FeatureServer/0",
       "tax_source_url": null,
       "delinquent_tax_source_url": null,
       "zoning_source_url": null,
@@ -23,7 +23,8 @@
       "last_record_count": null,
       "data_freshness": null,
       "field_mapping": {},
-      "notes": "ArcGIS Hub Parcel (Cochise County - Tax Information); source refreshed 2026-09-05; ETL run pending"
+      "notes": "Official Cochise County Cad_Parcel_TaxInfo FeatureServer; layer updated weekly; ETL run pending",
+      "arcgis_layer_url": "https://services6.arcgis.com/Yxem0VOcqSy8T6TE/arcgis/rest/services/Cad_Parcel_TaxInfo/FeatureServer/0"
     },
     "mohave_az": {
       "county_id": "mohave_az",
