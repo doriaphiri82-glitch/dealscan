@@ -1,0 +1,31 @@
+{
+  "purpose": "Offline cross-language configuration contract only; not a real county or validation result",
+  "county": {
+    "county_id": "fixture",
+    "arcgis_layer_url": "https://county.example/FeatureServer/0",
+    "where": "1=1",
+    "acreage_units": "acres",
+    "authority_reviewed": true,
+    "authority_evidence_url": "https://county.example/gis",
+    "authority_source_url": "https://county.example/FeatureServer/0",
+    "source_county_geoid": "99001",
+    "geoid": "99001",
+    "field_mapping": {
+      "apn": "N\u00daMERO",
+      "lot_size_acres": "ACRES",
+      "address": [
+        "HOUSE",
+        "STREET"
+      ]
+    },
+    "validation_status": "valid",
+    "last_validated_at": "2026-09-05T00:00:00Z",
+    "validation_source_fields_checked": true,
+    "validation_pagination_checked": true,
+    "validation_sample_checked": 2,
+    "ingestion_authorized": true,
+    "validated_source_fingerprint": "c154a66158ab98e97b1606242a4103c18073a76a335f1d7667d9ee86af108d53",
+    "authorized_source_fingerprint": "c154a66158ab98e97b1606242a4103c18073a76a335f1d7667d9ee86af108d53"
+  },
+  "fingerprint": "c154a66158ab98e97b1606242a4103c18073a76a335f1d7667d9ee86af108d53"
+}

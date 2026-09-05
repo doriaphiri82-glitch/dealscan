@@ -7,6 +7,7 @@ import { GET as health } from '../app/api/health/route'
 // Isolated transport fixtures, never published or persisted.
 const row = (extra = {}) => ({
   status: 'discovered', verification_status: 'verified', deal_score: 45,
+  verified_at: new Date().toISOString(), verification_expires_at: new Date(Date.now()+3600000).toISOString(),
   source_url: 'https://county.example/parcel', asking_price: null,
   properties: { apn: 'fixture', county_id: 'fixture_county', owner_name: 'PRIVATE', owner_address: 'PRIVATE' },
   notes: 'PRIVATE', raw_payload: { secret: 'PRIVATE' }, ...extra,
@@ -47,6 +48,14 @@ describe('public deal boundary', () => {
     expect(body.count).toBe(1); expect(body.deals[0].asking_price).toBeNull()
     expect(JSON.stringify(body)).not.toContain('PRIVATE')
     expect(body.deals[0]).not.toHaveProperty('properties')
+  })
+  it('rejects expired or missing verification independently of database RLS', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json([
+      row({ verification_expires_at: new Date(Date.now()-1000).toISOString() }),
+      row({ verified_at: null }), row({ verification_expires_at: null }),
+    ])))
+    const res = await list(request('/api/deals'))
+    expect((await res.json()).deals).toEqual([])
   })
   it('preserves literal percent APNs and scopes identical APNs by county', async () => {
     const fetch = vi.fn().mockResolvedValue(Response.json([row()])); vi.stubGlobal('fetch', fetch)

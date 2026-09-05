@@ -63,9 +63,10 @@ def _health_display() -> None:
     ensure_pilot_counties()
     from runregistry import load_registry
     registry = load_registry()
+    from config.counties.registry import _load_registry
     recent_runs = registry.get("runs", [])
     dashboard = build_national_dashboard(
-        {"counties": {c["county_id"]: c for c in list_counties()}},
+        _load_registry(),
         recent_runs,
     )
     print(f"\nDealScan Coverage Dashboard")

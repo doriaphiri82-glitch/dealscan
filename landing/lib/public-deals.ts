@@ -11,7 +11,7 @@ const NUMERIC_FIELDS = [
 ] as const
 const TEXT_FIELDS = [
   'status', 'verification_status', 'source', 'source_vendor', 'source_quality',
-  'data_freshness', 'valuation_basis', 'updated_at',
+  'data_freshness', 'valuation_basis', 'updated_at', 'verified_at', 'verification_expires_at',
 ] as const
 const PROPERTY_FIELDS = ['apn', 'county_id', 'address', 'zoning'] as const
 const PROPERTY_NUMBERS = ['lot_size_acres', 'latitude', 'longitude'] as const
@@ -38,6 +38,9 @@ function sourceUrl(value: unknown): string | null {
 /** Explicit projection is a second boundary after RLS, never object-spread DB rows. */
 export function publicDeal(row: unknown): Row | null {
   if (!object(row) || row.status !== 'discovered' || row.verification_status !== 'verified' || !object(row.properties)) return null
+  const verified = Date.parse(String(row.verified_at ?? ''))
+  const expires = Date.parse(String(row.verification_expires_at ?? ''))
+  if (!Number.isFinite(verified) || verified > Date.now() + 300000 || !Number.isFinite(expires) || expires <= Date.now()) return null
   const property = row.properties
   if (!text(property.apn) || !text(property.county_id)) return null
   const deal: Row = {}
@@ -56,7 +59,7 @@ export async function supabaseRead(table: string, params: URLSearchParams): Prom
   if (!config) throw new DealsUnavailable('Database not configured')
   try {
     const response = await fetch(`${config.url}/rest/v1/${table}?${params}`, {
-      headers: { apikey: config.key, Authorization: `Bearer ${config.key}` },
+      headers: config.key.startsWith('sb_publishable_') ? { apikey: config.key } : { apikey: config.key, Authorization: `Bearer ${config.key}` },
       cache: 'no-store', signal: AbortSignal.timeout(8000), redirect: 'error',
     })
     if (!response.ok) throw new DealsUnavailable('Database unavailable')
@@ -73,7 +76,7 @@ export async function readPublishedDeals({ limit = 25, offset = 0, apn, countyId
   limit?: number; offset?: number; apn?: string; countyId?: string
 } = {}): Promise<Row[]> {
   const params = new URLSearchParams({
-    status: 'eq.discovered', verification_status: 'eq.verified', select: SELECT,
+    status: 'eq.discovered', verification_status: 'eq.verified', verification_expires_at: `gt.${new Date().toISOString()}`, select: SELECT,
     order: 'deal_score.desc,id.asc', limit: String(limit), offset: String(offset),
   })
   // Quote PostgREST filter values so punctuation in real APNs remains literal.

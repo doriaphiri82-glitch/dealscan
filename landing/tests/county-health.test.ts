@@ -1,0 +1,24 @@
+import { expect, it } from 'vitest'
+import { countyFingerprint, countyHealth } from '../lib/county-health'
+import fixture from './fixtures/source_fingerprint.json'
+const now = Date.parse('2026-09-05T12:00:00Z')
+
+it('matches the Python authorization fingerprint including Unicode and composite fields', () => {
+  expect(countyFingerprint(fixture.county)).toBe(fixture.fingerprint)
+})
+
+it('requires current, complete, configuration-bound validation and explicit authorization', () => {
+  const snapshot = { county:{...fixture.county,last_run_status:'ok',ingestion_status:'ingested',persisted_count:2}, stored_total:10, verified_total:0 }
+  const good = countyHealth(snapshot,now)
+  expect(good.ingestion_ready).toBe(true); expect(good.status).toBe('active')
+  expect(good.published).toBe(0); expect(good.records).toBe(10)
+  expect(good.data_freshness).toBeNull()
+  for (const patch of [
+    { last_validated_at:'2020-01-01T00:00:00Z' }, { validation_pagination_checked:false },
+    { field_mapping:{apn:'OTHER'} }, { ingestion_authorized:false }, { authority_reviewed:false },
+    { source_county_geoid:'99999' },
+  ]) {
+    const result = countyHealth({...snapshot,county:{...snapshot.county,...patch}},now)
+    expect(result.ingestion_ready).toBe(false); expect(result.status).not.toBe('active')
+  }
+})

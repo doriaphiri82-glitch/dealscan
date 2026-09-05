@@ -83,33 +83,63 @@ def _politeness_delay(url: str) -> None:
     _last_request_at[host] = time.time()
 
 
+def _bounded_content(response, max_bytes: int) -> bytes:
+    try:
+        size = response.headers.get('content-length')
+        if size and int(size) > max_bytes: raise ValueError('Response exceeds byte limit')
+        chunks, length = [], 0
+        for chunk in response.iter_content(chunk_size=65536):
+            length += len(chunk)
+            if length > max_bytes: raise ValueError('Response exceeds byte limit')
+            chunks.append(chunk)
+        return b''.join(chunks)
+    finally:
+        response.close()
+
+
 def robots_allows(url: str) -> bool:
     try:
         parsed = urlparse(url)
         rp = robotparser.RobotFileParser()
-        rp.set_url(f"{parsed.scheme}://{parsed.netloc}/robots.txt")
-        rp.read()
-        return rp.can_fetch(USER_AGENT, url)
-    except Exception:
-        return True
+        response = _session.get(f'{parsed.scheme}://{parsed.netloc}/robots.txt',timeout=(5,10),allow_redirects=False,stream=True)
+        if response.status_code in (404,410):
+            response.close()
+            return True
+        if response.status_code != 200:
+            response.close()
+            return False
+        rp.parse(_bounded_content(response,65536).decode('utf-8',errors='replace').splitlines())
+        return rp.can_fetch(USER_AGENT,url)
+    except (requests.RequestException,ValueError):
+        return False
 
 
 def fetch(url: str, ttl: int = DEFAULT_TTL, as_json: bool = False,
           respect_robots: bool = True, retries: int = 2,
-          timeout: int = 30, raw: bool = False) -> FetchResult:
+          timeout: int = 30, raw: bool = False, max_bytes: int | None = None) -> FetchResult:
+    parsed = urlparse(url)
+    if parsed.scheme not in {'https','http'} or not parsed.hostname or parsed.username or parsed.password:
+        return FetchResult(ok=False,error='Invalid source URL')
+    if max_bytes is not None and not 1<=max_bytes<=128*1024*1024:
+        return FetchResult(ok=False,error='Invalid response byte cap')
     ns = "raw" if raw else ""
     cached = _cached(url, ttl, ns) if ttl > 0 else None
     if cached is not None:
+        if max_bytes is not None and isinstance(cached,bytes) and len(cached)>max_bytes:
+            return FetchResult(ok=False,error="Cached response exceeds byte limit")
         return FetchResult(ok=True, status=200, body=cached, from_cache=True)
     if respect_robots and not robots_allows(url):
         return FetchResult(ok=False, error="robots.txt disallows this URL")
     for attempt in range(retries + 1):
         _politeness_delay(url)
         try:
-            resp = _session.get(url, timeout=timeout)
+            resp = _session.get(url, timeout=timeout, allow_redirects=False, **({"stream":True} if max_bytes is not None else {}))
             if resp.status_code == 200:
-                if raw:
-                    body: Any = resp.content
+                if max_bytes is not None:
+                    content = _bounded_content(resp,max_bytes)
+                    body = content if raw else json.loads(content) if as_json or 'application/json' in resp.headers.get('content-type','') else content.decode(resp.encoding or 'utf-8')
+                elif raw:
+                    body = resp.content
                 elif as_json:
                     body = resp.json()
                 else:
@@ -118,10 +148,13 @@ def fetch(url: str, ttl: int = DEFAULT_TTL, as_json: bool = False,
                 if ttl > 0:
                     _store_cache(url, body, ns)
                 return FetchResult(ok=True, status=200, body=body)
+            if max_bytes is not None: resp.close()
             if resp.status_code in (429, 500, 502, 503, 504) and attempt < retries:
                 time.sleep(2 ** attempt * 5)
                 continue
             return FetchResult(ok=False, status=resp.status_code, error=f"HTTP {resp.status_code}")
+        except ValueError:
+            return FetchResult(ok=False,error="Invalid or oversized source response")
         except requests.RequestException as exc:
             if attempt >= retries:
                 return FetchResult(ok=False, error=type(exc).__name__)
@@ -134,13 +167,15 @@ def post_json(url: str, payload: Dict[str, Any], timeout: int = 30,
     for attempt in range(retries + 1):
         _politeness_delay(url)
         try:
-            resp = _session.post(url, data=payload, timeout=timeout)
+            resp = _session.post(url, data=payload, timeout=timeout, allow_redirects=False)
             if resp.status_code == 200:
                 return FetchResult(ok=True, status=200, body=resp.json())
             if resp.status_code in (429, 500, 502, 503, 504) and attempt < retries:
                 time.sleep(5)
                 continue
             return FetchResult(ok=False, status=resp.status_code, error=f"HTTP {resp.status_code}")
+        except ValueError:
+            return FetchResult(ok=False,error="Invalid or oversized source response")
         except requests.RequestException as exc:
             if attempt >= retries:
                 return FetchResult(ok=False, error=type(exc).__name__)

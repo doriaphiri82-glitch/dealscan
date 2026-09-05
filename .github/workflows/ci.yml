@@ -56,5 +56,5 @@ jobs:
         run: npm run typecheck
       - name: Build web app
         run: npm run build
-      - name: Audit production web dependencies
-        run: npm audit --omit=dev --audit-level=high
+      - name: Audit web dependencies
+        run: npm audit --audit-level=high
