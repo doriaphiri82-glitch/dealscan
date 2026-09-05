@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 from scrapers.base import fetch, probe
 from discovery.statewide_sources import statewide_sources_for_state
 
@@ -40,6 +40,58 @@ def discover_statewide_sources(state: str) -> List[SourceCandidate]:
         )
         for source in statewide_sources_for_state(state)
     ]
+
+def enumerate_statewide_counties(state: str) -> List[Dict[str, Any]]:
+    """Enumerate county keys exposed directly by a statewide ArcGIS parcel layer.
+
+    This creates discovery candidates only. It does not register a county as
+    verified and deliberately returns the raw statewide identifiers so the
+    national registry can reconcile them with Census-backed county geography.
+    """
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for source in statewide_sources_for_state(state):
+        if source.source_type != "arcgis_layer" or not source.county_fips_field:
+            continue
+        fields = [source.county_fips_field]
+        if source.county_name_field:
+            fields.insert(0, source.county_name_field)
+        params = {
+            "where": "1=1",
+            "outFields": ",".join(fields),
+            "returnGeometry": "false",
+            "returnDistinctValues": "true",
+            "orderByFields": source.county_fips_field,
+            "f": "json",
+        }
+        url = source.url.rstrip("/") + "?" + urlencode(params)
+        response = fetch(url, ttl=6 * 3600, as_json=True, respect_robots=False)
+        if not response.ok or not isinstance(response.body, dict):
+            continue
+        for feature in response.body.get("features") or []:
+            attrs = feature.get("attributes") or {}
+            raw_fips = attrs.get(source.county_fips_field)
+            if raw_fips in (None, ""):
+                continue
+            county_fips = str(raw_fips).strip()
+            if county_fips.isdigit():
+                county_fips = county_fips.zfill(3)
+            county_name = attrs.get(source.county_name_field) if source.county_name_field else None
+            key = (state.lower(), county_fips)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "state": state,
+                "county_fips": county_fips,
+                "county_name": str(county_name).strip() if county_name else None,
+                "county_key": f"{state}:{county_fips}",
+                "source_url": source.url,
+                "source_type": source.source_type,
+                "discovery_status": "DISCOVERED_NOT_VERIFIED",
+                "verified": False,
+            })
+    return out
 
 def discover_flatfile_sources(county_cfg: Dict[str, Any]) -> List[SourceCandidate]:
     return [SourceCandidate(county_cfg[k],"flatfile",.7,f"Configured {k}") for k in ("parcel_source_url","open_gov_url","data_url") if county_cfg.get(k)]
