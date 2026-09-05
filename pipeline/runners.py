@@ -36,6 +36,7 @@ def _county_config(county_id:str)->Dict[str,Any]:
         # A pilot layer is itself an ArcGIS source. Do not allow stale scraper
         # metadata to change the adapter selection back to another source mode.
         if pilot.get("arcgis_layer_url"):
+            cfg["arcgis_root"]=pilot["arcgis_layer_url"]
             cfg["data_mode"]="arcgis"
             cfg["scraper_type"]="arcgis"
     if not cfg:
