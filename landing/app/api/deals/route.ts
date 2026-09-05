@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import SEED_BUNDLE from '../../../lib/seed-bundle'
 
 const KEY_TOP = 'deals:top'
-type DealsSource = 'supabase' | 'redis' | 'redis-proto' | 'kv' | 'seed'
+type DealsSource = 'supabase' | 'redis' | 'redis-proto' | 'kv' | 'none'
 const REDIS_URL = process.env.REDIS_URL || ''
 const REDIS_TOKEN = process.env.REDIS_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || ''
 const KV_URL = process.env.KV_REST_API_URL || ''
@@ -103,10 +102,10 @@ async function readBundle(): Promise<{ data: unknown; source: DealsSource }> {
         if (json.result) return { data: JSON.parse(json.result), source: 'kv' }
       }
     } catch {
-      /* fall through to the committed seed */
+      /* no published cache available */
     }
   }
-  return { data: SEED_BUNDLE, source: 'seed' }
+  return { data: { deals: [], generated_at: null, meta: { status: 'no-data', scraped_counties: [] } }, source: 'none' }
 }
 
 export async function GET(request: NextRequest) {
@@ -126,7 +125,7 @@ export async function GET(request: NextRequest) {
     deals: deals.slice(0, limit),
     generated_at: bundle.generated_at ?? null,
     meta: {
-      status: bundle.meta?.status ?? 'ok',
+      status: bundle.meta?.status ?? (deals.length ? 'ok' : 'no-data'),
       scraped_counties: bundle.meta?.scraped_counties ?? [],
       storage_source: source,
     },
