@@ -138,3 +138,10 @@ it('caps publication by comparable age, not only the source-validation deadline'
   const rows=(await db.query("select verification_expires_at<=now()+interval '61 minutes' as bounded from deals where id=1")).rows
   expect(rows).toEqual([{bounded:true}])
 })
+
+
+it.each(['1','null'])('cannot republish an incorrect materialized comparable price per acre: %s',async value=>{
+  await asRole(db,'service_role',`update comps set price_per_acre=${value} where id=1`)
+  await expect(asRole(db,'service_role',"update deals set verification_status='verified' where id=1")).rejects.toThrow(/price-per-acre arithmetic/)
+  expect((await asRole(db,'anon','select id from deals')).rows).toEqual([])
+})

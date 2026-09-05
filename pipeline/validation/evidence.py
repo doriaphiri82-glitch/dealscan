@@ -16,10 +16,10 @@ def verify_property_snapshot(prop: dict, record: dict, cfg: dict) -> dict:
         if not condition: raise ValueError(message)
     raw = record.get('raw_payload')
     canonical = record.get('raw_payload_canonical')
-    require(isinstance(raw,dict) and bool(raw) and isinstance(canonical,str), 'Canonical source snapshot is missing')
+    require(isinstance(raw,dict) and bool(raw) and isinstance(canonical,str), 'Canonical raw source snapshot is missing')
     try: decoded = json.loads(canonical)
-    except (ValueError,TypeError): raise ValueError('Canonical source snapshot is malformed') from None
-    require(decoded==json_safe(raw), 'Canonical source snapshot differs from its JSON payload')
+    except (ValueError,TypeError): raise ValueError('Canonical raw source snapshot is malformed') from None
+    require(decoded==json_safe(raw), 'Canonical raw source snapshot differs from its JSON payload')
     require(hashlib.sha256(canonical.encode()).hexdigest()==prop.get('source_payload_hash'), 'Source payload changed after the selected run')
     fingerprint = source_fingerprint(cfg)
     require(isinstance(record.get('field_mapping'),dict) and bool(record['field_mapping']), 'Source field mapping is missing')

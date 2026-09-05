@@ -1,3 +1,4 @@
+import { currentVerification, supportedFinancialFacts, sourceReference } from './verified-facts'
 /** Browser-facing verified opportunity contract. Unknown facts remain null. */
 export interface Comp {
   address?: string | null
@@ -17,6 +18,8 @@ export interface Deal {
   address?: string | null
   lot_size_acres?: number | null
   asking_price?: number | null
+  asking_price_basis?: string | null
+  status?: string
   estimated_costs?: number | null
   deal_score?: number | null
   estimated_arv_low?: number | null
@@ -52,10 +55,8 @@ export class ParcelAmbiguous extends Error {}
 
 export function currentDeal(value: unknown): value is Deal {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const row = value as Deal
-  return typeof row.apn === 'string' && !!row.apn && typeof row.county_id === 'string' && !!row.county_id
-    && row.verification_status === 'verified' && Number.isFinite(Date.parse(row.verified_at))
-    && Date.parse(row.verified_at) <= Date.now()+300000 && Date.parse(row.verification_expires_at)>Date.now()
+  const row = value as Record<string,unknown>
+  return currentVerification(row) && sourceReference(row) && supportedFinancialFacts(row)
 }
 
 /** Outages are errors, not a fabricated empty dataset or an old cached feed. */
@@ -66,7 +67,8 @@ export async function fetchTopDeals(limit = 25, offset = 0): Promise<DealsRespon
     })
     if (!res.ok) throw new Error()
     const data = await res.json() as DealsResponse
-    if (!Array.isArray(data.deals) || data.meta?.storage_source !== 'supabase' || !data.deals.every(currentDeal)) throw new Error()
+    if (!Array.isArray(data.deals) || data.meta?.storage_source !== 'supabase' || !data.deals.every(currentDeal) || !Number.isSafeInteger(data.count) || data.count!==data.deals.length || data.deals.length>limit
+      || new Set(data.deals.map(deal=>JSON.stringify([deal.county_id,deal.apn]))).size!==data.deals.length) throw new Error()
     return data
   } catch { throw new FeedUnavailable('The verified feed is unavailable. Please try again.') }
 }
@@ -81,7 +83,7 @@ export async function fetchDealByApn(apn: string, countyId?: string): Promise<{ 
     if (res.status === 409) throw new ParcelAmbiguous('This APN exists in more than one county. Select the county in Explorer.')
     if (!res.ok) throw new Error()
     const data = await res.json() as { deal: Deal }
-    if (!currentDeal(data.deal)) throw new Error()
+    if (!currentDeal(data.deal) || data.deal.apn!==apn || (countyId!==undefined&&data.deal.county_id!==countyId)) throw new Error()
     return data
   } catch (error) {
     if (error instanceof ParcelAmbiguous) throw error

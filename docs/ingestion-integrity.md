@@ -115,3 +115,15 @@ Public API checks compare the financial values, source references and verificati
 deadlines of the selected county/APN pairs, not just their identities. Unfiltered
 public database reads also check review expiry. Duplicate responses and invented
 zero values for missing facts cannot count as API/database agreement.
+
+
+A cached/materialized comparable price-per-acre must also match its sale price and
+acreage. Re-verification cannot silently correct that value in memory while leaving
+a different public database value behind. The additive arithmetic migration holds
+inconsistent legacy publications without replacing their source facts.
+
+Read boundaries independently reject claimed verified rows with missing core
+financial evidence, invalid identifiers, contradictory model arithmetic or
+inconsistent comparable sets. Missing optional address/zoning/freshness fields
+remain null. Filtered lookup responses must match the requested county/APN; repeated
+rows cannot inflate inventory or turn into a comparison of a parcel with itself.

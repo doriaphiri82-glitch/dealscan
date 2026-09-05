@@ -291,3 +291,15 @@ def test_vacant_building_or_conflicting_classification_is_not_vacant_land(monkey
     result=ingest(monkeypatch,rows)
     assert result['counts']['rejected']==1
     assert result['counts']['qualified']==0
+
+
+@pytest.mark.parametrize('change',['price_per_acre','address','land_use','has_improvements','vacancy_evidence'])
+def test_review_rejects_persisted_fields_that_no_longer_match_source(monkeypatch,change):
+    ingest(monkeypatch)
+    deal,records,run=verification_inputs(database.get_backend())
+    if change=='price_per_acre': deal['comps'][0]['price_per_acre']=1
+    elif change=='has_improvements': deal['properties'][change]=True
+    elif change=='vacancy_evidence': deal['properties'][change]={}
+    else: deal['properties'][change]='ALTERED_PRIVATE_VALUE'
+    with pytest.raises(ValueError) as exc: verify_persisted_deal(deal,records,run)
+    assert 'ALTERED_PRIVATE_VALUE' not in str(exc.value)

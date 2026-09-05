@@ -1,3 +1,4 @@
+import { publishedDeal } from './support/public-deal'
 import { expect, it, vi } from 'vitest'
 import { fetchTopDeals, fetchDealByApn, ParcelAmbiguous } from '../lib/deals'
 import { parcelKey, parseParcelKey, parcelHref, compareHref, comparisonRefs, readParcelList, writeParcelList } from '../lib/parcels'
@@ -44,4 +45,29 @@ it('preserves clearly identified browser-local parcel references', () => {
   const keys=[parcelKey({apn:'1',county_id:'a'}),parcelKey({apn:'1',county_id:'b'})]
   writeParcelList('saved',keys)
   expect(readParcelList('saved')).toEqual(keys)
+})
+
+
+it('accepts a complete verified response without inventing optional property information',async()=>{
+  const deal=publishedDeal({address:null,zoning:null})
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json({count:1,deals:[deal],meta:{status:'ok',storage_source:'supabase'}})))
+  expect((await fetchTopDeals()).deals).toEqual([deal])
+})
+
+it.each([{asking_price:null},{asking_price:0},{estimated_costs:-1},{estimated_profit_high:999999},{source_record_id:null},{latitude:null}])('rejects a claimed verified opportunity with incomplete or contradictory facts: %j',async patch=>{
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json({count:1,deals:[publishedDeal(patch)],meta:{status:'ok',storage_source:'supabase'}})))
+  await expect(fetchTopDeals()).rejects.toThrow(/unavailable/)
+})
+
+it('does not accept another parcel from a successful detail response',async()=>{
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json({deal:publishedDeal({apn:'different'})})))
+  await expect(fetchDealByApn('requested','fixture_county')).rejects.toThrow()
+})
+
+it('rejects malformed counts and repeated parcels rather than inflating available inventory',async()=>{
+  const deal=publishedDeal()
+  for(const body of [{count:999,deals:[deal]},{count:2,deals:[deal,deal]}]){
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json({...body,meta:{status:'ok',storage_source:'supabase'}})))
+    await expect(fetchTopDeals()).rejects.toThrow()
+  }
 })

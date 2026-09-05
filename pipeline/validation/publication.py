@@ -6,6 +6,7 @@ from normalization import boolean, normalize, number, sale_date, source_identity
 from persistence import COMP_FIELDS, json_safe
 from validation.gates import authorization_error, source_fingerprint
 from validation.vacancy import vacancy_decision
+from validation.evidence import verify_property_snapshot
 import hashlib
 import json
 from scoring.deal_scorer import MODEL_VERSION, _distance_miles, score_and_enrich_deal
@@ -50,16 +51,8 @@ def verify_persisted_deal(deal: dict, records: list[dict], run: dict) -> dict:
     record = by_id.get(deal.get('ingestion_record_id')) or {}
     require(record and record.get('status') == 'candidate' and record.get('property_id') == deal.get('property_id') and record.get('county_id') == prop.get('county_id'), 'Deal source record does not match its property')
     require(record.get('source_url') == run.get('source_url') == deal.get('source_url') == prop.get('source_url') and record.get('source_record_id'), 'Source URL or identity is missing/mismatched')
-    raw = record.get('raw_payload') or {}
-    canonical=record.get('raw_payload_canonical')
-    require(isinstance(canonical,str) and json.loads(canonical)==json_safe(raw), 'Canonical raw source snapshot is missing or inconsistent')
-    raw_hash = hashlib.sha256(canonical.encode()).hexdigest()
-    require(raw and raw_hash == prop.get('source_payload_hash'), 'Property has changed since its source audit')
-    require(source_fingerprint({**cfg,'fields':record.get('field_mapping') or {}})==fingerprint, 'Audit mapping differs from authorized source mapping')
-    normalized = normalize(raw, {**cfg, 'fields': record.get('field_mapping') or {}})
-    normalized['source_url'] = record.get('source_url')
-    require(source_identity(raw, cfg, normalized) == record.get('source_record_id') == prop.get('source_record_id'), 'Parcel source identity cannot be reproduced')
-    require(normalized.get('apn') == prop.get('apn') and normalized.get('lot_size_acres') == number(prop.get('lot_size_acres')), 'Parcel identity or acreage changed')
+    normalized = verify_property_snapshot(prop,record,cfg)
+    raw = record['raw_payload']
     require(prop.get('vacancy_status') == 'qualified' and vacancy_decision(normalized, prop.get('county_id'), cfg)[0], 'Property vacancy is unverified')
     asking_field = normalized['_field_sources'].get('asking_price')
     require(asking_field and number(source_value(raw, asking_field)) == number(deal.get('asking_price')), 'Asking price is not backed by the raw source field')
@@ -71,7 +64,9 @@ def verify_persisted_deal(deal: dict, records: list[dict], run: dict) -> dict:
     evidence = deal.get('financial_evidence') or {}
     require(evidence.get('model_version') == deal.get('valuation_model') == MODEL_VERSION and deal.get('asking_price_basis') == 'source', 'Financial model evidence is missing')
     comps = validate_comp_payloads(deal.get('comps') or [])
-    for comp in comps:
+    for stored_comp,comp in zip(deal.get('comps') or [],comps):
+        actual_ppa=number(stored_comp.get('price_per_acre'))
+        require(actual_ppa is not None and abs(actual_ppa-comp['price_per_acre'])<=.011, 'Comparable price per acre differs from its sale facts')
         source = by_id.get(comp.get('ingestion_record_id')) or {}
         require(source and source.get('county_id') == comp.get('county_id') == prop.get('county_id') and source.get('source_url') == comp.get('source_url') and source.get('source_record_id') == comp.get('source_record_id'), 'Comparable lacks matching persisted provenance')
         require(source.get('status') in {'held','candidate','persisted'} and source.get('hold_reason') != 'duplicate_county_apn', 'Comparable source identity was rejected or ambiguous')
