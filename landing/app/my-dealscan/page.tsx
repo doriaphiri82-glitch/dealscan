@@ -4,7 +4,7 @@ import SignOutButton from './SignOutButton'
 import Workspace from './Workspace'
 
 export default async function MyDealScanPage() {
-  const cookieStore = cookies()
+  const cookieStore = await cookies()
   const supabase = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, { cookies: { getAll: () => cookieStore.getAll(), setAll: () => {} } })
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return <main className="grid min-h-screen place-items-center bg-[#f7f9f7] px-4 py-16"><div className="w-full max-w-lg rounded-[2rem] border border-[#dfe7e2] bg-white p-8 text-center shadow-[0_18px_60px_rgba(23,42,32,.06)]"><span className="rounded-full bg-[#e8f4ec] px-3 py-1.5 text-[10px] font-black uppercase tracking-[.14em] text-[#176b45]">My DealScan</span><h1 className="mt-5 text-3xl font-black tracking-[-.04em] text-[#153025]">Your research workspace.</h1><p className="mt-3 text-sm leading-6 text-[#69766f]">Sign in to keep a shortlist, review your research trail and compare opportunities.</p><a href="/auth" className="mt-7 inline-flex rounded-xl bg-[#153025] px-5 py-3 text-sm font-bold text-white hover:bg-[#176b45]">Sign in →</a><a href="/deals" className="ml-2 mt-7 inline-flex rounded-xl border border-[#dfe7e2] px-5 py-3 text-sm font-bold text-[#34423b]">Explore first</a></div></main>

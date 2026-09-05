@@ -14,7 +14,7 @@ export async function GET(request: Request) {
 
   if (!code) return NextResponse.redirect(new URL('/auth?error=missing_code', requestUrl.origin))
 
-  const cookieStore = cookies()
+  const cookieStore = await cookies()
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,

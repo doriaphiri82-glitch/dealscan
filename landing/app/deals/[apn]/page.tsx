@@ -1,10 +1,12 @@
 'use client'
 import { useCallback, useEffect, useState } from 'react'
+import { useParams } from 'next/navigation'
 import ResearchWorkspace from '@/components/ResearchWorkspace'
 interface Deal { apn?:string; address?:string; county_id?:string; lot_size_acres?:number; asking_price?:number; deal_score?:number; estimated_arv_low?:number; estimated_arv_high?:number; estimated_profit_low?:number; estimated_profit_high?:number; recommended_offer_low?:number; recommended_offer_high?:number; valuation_basis?:string; valuation_confidence?:number; source_url?:string; source_quality?:string; verification_status?:string; data_freshness?:string; motivation_signals?:string[]; market_velocity?:number; competition_level?:string; zoning?:string; owner_state?:string; tax_delinquent_years?:number; latitude?:number; longitude?:number }
 const money=(v?:number)=>typeof v==='number'?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(v):'—'
 const label=(v?:string)=>v?v.replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase()):'—'
-export default function DealDetailPage({params}:{params:{apn:string}}){
+export default function DealDetailPage(){
+ const params = useParams<{apn:string}>()
  const [deal,setDeal]=useState<Deal|null>(null); const [loading,setLoading]=useState(true); const [error,setError]=useState('')
  const load=useCallback(async()=>{setLoading(true);setError('');try{const res=await fetch(`/api/deals/${encodeURIComponent(params.apn)}`,{cache:'no-store'});if(!res.ok)throw new Error();const j=await res.json() as {deal?:Deal};setDeal(j.deal??null)}catch{setDeal(null);setError('We could not load this parcel from the published feed.')}finally{setLoading(false)}},[params.apn])
  useEffect(()=>{void load()},[load])

@@ -81,9 +81,9 @@ async function readFromSupabase(apn: string): Promise<unknown | null> {
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: { apn: string } }
+  { params }: { params: Promise<{ apn: string }> }
 ) {
-  const apn = decodeURIComponent(params.apn)
+  const apn = (await params).apn
   let report: unknown | null = await readFromSupabase(apn)
 
   if (!report && (isRedisRest || isRedisProto)) {

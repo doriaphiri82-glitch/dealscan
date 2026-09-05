@@ -39,3 +39,6 @@ Thumbs.db
 *.swp
 .idea/
 .vercel
+
+# Local engineering reports and test scratch files
+.arena/
