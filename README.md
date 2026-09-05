@@ -84,3 +84,9 @@ Saved parcels and recent research are browser-profile local, not account-synced.
 Same-APN parcels remain county-scoped; legacy unscoped references are not guessed.
 Paid checkout, automated email alerts and premium-service promises are not active.
 Optional email/cache utilities fail closed by default and are not publication paths.
+
+
+Browser research cancels superseded requests and never switches a same-APN parcel
+into the wrong county after navigation or a late response. Saved references are
+validated without silently truncating or reinterpreting corrupt data. Currency
+formatting preserves source cents rather than rounding a small price to zero.

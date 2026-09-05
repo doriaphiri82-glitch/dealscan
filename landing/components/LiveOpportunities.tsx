@@ -1,8 +1,9 @@
 'use client'
+import { formatCurrency } from '@/lib/format'
 import { useEffect, useState } from 'react'
 import { fetchTopDeals, currentDeal, type Deal } from '@/lib/deals'
 import { parcelHref, parcelKey } from '@/lib/parcels'
-const money = (value?: number|null) => typeof value === 'number' && Number.isFinite(value) ? new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(value) : 'Not published'
+const money=(value?:number|null)=>formatCurrency(value,'Not published')
 
 export default function LiveOpportunities() {
   const [deals,setDeals] = useState<Deal[]>([])

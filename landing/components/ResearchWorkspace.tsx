@@ -1,9 +1,9 @@
 'use client'
+import { formatCurrency as money } from '@/lib/format'
 
 import { useState } from 'react'
 
 import type { Deal, Comp } from '@/lib/deals'
-const money=(v?:number|null)=>typeof v==='number'?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(v):'—'
 const label=(v?:string|null)=>v?v.replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase()):'—'
 
 export default function ResearchWorkspace({deal}:{deal:Deal}){

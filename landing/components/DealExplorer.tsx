@@ -1,11 +1,11 @@
 'use client'
+import { formatCurrency as money } from '@/lib/format'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { fetchTopDeals, currentDeal, type Deal, type DealsResponse } from '@/lib/deals'
 import { parcelKey, parcelHref, compareHref, readParcelList, writeParcelList } from '@/lib/parcels'
 
-const money = (value?: number | null) => typeof value === 'number' ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value) : '—'
 const titleCase = (value?: string | null) => value ? value.replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) : '—'
 const clampScore = (score?: number | null) => typeof score === 'number' ? Math.max(0, Math.min(100, score)) : 0
 

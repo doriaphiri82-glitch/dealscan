@@ -1,24 +1,18 @@
 'use client'
-import { useCallback, useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
+import { formatCurrency as money } from '@/lib/format'
+import { Suspense, useEffect, useState } from 'react'
+import { useParams, useSearchParams } from 'next/navigation'
 import ResearchWorkspace from '@/components/ResearchWorkspace'
-import { fetchDealByApn, type Deal } from '@/lib/deals'
+import { useParcel } from '@/lib/use-parcel'
 import { parcelKey, compareHref, readParcelList, writeParcelList } from '@/lib/parcels'
-const money=(v?:number|null)=>typeof v==='number'?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(v):'—'
 const label=(v?:string|null)=>v?v.replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase()):'—'
-export default function DealDetailPage(){
+export default function DealDetailPage(){return <Suspense fallback={<LoadingParcel/>}><ParcelPage/></Suspense>}
+function ParcelPage(){
  const params = useParams<{apn:string}>()
- const [deal,setDeal]=useState<Deal|null>(null); const [loading,setLoading]=useState(true); const [error,setError]=useState('')
- const load=useCallback(async(silent=false)=>{if(!silent)setLoading(true);setError('');try{
-   const county=new URLSearchParams(window.location.search).get('county_id')||undefined
-   const result=await fetchDealByApn(params.apn,county);setDeal(result?.deal??null)
- }catch(e){setDeal(null);setError(e instanceof Error?e.message:'The parcel could not be checked.')}finally{setLoading(false)}},[params.apn])
- useEffect(()=>{void load();const timer=window.setInterval(()=>void load(true),60000);return()=>window.clearInterval(timer)},[load])
- useEffect(()=>{if(!deal)return;const key=parcelKey(deal);try{const recent=readParcelList('recent');writeParcelList('recent',[key,...recent.filter(x=>x!==key)].slice(0,12))}catch{}
-   const timer=window.setTimeout(()=>{setDeal(null);setError('This verification has expired. Refresh to check for a new review.')},Math.max(0,Date.parse(deal.verification_expires_at)-Date.now()))
-   return()=>window.clearTimeout(timer)
- },[deal])
- if(loading)return <main id="main-content" className="min-h-screen bg-[#f7f9f7] px-4 py-8"><div aria-busy="true" className="mx-auto max-w-7xl space-y-5"><div className="skeleton-shimmer h-16 rounded-2xl"/><div className="skeleton-shimmer h-72 rounded-[2rem]"/><div className="skeleton-shimmer h-96 rounded-[2rem]"/></div></main>
+ const search=useSearchParams()
+ const {deal,loading,error,load}=useParcel({apn:params.apn,county_id:search.get('county_id')||undefined})
+ useEffect(()=>{if(!deal)return;const key=parcelKey(deal);try{const recent=readParcelList('recent');writeParcelList('recent',[key,...recent.filter(x=>x!==key)].slice(0,12))}catch{}},[deal])
+ if(loading)return <LoadingParcel/>
  if(error&&!deal)return <main id="main-content" className="grid min-h-screen place-items-center bg-[#f7f9f7] px-6 text-center"><div className="ds-state w-full max-w-lg p-10"><div className="ds-state-icon mx-auto">!</div><h1 className="mt-5 text-3xl font-black">Unable to load parcel</h1><p className="mt-2 text-sm leading-6 text-[#718078]">{error}</p><button onClick={()=>void load()} className="dealscan-button mt-6 rounded-xl bg-[#153025] px-5 py-3 text-sm font-bold text-white hover:bg-[#176b45]">Try again</button><a href="/deals" className="ml-2 mt-6 inline-flex rounded-xl border border-[#dfe7e2] bg-white px-5 py-3 text-sm font-bold text-[#34423b]">Return to Explorer</a></div></main>
  if(!deal)return <main id="main-content" className="grid min-h-screen place-items-center bg-[#f7f9f7] px-6 text-center"><div className="ds-state w-full max-w-lg p-10"><div className="ds-state-icon mx-auto">⌕</div><h1 className="mt-5 text-3xl font-black">Deal not found</h1><p className="mt-2 text-sm leading-6 text-[#718078]">This parcel is not currently in the published DealScan feed.</p><a href="/deals" className="dealscan-button mt-6 rounded-xl bg-[#153025] px-5 py-3 text-sm font-bold text-white hover:bg-[#176b45]">Return to Explorer</a></div></main>
  const confidence=typeof deal.valuation_confidence==='number'?Math.round(deal.valuation_confidence*100):null
@@ -31,3 +25,5 @@ function SaveButton({parcel}:{parcel:string}){
  return <div><button onClick={toggle} aria-pressed={saved} className="dealscan-button rounded-xl border border-[#dfe6e2] bg-white px-3 py-2 text-xs font-bold text-[#45524b] hover:bg-[#f4f8f5]">{saved?'Saved in this browser ✓':'Save in this browser'}</button>{error&&<p role="status" className="mt-1 text-xs text-red-700">{error}</p>}</div>
 }
 function Stat({label,value,accent=false}:{label:string;value:string;accent?:boolean}){return <div className="ds-kpi"><p className="ds-kpi-label">{label}</p><p className={`mt-2 text-lg font-black tabular-nums ${accent?'text-[#176b45]':'text-[#18251f]'}`}>{value}</p></div>}
+
+function LoadingParcel(){return <main id="main-content" className="min-h-screen bg-[#f7f9f7] px-4 py-8"><div aria-busy="true" className="mx-auto max-w-7xl space-y-5"><div className="skeleton-shimmer h-16 rounded-2xl"/><div className="skeleton-shimmer h-72 rounded-[2rem]"/><div className="skeleton-shimmer h-96 rounded-[2rem]"/></div></main>}

@@ -1,24 +1,29 @@
 'use client'
+import { formatCurrency as money } from '@/lib/format'
 
-import { useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 
 import { fetchDealByApn, currentDeal, type Deal } from '@/lib/deals'
 import { comparisonRefs, parcelKey } from '@/lib/parcels'
-const money=(v?:number|null)=>typeof v==='number'?new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(v):'—'
 const label=(v?:string|null)=>v?v.replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase()):'—'
 
-export default function ComparePage(){
+export default function ComparePage(){return <Suspense fallback={<p role="status">Loading comparison…</p>}><Comparison/></Suspense>}
+function Comparison(){
+ const search=useSearchParams().toString()
  const [deals,setDeals]=useState<Deal[]>([]); const [loading,setLoading]=useState(true); const [error,setError]=useState('')
  useEffect(()=>{
    let active=true
-   const refs=comparisonRefs(window.location.search)
+   const controller=new AbortController()
+   setLoading(true);setDeals([]);setError('')
+   const refs=comparisonRefs(search)
    const run=async()=>{try{
-     const results=await Promise.all(refs.map(ref=>fetchDealByApn(ref.apn,ref.county_id)))
-     if(active){setDeals(results.filter((r):r is {deal:Deal}=>r!==null).map(r=>r.deal));setError(results.some(r=>r===null)?'One or more selected parcels are no longer in the verified feed.':'')}
-   }catch(e){if(active){setDeals([]);setError(e instanceof Error?e.message:'The selected parcels could not be loaded.')}}finally{if(active)setLoading(false)}}
+     const results=await Promise.all(refs.map(ref=>fetchDealByApn(ref.apn,ref.county_id,{signal:controller.signal})))
+     if(active){const unique=new Map(results.filter((r):r is {deal:Deal}=>r!==null).map(r=>[parcelKey(r.deal),r.deal]));setDeals([...unique.values()]);setError(results.some(r=>r===null)?'One or more selected parcels are no longer in the verified feed.':'')}
+   }catch(e){controller.abort();if(active){setDeals([]);setError(e instanceof Error?e.message:'The selected parcels could not be loaded.')}}finally{if(active)setLoading(false)}}
    void run()
-   return()=>{active=false}
- },[])
+   return()=>{active=false;controller.abort()}
+ },[search])
  useEffect(()=>{if(!deals.length)return;const expiry=Math.min(...deals.map(d=>Date.parse(d.verification_expires_at)));const timer=window.setTimeout(()=>{setDeals(current=>current.filter(currentDeal));setError('A selected verification expired. Reload to check the current feed.')},Math.max(0,expiry-Date.now()+1));return()=>window.clearTimeout(timer)},[deals])
  const rows=useMemo(()=>[
   ['DealScore',(d:Deal)=>d.deal_score!=null?`${d.deal_score}/100`:'—'],['Asking price',(d:Deal)=>money(d.asking_price)],['Estimated ARV',(d:Deal)=>`${money(d.estimated_arv_low)}–${money(d.estimated_arv_high)}`],['Profit signal',(d:Deal)=>`${money(d.estimated_profit_low)}–${money(d.estimated_profit_high)}`],['Recommended offer',(d:Deal)=>`${money(d.recommended_offer_low)}–${money(d.recommended_offer_high)}`],['Lot size',(d:Deal)=>d.lot_size_acres!=null?`${d.lot_size_acres.toLocaleString()} ac`:'—'],['Valuation basis',(d:Deal)=>label(d.valuation_basis)],['Confidence',(d:Deal)=>d.valuation_confidence!=null?`${Math.round(d.valuation_confidence*100)}%`:'—'],['Verification',(d:Deal)=>label(d.verification_status)]

@@ -1,3 +1,4 @@
+import { formatCurrency } from '../lib/format'
 import { publishedDeal } from './support/public-deal'
 import { expect, it, vi } from 'vitest'
 import { fetchTopDeals, fetchDealByApn, ParcelAmbiguous } from '../lib/deals'
@@ -70,4 +71,62 @@ it('rejects malformed counts and repeated parcels rather than inflating availabl
     vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json({...body,meta:{status:'ok',storage_source:'supabase'}})))
     await expect(fetchTopDeals()).rejects.toThrow()
   }
+})
+
+
+it('never treats corrupt versioned keys as bare parcel identifiers',()=>{
+  for(const key of ['v2:not-json','v2:[]','v2:["invalid county","apn"]','v2:["a",null]'])expect(parseParcelKey(key)).toBeNull()
+})
+
+it('comparison references are distinct rather than multiple copies of one parcel',()=>{
+  const a=parcelKey({apn:'same',county_id:'a'}),b=parcelKey({apn:'same',county_id:'b'})
+  expect(comparisonRefs(new URLSearchParams([['parcel',a],['parcel',a],['parcel',b]]).toString())).toEqual([{apn:'same',county_id:'a'},{apn:'same',county_id:'b'}])
+})
+
+it('corrupt or oversized browser storage cannot be silently truncated and overwritten',()=>{
+  const setItem=vi.fn()
+  vi.stubGlobal('localStorage',{getItem:()=>JSON.stringify(['v2:bad']),setItem})
+  expect(()=>readParcelList('saved')).toThrow(/Invalid/)
+  expect(()=>writeParcelList('saved',['v2:bad'])).toThrow(/Invalid/)
+  vi.stubGlobal('localStorage',{getItem:()=>JSON.stringify(Array.from({length:501},(_,i)=>String(i))),setItem})
+  expect(()=>readParcelList('saved')).toThrow(/limit/)
+  expect(setItem).not.toHaveBeenCalled()
+})
+
+it('caller cancellation closes an in-flight read and releases its deadline timer',async()=>{
+  vi.useFakeTimers()
+  try{
+    const caller=new AbortController()
+    const fetch=vi.fn((_url,options)=>new Promise<Response>((_resolve,reject)=>options.signal.addEventListener('abort',()=>reject(options.signal.reason))))
+    vi.stubGlobal('fetch',fetch)
+    const request=fetchDealByApn('fixture-parcel','fixture_county',{signal:caller.signal})
+    const failed=expect(request).rejects.toHaveProperty('name','AbortError')
+    caller.abort();await failed
+    expect(fetch.mock.calls[0][1].signal.aborted).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
+  }finally{vi.useRealTimers()}
+})
+
+it('the deadline covers response-body parsing, not just initial response headers',async()=>{
+  vi.useFakeTimers()
+  try{
+    vi.stubGlobal('fetch',vi.fn((_url,options)=>Promise.resolve({ok:true,status:200,json:()=>new Promise((_resolve,reject)=>options.signal.addEventListener('abort',()=>reject(options.signal.reason)))})))
+    const failed=expect(fetchTopDeals()).rejects.toThrow(/unavailable/)
+    await vi.advanceTimersByTimeAsync(12000);await failed
+    expect(vi.getTimerCount()).toBe(0)
+  }finally{vi.useRealTimers()}
+})
+
+
+it('keeps cents from source prices and does not turn unavailable values into zero',()=>{
+  expect(formatCurrency(.49)).toBe('$0.49')
+  expect(formatCurrency(25000.25)).toBe('$25,000.25')
+  expect(formatCurrency(25000)).toBe('$25,000')
+  expect(formatCurrency(0)).toBe('$0')
+  for(const missing of [null,undefined,NaN,Infinity])expect(formatCurrency(missing)).toBe('—')
+})
+
+it('does not present an error-tagged payload as a healthy feed',async()=>{
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json({count:1,deals:[publishedDeal()],meta:{status:'unavailable',storage_source:'supabase'}})))
+  await expect(fetchTopDeals()).rejects.toThrow(/unavailable/)
 })
