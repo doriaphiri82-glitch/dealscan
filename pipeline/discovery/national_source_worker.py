@@ -105,7 +105,7 @@ def run_statewide_batch(states: Optional[Iterable[str]] = None, discovery_limit:
     # Discovery intentionally skips already-valid sources. Keep those counties in
     # the ETL target set so a statewide run actually exercises existing validated
     # coverage as well as newly discovered sources.
-    valid_ids = {str(row.get("county_id")) for row in queued if str(row.get("validation_status") or "").lower() == "valid"}
+    valid_ids = {str(q.get("county_id")) for q in queued if str(refreshed.get(str(q.get("county_id")), {}).get("validation_status") or "").lower() == "valid"}
     etl_ids = discovered_ids | valid_ids
     targets = [refreshed[cid] for cid in etl_ids if cid in refreshed]
     targets.sort(key=lambda row: (str(row.get("state_fips") or ""), str(row.get("county_fips") or ""), str(row.get("county_id") or "")))
