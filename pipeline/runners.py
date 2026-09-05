@@ -13,7 +13,6 @@ from scrapers.counties import COUNTY_SCRAPERS
 from scrapers.flatfile_adapter import FlatFileAdapter, CSVAdapter, ExcelAdapter
 
 ADAPTER_MAP={"arcgis":ArcGISFeatureServerAdapter,"arcgis_hub":ArcGISHubAdapter,"flatfile":FlatFileAdapter,"csv":CSVAdapter,"excel":ExcelAdapter,"state_parcel":ArcGISFeatureServerAdapter}
-
 _AUTHORITATIVE_PILOT_SOURCE_KEYS=("arcgis_layer_url","arcgis_root","gis_url","parcel_source_url","data_source_type","source_vendor","scraper_type")
 
 def _adapter_for(cfg: Dict[str,Any])->Optional[BaseScraperAdapter]:
@@ -31,12 +30,14 @@ def _county_config(county_id:str)->Dict[str,Any]:
     cfg=dict(COUNTY_SCRAPERS.get(county_id) or {})
     pilot=PILOT_COUNTIES.get(county_id)
     if pilot:
-        # Scraper field mappings remain county-specific, but source identity must
-        # come from the authoritative pilot registry so endpoint changes cannot
-        # leave ETL pointed at a stale duplicated configuration.
         for key in _AUTHORITATIVE_PILOT_SOURCE_KEYS:
             value=pilot.get(key)
             if value is not None: cfg[key]=value
+        # A pilot layer is itself an ArcGIS source. Do not allow stale scraper
+        # metadata to change the adapter selection back to another source mode.
+        if pilot.get("arcgis_layer_url"):
+            cfg["data_mode"]="arcgis"
+            cfg["scraper_type"]="arcgis"
     if not cfg:
         if pilot: cfg=dict(pilot)
         else: cfg=dict(get_county(county_id) or {})
@@ -90,10 +91,8 @@ def _provenance(cfg,county_id):
     county=get_county(county_id) or {}; return {'source_url':cfg.get('arcgis_layer_url') or cfg.get('parcel_source_url') or cfg.get('data_url') or county.get('parcel_source_url'),'source_vendor':cfg.get('source_vendor') or county.get('source_vendor'),'source_quality':cfg.get('source_quality') or county.get('source_quality'),'verification_status':county.get('verification_status'),'data_freshness':cfg.get('source_last_modified') or county.get('data_freshness')}
 
 def _qualification_rejection_reason(prop: Dict[str,Any], comps: list)->str:
-    """Explain why scoring returned no deal without changing qualification rules."""
     if not comps:
-        market_value=prop.get('market_value') or prop.get('assessed_value') or 0
-        asking=prop.get('asking_price')
+        market_value=prop.get('market_value') or prop.get('assessed_value') or 0; asking=prop.get('asking_price')
         try: has_value=float(market_value)>0
         except (TypeError,ValueError): has_value=False
         if not has_value and asking is None:return 'missing_valuation_evidence'
@@ -105,9 +104,7 @@ def _qualification_rejection_reason(prop: Dict[str,Any], comps: list)->str:
     return 'below_min_profit'
 
 def _vacancy_rejection_reason(prop:Dict[str,Any],county_id:str)->str:
-    """Return a truthful reason when a parcel lacks a credible vacant signal."""
-    imp=prop.get('has_improvements'); lu=str(prop.get('land_use') or '').strip().lower(); zoning=str(prop.get('zoning') or '').strip().lower(); code=str(prop.get('use_code') or prop.get('land_use') or '').strip().upper()
-    has_imp=imp is True or imp in (1,'1','Y','YES','Yes','true','True')
+    imp=prop.get('has_improvements'); lu=str(prop.get('land_use') or '').strip().lower(); zoning=str(prop.get('zoning') or '').strip().lower(); code=str(prop.get('use_code') or prop.get('land_use') or '').strip().upper(); has_imp=imp is True or imp in (1,'1','Y','YES','Yes','true','True')
     if has_imp:return 'improved_property'
     if any(token in lu for token in ('vacant','unimproved')) or 'vacant' in zoning:return ''
     if imp is False or imp == 0 or imp in ('0','N','NO','No','NONE','false','False'):
@@ -130,8 +127,7 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
         else:m.downloaded=m.discovered=m.parsed=len(props);m.normalized=len(props)
         if offline:summary.update(status='skipped',error='offline mode: source not queried',counts=m.to_counts());record_run(county_id,'skipped',summary['counts'],summary['error']);return summary
         if cfg.get('arcgis_layer_url') and m.discovered==0:raise RuntimeError('source returned zero records; this is not treated as verified ETL success')
-        m.field_coverage=_field_coverage(props)
-        vacant=[]
+        m.field_coverage=_field_coverage(props); vacant=[]
         for p in props:
             reason=_vacancy_rejection_reason(p,county_id)
             if reason:m.record_vacancy_rejection(reason)
@@ -141,8 +137,7 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
             try: deal=score_and_enrich_deal(scoring_prop,[],cfg)
             except Exception as exc:m.record_rejection(f'score_error: {exc}');continue
             if deal is None:
-                comps=_source_comparables(scoring_prop)
-                m.record_rejection(_qualification_rejection_reason(scoring_prop,comps));continue
+                comps=_source_comparables(scoring_prop);m.record_rejection(_qualification_rejection_reason(scoring_prop,comps));continue
             deal.update(apn=prop.get('apn'),address=prop.get('address'),county_id=county_id);deal.update(_provenance(cfg,county_id))
             if not dry_run:
                 try:
@@ -150,8 +145,7 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
                 except Exception as exc:m.errors.append(f'save_error: {exc}');m.record_rejection('save_error');continue
             else:m.comparable_count += len(deal.get('comps',[]))
             m.scored+=1;m.qualified+=1
-        publish_rows=get_top_deals(limit=25,min_score=0,county_id=county_id) if mode=='publish' and not dry_run else []
-        publish_deals=[]
+        publish_rows=get_top_deals(limit=25,min_score=0,county_id=county_id) if mode=='publish' and not dry_run else []; publish_deals=[]
         for row in publish_rows:
             shaped=_shape_for_bundle(row)
             try:
@@ -167,8 +161,7 @@ def run(county_id:str,mode:str="publish",max_records:int=5000,dry_run:bool=False
         if not summary['error']:summary['error']='; '.join(m.errors[:3])
         summary['counts']=m.to_counts();summary['diagnostics']={'field_coverage':m.field_coverage,'vacancy':{'candidates':len(props),'accepted':len(vacant),'rejected':sum(m.vacancy_rejection_reasons.values()),'rejection_reasons':m.vacancy_rejection_reasons},'qualification':{'scored':m.scored,'qualified':m.qualified,'rejection_reasons':{k:v for k,v in m.rejection_reasons.items() if k not in m.vacancy_rejection_reasons}},'comparables':{'source_derived_rows':m.comparable_count}}
         if m.rejection_reasons:summary['rejection_reasons']=m.rejection_reasons
-        record_run(county_id,summary['status'],summary['counts'],summary['error'])
-        etl_status='ok' if m.normalized>0 and not m.errors else summary['status']
+        record_run(county_id,summary['status'],summary['counts'],summary['error']); etl_status='ok' if m.normalized>0 and not m.errors else summary['status']
         if not dry_run:mark_county_run(county_id,record_count=len(props),qualified_count=m.qualified,published_count=m.published,persisted_count=m.stored,status=etl_status,error=summary['error'])
     except Exception as exc:
         summary['status']='error';summary['error']=str(exc);summary['counts']=m.to_counts();record_run(county_id,'error',summary['counts'],summary['error'])
