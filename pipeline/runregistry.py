@@ -27,7 +27,8 @@ def _record_supabase_audit(county_id:str,status:str,counts:Dict[str,Any],error:s
                 os.environ.pop("DEALSCAN_ACTIVE_AUDIT_RUN_ID",None)
                 return run_id
             except Exception as exc:
-                print(f"WARNING: Supabase ingestion audit finalization failed: {str(exc)[:300]}")
+                os.environ.pop("DEALSCAN_ACTIVE_AUDIT_RUN_ID",None)
+                print(f"WARNING: Supabase ingestion audit finalization failed; starting a fresh audit run: {str(exc)[:300]}")
         return db.record_ingestion_run(county_id,status,counts,error,source_url=source_url,metadata={"local_registry":True})
     except Exception as exc:
         print(f"WARNING: Supabase ingestion audit unavailable: {str(exc)[:300]}")
