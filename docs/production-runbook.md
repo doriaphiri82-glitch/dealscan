@@ -4,6 +4,9 @@ This is an execution checklist, not a claim that production ingestion or deploym
 has succeeded. Never insert fixtures to make the checks pass. Empty public results
 are expected when real financial evidence is unavailable.
 
+See [production handoff evidence](production-handoff.md) for observed remote
+checks, the current production failure, access limits and exact operator actions.
+
 ## 1. Review and apply the database contract
 
 Back up the Supabase project and inspect its existing schema. Apply all unapplied
@@ -20,6 +23,7 @@ python -m pip install -r requirements.lock.txt
 export DEALSCAN_ENV=production
 export DEALSCAN_DB_BACKEND=supabase
 export DEALSCAN_REGISTRY_PATH=data/counties.json
+export WAITLIST_CONTACT_EMAIL=doriaphiri82@gmail.com
 python main.py --setup-db
 ```
 
