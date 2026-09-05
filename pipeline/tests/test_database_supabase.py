@@ -29,6 +29,17 @@ def test_property_and_deal_round_trip_payloads(monkeypatch):
     assert any(x[0]=="POST" and x[1].endswith("/properties") for x in calls)
     assert any(x[0]=="POST" and x[1].endswith("/deals") for x in calls)
 
+def test_get_top_deals_requires_verified_publication(monkeypatch):
+    db = SupabaseDatabase("https://example.supabase.co", "service-key"); calls=[]
+    def fake_request(method, url, headers=None, timeout=None, **kwargs):
+        calls.append((method,url,kwargs.get("params")))
+        return FakeResponse([])
+    monkeypatch.setattr("database_supabase.requests.request", fake_request)
+    assert db.get_top_deals(limit=25, min_score=40) == []
+    params = next(item[2] for item in calls if item[0] == "GET" and item[1].endswith("/deals"))
+    assert params["status"] == "eq.discovered"
+    assert params["verification_status"] == "eq.verified"
+
 def test_errors_include_http_detail(monkeypatch):
     db=SupabaseDatabase("https://example.supabase.co","service-key")
     monkeypatch.setattr("database_supabase.requests.request", lambda *a,**k: FakeResponse(status_code=500,text="database unavailable"))

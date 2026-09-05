@@ -2,11 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import SEED_BUNDLE from '../../../lib/seed-bundle'
 
 const KEY_TOP = 'deals:top'
-type DealsSource = 'redis' | 'redis-proto' | 'kv' | 'seed'
+type DealsSource = 'supabase' | 'redis' | 'redis-proto' | 'kv' | 'seed'
 const REDIS_URL = process.env.REDIS_URL || ''
 const REDIS_TOKEN = process.env.REDIS_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || ''
 const KV_URL = process.env.KV_REST_API_URL || ''
 const KV_TOKEN = process.env.KV_REST_API_TOKEN || ''
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 const isRedisRest = /^https?:\/\//.test(REDIS_URL)
 const isRedisProto = /^rediss?:\/\//.test(REDIS_URL)
 
@@ -48,7 +50,40 @@ async function readFromRedis(source: DealsSource): Promise<unknown | null> {
   return null
 }
 
+async function readFromSupabase(): Promise<unknown[] | null> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return null
+  try {
+    const params = new URLSearchParams({
+      status: 'eq.discovered',
+      verification_status: 'eq.verified',
+      select: 'id,deal_score,asking_price,estimated_arv_low,estimated_arv_high,estimated_profit_low,estimated_profit_high,recommended_offer_low,recommended_offer_high,motivation_signals,market_velocity,competition_level,status,source,source_url,source_vendor,source_quality,verification_status,data_freshness,valuation_basis,valuation_confidence,updated_at,properties!inner(apn,county_id,address,lot_size_acres,owner_name,owner_state,tax_delinquent_years,zoning)',
+      order: 'deal_score.desc',
+      limit: '50',
+    })
+    const res = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/deals?${params.toString()}`, {
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+      cache: 'no-store',
+    })
+    if (!res.ok) return null
+    const rows = (await res.json()) as Array<Record<string, unknown>>
+    return rows.map((row) => {
+      const property = (row.properties || {}) as Record<string, unknown>
+      const { properties: _properties, ...deal } = row
+      return { ...deal, ...property }
+    })
+  } catch {
+    return null
+  }
+}
+
 async function readBundle(): Promise<{ data: unknown; source: DealsSource }> {
+  const supabaseDeals = await readFromSupabase()
+  if (supabaseDeals) {
+    return {
+      data: { deals: supabaseDeals, generated_at: new Date().toISOString(), meta: { status: 'ok', scraped_counties: [] } },
+      source: 'supabase',
+    }
+  }
   if (isRedisRest) {
     const d = await readFromRedis('redis')
     if (d) return { data: d, source: 'redis' }
@@ -87,7 +122,7 @@ export async function GET(request: NextRequest) {
   const limit = Math.max(1, Math.min(50, Number.isFinite(parsed) ? parsed : 25))
 
   return NextResponse.json({
-    count: deals.length,
+    count: Math.min(deals.length, limit),
     deals: deals.slice(0, limit),
     generated_at: bundle.generated_at ?? null,
     meta: {
