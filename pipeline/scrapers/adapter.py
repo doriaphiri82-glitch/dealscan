@@ -143,6 +143,12 @@ class BaseScraperAdapter(ABC):
                 result.rejected += 1
                 result.rejection_reasons["validation_failed"] = result.rejection_reasons.get("validation_failed", 0) + 1
                 continue
+            # Keep compact provenance with the normalized candidate. The runner
+            # strips these private fields before persistence; they exist solely
+            # so Supabase ingestion_records can explain where a property came from.
+            source_id = canonical.get("source_record_id") or canonical.get("objectid") or canonical.get("OBJECTID") or canonical.get("id")
+            canonical["_source_record_id"] = str(source_id) if source_id not in (None, "") else None
+            canonical["_raw_payload"] = record
             normalized.append(canonical)
 
         return result, normalized
