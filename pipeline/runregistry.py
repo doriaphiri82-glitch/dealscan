@@ -14,26 +14,35 @@ def _record_supabase_audit(county_id:str,status:str,counts:Dict[str,Any],error:s
     if os.getenv("DEALSCAN_DB_BACKEND", "sqlite").strip().lower() != "supabase": return None
     try:
         from database_supabase import SupabaseDatabase
-        county = {}
+        db=SupabaseDatabase(); county={}
         try:
             from config.counties.registry import get_county
-            county = get_county(county_id) or {}
+            county=get_county(county_id) or {}
         except Exception: pass
-        return SupabaseDatabase().record_ingestion_run(
-            county_id=county_id,status=status,counts=counts,error=error,
-            source_url=county.get("arcgis_layer_url") or county.get("parcel_source_url") or county.get("gis_url"),
-            metadata={"local_registry": True},
-        )
+        source_url=county.get("arcgis_layer_url") or county.get("parcel_source_url") or county.get("gis_url")
+        active=os.getenv("DEALSCAN_ACTIVE_AUDIT_RUN_ID")
+        if active:
+            try:
+                run_id=db.update_ingestion_run(int(active),county_id,status,counts,error,metadata={"local_registry":True})
+                os.environ.pop("DEALSCAN_ACTIVE_AUDIT_RUN_ID",None)
+                return run_id
+            except Exception as exc:
+                print(f"WARNING: Supabase ingestion audit finalization failed: {str(exc)[:300]}")
+        return db.record_ingestion_run(county_id,status,counts,error,source_url=source_url,metadata={"local_registry":True})
     except Exception as exc:
         print(f"WARNING: Supabase ingestion audit unavailable: {str(exc)[:300]}")
         return None
 
 def record_run(county_id,status,counts,error=""):
-    reg=load_registry(); entry={"county_id":county_id,"status":status,"counts":counts,"error":error,"at":datetime.now(timezone.utc).isoformat()}; reg.setdefault("runs",[]).insert(0,entry); reg["runs"]=reg["runs"][:100]; reg["last_run"]=entry; _ensure_dir()
-    with open(REGISTRY_PATH,"w",encoding="utf-8") as f:json.dump(reg,f,indent=1)
-    audit_id=_record_supabase_audit(county_id,status,counts,error)
+    reg=load_registry(); entry={"county_id":county_id,"status":status,"counts":counts,"error":error,"at":datetime.now(timezone.utc).isoformat()}; audit_id=_record_supabase_audit(county_id,status,counts,error); 
     if audit_id is not None: entry["supabase_run_id"]=audit_id
+    reg.setdefault("runs",[]).insert(0,entry); reg["runs"]=reg["runs"][:100]; reg["last_run"]=entry; _ensure_dir()
+    with open(REGISTRY_PATH,"w",encoding="utf-8") as f:json.dump(reg,f,indent=1)
     return entry
+def _load_existing_bundle():
+    try:
+        with open(BUNDLE_PATH,encoding="utf-8") as f:return json.load(f)
+    except Exception:return {"deals":[],"meta":{"scraped_counties":[]}}
 def write_bundle(deals:List[Dict[str,Any]],scraped_counties:List[str],status="ok",error=""):
     old=_load_existing_bundle(); target=set(scraped_counties); merged={}
     for d in old.get("deals",[]):
@@ -45,10 +54,6 @@ def write_bundle(deals:List[Dict[str,Any]],scraped_counties:List[str],status="ok
     _ensure_dir()
     with open(BUNDLE_PATH,"w",encoding="utf-8") as f:json.dump(bundle,f,indent=1)
     return BUNDLE_PATH
-def _load_existing_bundle():
-    try:
-        with open(BUNDLE_PATH,encoding="utf-8") as f:return json.load(f)
-    except Exception:return {"deals":[],"meta":{"scraped_counties":[]}}
 def load_bundle()->Optional[Dict[str,Any]]:
     try:
         with open(BUNDLE_PATH,encoding="utf-8") as f:return json.load(f)
