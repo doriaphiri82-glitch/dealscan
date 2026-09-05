@@ -8,6 +8,7 @@ from discovery.source_discovery import discover_arcgis_county_config, enumerate_
 from discovery.statewide_pipeline import reconcile_enumerated_statewide_counties
 from discovery.statewide_queue import build_county_discovery_queue
 from discovery.statewide_sources import all_statewide_sources
+from discovery.statewide_coverage import build_statewide_coverage_report
 from runners import run as run_county
 
 
@@ -16,11 +17,11 @@ def _limit(value:int,default:int=25)->int:
     except (TypeError,ValueError):return default
 
 
-def _statewide_queue(states: Optional[Iterable[str]] = None) -> List[Dict[str, Any]]:
-    """Enumerate configured statewide ArcGIS sources and reconcile to Census."""
+def _statewide_snapshot(states: Optional[Iterable[str]] = None) -> Dict[str, Any]:
+    """Build one deterministic statewide snapshot for queueing and coverage."""
     census = ensure_national_counties()
     if not isinstance(census, dict):
-        return []
+        return {"census": {}, "reconciled": [], "queue": [], "coverage": {"states": {}, "totals": {}}}
     wanted = {str(state).strip().lower() for state in states} if states else None
     candidates: List[Dict[str, Any]] = []
     for source in all_statewide_sources():
@@ -31,7 +32,14 @@ def _statewide_queue(states: Optional[Iterable[str]] = None) -> List[Dict[str, A
         candidates.extend(enumerate_statewide_counties(source.state))
     reconciled = reconcile_enumerated_statewide_counties(candidates, census.values())
     registry = list_counties()
-    return build_county_discovery_queue(reconciled, registry)
+    queue = build_county_discovery_queue(reconciled, registry)
+    coverage = build_statewide_coverage_report(reconciled, census.values(), registry, states=states)
+    return {"census": census, "reconciled": reconciled, "queue": queue, "coverage": coverage}
+
+
+def _statewide_queue(states: Optional[Iterable[str]] = None) -> List[Dict[str, Any]]:
+    """Enumerate configured statewide ArcGIS sources and reconcile to Census."""
+    return _statewide_snapshot(states)["queue"]
 
 
 def discover_and_register(limit:int=25, states: Optional[Iterable[str]] = None)->Dict[str,Any]:
@@ -71,14 +79,10 @@ def discover_and_register(limit:int=25, states: Optional[Iterable[str]] = None)-
 
 
 def run_statewide_batch(states: Optional[Iterable[str]] = None, discovery_limit: int = 25, etl_limit: int = 5, max_records: int = 5000, mode: str = "dry_run") -> Dict[str, Any]:
-    """Execute reconciled statewide counties through discovery and live ETL.
-
-    Discovery remains deterministic and unverified until the live runner returns
-    usable records. The default dry-run mode exercises the source without
-    persisting deals; use publish only when persistence is explicitly desired.
-    """
+    """Execute reconciled statewide counties through discovery and live ETL."""
     ensure_national_counties()
-    queue = _statewide_queue(states)
+    snapshot = _statewide_snapshot(states)
+    queue = snapshot["queue"]
     wanted = {str(state).strip().lower() for state in states} if states else None
     queued = [row for row in queue if not wanted or str(row.get("state") or "").strip().lower() in wanted]
     discovery = discover_and_register(limit=_limit(discovery_limit), states=states)
@@ -93,7 +97,7 @@ def run_statewide_batch(states: Optional[Iterable[str]] = None, discovery_limit:
         except Exception as exc:
             etl_results.append({"county_id": county["county_id"], "status": "error", "error": str(exc)[:300]})
     ok = sum(1 for result in etl_results if result.get("status") in {"ok", "degraded"})
-    return {"states": sorted(wanted) if wanted else None, "statewide_queued": len(queued), "discovery": discovery, "etl": {"attempted": len(etl_results), "ok": ok, "results": etl_results}}
+    return {"states": sorted(wanted) if wanted else None, "statewide_queued": len(queued), "coverage": snapshot["coverage"], "discovery": discovery, "etl": {"attempted": len(etl_results), "ok": ok, "results": etl_results}}
 
 
 def run_national_batch(limit:int=10,max_records:int=5000,mode:str="publish")->Dict[str,Any]:
