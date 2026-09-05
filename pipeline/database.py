@@ -26,6 +26,10 @@ def init_db():
         except sqlite3.OperationalError: pass
     conn.commit(); conn.close()
 
+def sync_county(county: dict) -> None:
+    """Sync authoritative county registry metadata; SQLite intentionally keeps registry files as source of truth."""
+    return None
+
 def save_property(data: dict) -> int:
     conn=get_connection(); cur=conn.cursor(); cur.execute('''INSERT INTO properties (apn,county_id,address,lot_size_acres,assessed_value,market_value,owner_name,owner_address,owner_state,tax_amount,tax_delinquent_years,year_acquired,zoning,land_use,has_improvements,legal_description,latitude,longitude,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(apn,county_id) DO UPDATE SET address=excluded.address,lot_size_acres=excluded.lot_size_acres,assessed_value=excluded.assessed_value,market_value=excluded.market_value,owner_name=excluded.owner_name,owner_address=excluded.owner_address,owner_state=excluded.owner_state,tax_amount=excluded.tax_amount,tax_delinquent_years=excluded.tax_delinquent_years,year_acquired=excluded.year_acquired,zoning=excluded.zoning,land_use=excluded.land_use,has_improvements=excluded.has_improvements,legal_description=excluded.legal_description,latitude=excluded.latitude,longitude=excluded.longitude,updated_at=CURRENT_TIMESTAMP''',(data['apn'],data['county_id'],data.get('address'),data.get('lot_size_acres'),data.get('assessed_value'),data.get('market_value'),data.get('owner_name'),data.get('owner_address'),data.get('owner_state'),data.get('tax_amount'),data.get('tax_delinquent_years',0),data.get('year_acquired'),data.get('zoning'),data.get('land_use'),int(data.get('has_improvements',False)),data.get('legal_description'),data.get('latitude'),data.get('longitude'))); cur.execute('SELECT id FROM properties WHERE apn=? AND county_id=?',(data['apn'],data['county_id'])); row=cur.fetchone(); conn.commit(); conn.close(); return int(row[0])
 
@@ -61,6 +65,7 @@ if _USE_SUPABASE:
     from database_supabase import SupabaseDatabase
     _supabase = SupabaseDatabase()
     init_db = lambda: None
+    sync_county = _supabase.upsert_county
     save_property = _supabase.save_property
     save_deal = _supabase.save_deal
     save_comps = _supabase.save_comps
