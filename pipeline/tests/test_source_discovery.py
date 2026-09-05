@@ -43,6 +43,44 @@ def test_statewide_arcgis_layer_enumerates_distinct_counties(monkeypatch):
     assert "returnDistinctValues=true" in requested[0]
 
 
+def test_statewide_enumeration_falls_back_to_server_side_grouping(monkeypatch):
+    requested = []
+
+    def fake_fetch(url, **kwargs):
+        requested.append(url)
+        if "returnDistinctValues=true" in url:
+            return _response({"error": {"code": 400, "message": "distinct values unsupported"}})
+        return _response({
+            "features": [
+                {"attributes": {"cntyname": "Alpha County", "cntyfips": "001", "parcel_count": 123}},
+                {"attributes": {"cntyname": "Beta County", "cntyfips": "002", "parcel_count": 456}},
+            ]
+        })
+
+    monkeypatch.setattr(source_discovery, "fetch", fake_fetch)
+    result = source_discovery.enumerate_statewide_counties("North Carolina")
+
+    assert [row["county_fips"] for row in result] == ["001", "002"]
+    assert "groupByFieldsForStatistics=cntyname%2Ccntyfips" in requested[1]
+    assert "outStatistics" in requested[1]
+
+
+def test_statewide_enumeration_falls_back_when_distinct_query_is_truncated(monkeypatch):
+    requested = []
+
+    def fake_fetch(url, **kwargs):
+        requested.append(url)
+        if "returnDistinctValues=true" in url:
+            return _response({"features": [{"attributes": {"cntyname": "Alpha County", "cntyfips": "001"}}], "exceededTransferLimit": True})
+        return _response({"features": [{"attributes": {"cntyname": "Beta County", "cntyfips": "002", "parcel_count": 10}}]})
+
+    monkeypatch.setattr(source_discovery, "fetch", fake_fetch)
+    result = source_discovery.enumerate_statewide_counties("North Carolina")
+
+    assert [row["county_fips"] for row in result] == ["002"]
+    assert len(requested) == 2
+
+
 def test_unknown_state_has_no_enumerated_counties():
     assert source_discovery.enumerate_statewide_counties("Not A State") == []
 
