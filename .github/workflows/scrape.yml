@@ -31,6 +31,11 @@ jobs:
   national:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      # Production pipeline persistence. Keep the service-role key server-side only.
+      DEALSCAN_DB_BACKEND: supabase
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -41,6 +46,19 @@ jobs:
       - name: Install dependencies
         working-directory: pipeline
         run: pip install -r requirements.txt pytest
+      - name: Verify production database configuration
+        working-directory: pipeline
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import os
+          required = ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY")
+          missing = [name for name in required if not os.getenv(name)]
+          if missing:
+              raise SystemExit("Missing GitHub Actions secrets: " + ", ".join(missing))
+          print("Supabase production backend configured")
+          PY
       - name: Run pipeline tests
         working-directory: pipeline
         env:
