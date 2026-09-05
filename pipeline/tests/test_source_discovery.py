@@ -7,6 +7,18 @@ def _response(body):
     return SimpleNamespace(ok=True, body=body)
 
 
+def test_statewide_portals_are_discovery_candidates_only():
+    candidates = source_discovery.discover_statewide_sources("North Carolina")
+    assert len(candidates) == 1
+    assert candidates[0].source_type == "statewide_portal"
+    assert candidates[0].confidence < 1.0
+    assert "verification" in candidates[0].notes
+
+
+def test_unknown_state_has_no_statewide_candidates():
+    assert source_discovery.discover_statewide_sources("Not A State") == []
+
+
 def test_discovery_rejects_generic_geometry_layer(monkeypatch):
     calls = []
 
@@ -56,6 +68,8 @@ def test_discovery_requires_parcel_identifier_and_useful_fields(monkeypatch):
 
 def test_discovery_accepts_strong_parcel_layer(monkeypatch):
     def fake_fetch(url, **kwargs):
+        if "sharing/rest/rest" in url:
+            return _response({"results": []})
         if "sharing/rest/search" in url:
             return _response({
                 "results": [{
