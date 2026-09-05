@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-import SEED_BUNDLE from '../../../../lib/seed-bundle'
-
 const KEY_PREFIX = 'deal:'
-
 const REDIS_URL = process.env.REDIS_URL || ''
 const REDIS_TOKEN = process.env.REDIS_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || ''
 const KV_URL = process.env.KV_REST_API_URL || ''
 const KV_TOKEN = process.env.KV_REST_API_TOKEN || ''
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 
 const isRedisRest = /^https?:\/\//.test(REDIS_URL)
 const isRedisProto = /^rediss?:\/\//.test(REDIS_URL)
@@ -54,16 +53,42 @@ async function readFromRedis(key: string): Promise<unknown | null> {
   return null
 }
 
+async function readFromSupabase(apn: string): Promise<unknown | null> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return null
+  try {
+    const params = new URLSearchParams({
+      status: 'eq.discovered',
+      verification_status: 'eq.verified',
+      'properties.apn': `eq.${apn}`,
+      select: 'id,deal_score,asking_price,estimated_arv_low,estimated_arv_high,estimated_profit_low,estimated_profit_high,recommended_offer_low,recommended_offer_high,motivation_signals,market_velocity,competition_level,status,source,source_url,source_vendor,source_quality,verification_status,data_freshness,valuation_basis,valuation_confidence,updated_at,properties!inner(apn,county_id,address,lot_size_acres,owner_name,owner_state,tax_delinquent_years,zoning)',
+      limit: '1',
+    })
+    const res = await fetch(`${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/deals?${params.toString()}`, {
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+      cache: 'no-store',
+    })
+    if (!res.ok) return null
+    const rows = (await res.json()) as Array<Record<string, unknown>>
+    const row = rows[0]
+    if (!row) return null
+    const property = (row.properties || {}) as Record<string, unknown>
+    const { properties: _properties, ...deal } = row
+    return { ...deal, ...property }
+  } catch {
+    return null
+  }
+}
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: { apn: string } }
 ) {
   const apn = decodeURIComponent(params.apn)
-  let report: unknown | null = null
+  let report: unknown | null = await readFromSupabase(apn)
 
-  if (isRedisRest || isRedisProto) {
+  if (!report && (isRedisRest || isRedisProto)) {
     report = await readFromRedis(`${KEY_PREFIX}${apn}`)
-  } else if (KV_URL && KV_TOKEN) {
+  } else if (!report && KV_URL && KV_TOKEN) {
     try {
       const res = await fetch(`${KV_URL}/get/${encodeURIComponent(`${KEY_PREFIX}${apn}`)}`, {
         headers: { Authorization: `Bearer ${KV_TOKEN}` },
@@ -74,12 +99,8 @@ export async function GET(
         if (json.result) report = JSON.parse(json.result)
       }
     } catch {
-      /* fall through */
+      /* no published cache available */
     }
-  }
-
-  if (!report) {
-    report = SEED_BUNDLE.deals.find((d) => d.apn === apn) ?? null
   }
 
   if (!report) {
