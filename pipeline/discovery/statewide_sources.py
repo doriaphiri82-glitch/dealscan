@@ -6,7 +6,7 @@ pass DealScan's live schema/ETL validation before it can be considered verified.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,9 @@ class StatewideSource:
     url: str
     source_type: str = "statewide_portal"
     notes: str = ""
+    county_name_field: Optional[str] = None
+    county_fips_field: Optional[str] = None
+    parcel_id_field: Optional[str] = None
 
 
 # High-confidence public statewide parcel entry points. Keep this list authoritative;
@@ -36,8 +39,11 @@ STATEWIDE_PARCEL_SOURCES: Dict[str, StatewideSource] = {
     "Florida": StatewideSource(
         "Florida",
         "Florida Statewide Parcels",
-        "https://geodata.floridagio.gov/datasets/FGIO::florida-statewide-parcels/about",
-        notes="Statewide parcel dataset built from county property-appraiser tax-roll information.",
+        "https://services9.arcgis.com/Gh9awoU677aKree0/arcgis/rest/services/Florida_Statewide_Cadastral/FeatureServer/0",
+        source_type="arcgis_layer",
+        notes="Official FDOR statewide parcel layer assembled from all 67 county property appraisers; county number is exposed as CO_NO.",
+        county_fips_field="CO_NO",
+        parcel_id_field="PARCEL_ID",
     ),
     "Maryland": StatewideSource(
         "Maryland",
@@ -48,8 +54,12 @@ STATEWIDE_PARCEL_SOURCES: Dict[str, StatewideSource] = {
     "North Carolina": StatewideSource(
         "North Carolina",
         "NC OneMap Parcels",
-        "https://www.nconemap.gov/pages/parcels",
-        notes="Official statewide parcel resource covering all 100 North Carolina counties with standardized attributes and web services.",
+        "https://services.nconemap.gov/secure/rest/services/NC1Map_Parcels/MapServer/1",
+        source_type="arcgis_layer",
+        notes="Official statewide parcel layer covering all 100 North Carolina counties with standardized attributes and county FIPS fields.",
+        county_name_field="cntyname",
+        county_fips_field="cntyfips",
+        parcel_id_field="parno",
     ),
     "Ohio": StatewideSource(
         "Ohio",
@@ -60,8 +70,12 @@ STATEWIDE_PARCEL_SOURCES: Dict[str, StatewideSource] = {
     "Washington": StatewideSource(
         "Washington",
         "Washington Current Parcels",
-        "https://geo.wa.gov/maps/2b603a599a0842a3b2284c04c8927f35",
-        notes="State geospatial open-data parcel resource.",
+        "https://services.arcgis.com/jsIt88o09Q0r1j8h/arcgis/rest/services/Current_Parcels/FeatureServer/0",
+        source_type="arcgis_layer",
+        notes="Official Washington statewide tax parcel service with normalized county and parcel identifiers plus values and addresses.",
+        county_name_field="COUNTY_NM",
+        county_fips_field="FIPS_NR",
+        parcel_id_field="PARCEL_ID_NR",
     ),
     "Wisconsin": StatewideSource(
         "Wisconsin",
