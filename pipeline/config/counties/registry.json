@@ -11,7 +11,7 @@
       "data_source_type": "arcgis",
       "assessor_url": "https://www.cochise.az.gov/departments/assessor",
       "gis_url": "https://gis-cochise.opendata.arcgis.com",
-      "parcel_source_url": "https://gis-cochise.opendata.arcgis.com/datasets/Cad_Parcel_TaxInfo",
+      "parcel_source_url": "https://gis-cochise.opendata.arcgis.com/datasets/parcel-cochise-county-tax-information",
       "tax_source_url": null,
       "delinquent_tax_source_url": null,
       "zoning_source_url": null,
@@ -23,7 +23,7 @@
       "last_record_count": null,
       "data_freshness": null,
       "field_mapping": {},
-      "notes": "ArcGIS Hub DCAT -> Cad_Parcel_TaxInfo FeatureServer (source fields verified 2026-09-03; ETL run pending)"
+      "notes": "ArcGIS Hub Parcel (Cochise County - Tax Information); source refreshed 2026-09-05; ETL run pending"
     },
     "mohave_az": {
       "county_id": "mohave_az",
@@ -47,7 +47,6 @@
       "last_successful_run": null,
       "last_record_count": null,
       "data_freshness": null,
-      "field_mapping": {},
       "notes": "Official Mohave County parcel MapServer/14; source fields verified 2026-09-03; ETL run pending",
       "arcgis_layer_url": "https://mcgis.mohave.gov/arcgis/rest/services/PARCELS/MapServer/14"
     },
@@ -73,7 +72,6 @@
       "last_successful_run": null,
       "last_record_count": null,
       "data_freshness": null,
-      "field_mapping": {},
       "notes": "EPCAD direct ArcGIS FeatureServer; source verified 2026-09-03; ETL run pending",
       "arcgis_layer_url": "https://services2.arcgis.com/fKvlzLJczghwPYHS/ArcGIS/rest/services/ElPasoCADWebService/FeatureServer/0"
     }
