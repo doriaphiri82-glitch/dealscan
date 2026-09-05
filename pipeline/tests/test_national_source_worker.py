@@ -44,6 +44,25 @@ def test_discovery_prioritizes_never_attempted_counties(monkeypatch):
     monkeypatch.setattr(worker, "list_counties", lambda: counties)
     monkeypatch.setattr(worker, "update_county", lambda cid, **fields: attempted.append(cid))
     monkeypatch.setattr(worker, "discover_arcgis_county_config", lambda *args: None)
+    monkeypatch.setattr(worker, "_statewide_queue", lambda: [])
     result=worker.discover_and_register(limit=2)
     assert result["attempted"] == 2
     assert attempted == ["new", "newer"]
+
+
+def test_discovery_falls_back_when_statewide_queue_fails(monkeypatch):
+    counties = [{
+        "county_id": "fallback", "county_name": "Fallback County", "state": "Arizona",
+        "coverage_status": "tier_0",
+    }]
+    monkeypatch.setattr(worker, "ensure_national_counties", lambda: None)
+    monkeypatch.setattr(worker, "list_counties", lambda: counties)
+    monkeypatch.setattr(worker, "_statewide_queue", lambda: (_ for _ in ()).throw(RuntimeError("statewide unavailable")))
+    monkeypatch.setattr(worker, "update_county", lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker, "discover_arcgis_county_config", lambda *args: None)
+
+    result = worker.discover_and_register(limit=1)
+
+    assert result["attempted"] == 1
+    assert result["statewide_queued"] == 0
+    assert "statewide_error" in result
