@@ -8,17 +8,28 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from config.counties.registry import list_counties, update_county, mark_county_validation
+from config.counties.national_registry import PILOT_COUNTIES
 from scrapers import arcgis
 from scrapers.counties import COUNTY_SCRAPERS
 from validation.etl_validator import validate_county_config
+
+_AUTHORITATIVE_PILOT_SOURCE_KEYS=("arcgis_layer_url","arcgis_root","gis_url","parcel_source_url","data_source_type","source_vendor","scraper_type")
 
 
 def _config(county: Dict[str, Any]) -> Dict[str, Any]:
     cid = county["county_id"]
     cfg = dict(COUNTY_SCRAPERS.get(cid) or {})
+    pilot = PILOT_COUNTIES.get(cid)
+    if pilot:
+        # Keep scraper-specific mappings, but never let a duplicated scraper
+        # config override the authoritative pilot source identity.
+        for key in _AUTHORITATIVE_PILOT_SOURCE_KEYS:
+            value = pilot.get(key)
+            if value is not None:
+                cfg[key] = value
     if not cfg:
-        cfg = dict(county)
-        cfg["fields"] = county.get("field_mapping") or {}
+        cfg = dict(pilot or county)
+        cfg["fields"] = county.get("field_mapping") or cfg.get("fields") or {}
     cfg.setdefault("arcgis_root", county.get("gis_url"))
     cfg.setdefault("arcgis_layer_url", county.get("arcgis_layer_url"))
     cfg.setdefault("parcel_source_url", county.get("parcel_source_url"))
