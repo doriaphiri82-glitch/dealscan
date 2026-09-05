@@ -1,11 +1,8 @@
 name: dealscan-production-smoke
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'pipeline/**'
-      - '.github/workflows/production-smoke.yml'
+  # This test needs production Supabase secrets. Keep it explicit so a missing
+  # repository secret does not turn every normal code push red.
   workflow_dispatch:
 
 permissions:
