@@ -5,6 +5,7 @@ coverage state. Network probing is deliberately optional so CI remains offline.
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 
@@ -20,8 +21,8 @@ def _numeric(value: Any) -> bool:
     if value in (None, "", " "):
         return True
     try:
-        float(str(value).replace(",", "").replace("$", ""))
-        return True
+        parsed = float(str(value).replace(",", "").replace("$", ""))
+        return math.isfinite(parsed)
     except (TypeError, ValueError):
         return False
 
