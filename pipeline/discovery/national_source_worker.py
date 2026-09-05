@@ -19,6 +19,8 @@ def _limit(value:int,default:int=25)->int:
 def _statewide_queue(states: Optional[Iterable[str]] = None) -> List[Dict[str, Any]]:
     """Enumerate configured statewide ArcGIS sources and reconcile to Census."""
     census = ensure_national_counties()
+    if not isinstance(census, dict):
+        return []
     wanted = {str(state).strip().lower() for state in states} if states else None
     candidates: List[Dict[str, Any]] = []
     for source in all_statewide_sources():
@@ -35,7 +37,12 @@ def _statewide_queue(states: Optional[Iterable[str]] = None) -> List[Dict[str, A
 def discover_and_register(limit:int=25)->Dict[str,Any]:
     """Discover sources fairly, prioritizing authoritative statewide enumeration."""
     ensure_national_counties()
-    statewide = _statewide_queue()
+    try:
+        statewide = _statewide_queue()
+        statewide_error = None
+    except Exception as exc:
+        statewide = []
+        statewide_error = str(exc)[:300]
     queued_ids = {row["county_id"] for row in statewide}
     candidates=[c for c in list_counties() if c.get("coverage_status")!="tier_5" and ((not c.get("arcgis_layer_url") and not c.get("parcel_source_url")) or c.get("validation_status") in {"invalid","unreachable"})]
     candidates.sort(key=lambda c:(c.get("discovery_attempted_at") is not None,c.get("discovery_attempted_at") or "",c.get("state",""),c.get("county_name","")))
@@ -54,7 +61,10 @@ def discover_and_register(limit:int=25)->Dict[str,Any]:
             update_county(cid,data_source_type="arcgis",gis_url=cfg.get("arcgis_root"),parcel_source_url=cfg.get("arcgis_layer_url"),source_vendor="esri",scraper_type="arcgis",verification_status="discovered_not_verified",coverage_status="tier_1",field_mapping=fields,data_freshness=str(freshness) if freshness is not None else None,notes=f"Public ArcGIS source discovered; live validation pending; source quality={quality}",extra={"arcgis_layer_url":cfg.get("arcgis_layer_url"),"discovery_source":cfg.get("discovery_source"),"discovery_score":cfg.get("discovery_score"),"field_count":len(fields),"source_quality":quality,"source_quality_score":cfg.get("source_quality_score",0),"useful_field_count":cfg.get("useful_field_count",0),"missing_useful_fields":cfg.get("missing_useful_fields",[]),"source_last_modified":freshness,"statewide_source_hint":statewide_by_id.get(cid,{}).get("source_url")})
             found+=1;results.append({"county_id":cid,"status":"discovered","url":cfg.get("arcgis_layer_url"),"field_count":len(fields),"discovery_score":cfg.get("discovery_score"),"source_quality":quality,"source_quality_score":cfg.get("source_quality_score",0),"source_last_modified":freshness,"statewide_hint":cid in statewide_by_id})
         except Exception as exc:results.append({"county_id":cid,"status":"error","error":str(exc)[:300],"statewide_hint":cid in statewide_by_id})
-    return {"attempted":len(batch),"found":found,"statewide_queued":len(statewide),"results":results}
+    response={"attempted":len(batch),"found":found,"statewide_queued":len(statewide),"results":results}
+    if statewide_error:
+        response["statewide_error"]=statewide_error
+    return response
 
 
 def run_national_batch(limit:int=10,max_records:int=5000,mode:str="publish")->Dict[str,Any]:
