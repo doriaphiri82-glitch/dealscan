@@ -72,6 +72,10 @@ Review the exact county source and its authority evidence. Dispatch
 
 After read-only readiness passes and source authority/migrations have been reviewed,
 repeat with **`preflight_only=false`** to execute the real 250-record ingestion.
+Pushes to the trusted handoff branch `arena/01a072f4-dealscan` also run only
+read-only readiness (to obtain evidence when the connector cannot manually
+dispatch Actions). The write step additionally requires `workflow_dispatch`, so
+a push never authorizes or ingests. Environment protection rules remain enforced.
 The workflow refuses to continue when readiness fails. A preflight pass alone is
 not a completed production smoke, migration proof or authenticated-login test.
 

@@ -130,6 +130,7 @@ def test_production_readiness_runs_before_any_ingestion_and_defaults_to_read_onl
     text=(Path(__file__).parents[2]/'.github/workflows/production-smoke.yml').read_text()
     assert 'preflight_only:' in text and 'default: true' in text
     assert text.index('validation.production_preflight') < text.index('--production-smoke')
-    assert 'if: ${{ !inputs.preflight_only }}' in text
+    assert "if: ${{ github.event_name == 'workflow_dispatch' && !inputs.preflight_only }}" in text
+    assert "branches: ['arena/01a072f4-dealscan']" in text
     install=text[text.index('- name: Install dependencies'):text.index('- name: Read-only production readiness')]
     assert 'SUPABASE_SERVICE_ROLE_KEY' not in install
