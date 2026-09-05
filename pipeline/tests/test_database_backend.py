@@ -15,8 +15,12 @@ def test_supabase_backend_requires_credentials(monkeypatch):
     monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
     import database
     try:
+        with __import__("pytest").raises(RuntimeError, match="SUPABASE_URL"):
+            importlib.reload(database)
+    finally:
+        # Reload the module under the default backend after exercising the
+        # fail-fast path. A failed reload can leave partially initialized
+        # module globals behind, which otherwise leaks Supabase mode into
+        # subsequent SQLite tests.
+        monkeypatch.delenv("DEALSCAN_DB_BACKEND", raising=False)
         importlib.reload(database)
-    except RuntimeError as exc:
-        assert "SUPABASE_URL" in str(exc)
-    else:
-        raise AssertionError("Supabase mode should fail fast without credentials")
