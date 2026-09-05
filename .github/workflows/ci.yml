@@ -7,11 +7,13 @@ on:
       - 'pipeline/**'
       - 'landing/**'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/scrape.yml'
   pull_request:
     paths:
       - 'pipeline/**'
       - 'landing/**'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/scrape.yml'
 
 permissions:
   contents: read
