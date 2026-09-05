@@ -26,7 +26,7 @@ COMP_FIELDS = ('address', 'sale_price', 'sale_date', 'distance_miles', 'lot_size
                'source_url', 'source_record_id', 'source_apn', 'county_id', 'sale_qualified',
                'vacant_at_sale', 'ingestion_record_id')
 PUBLIC_COMP_FIELDS = tuple(field for field in COMP_FIELDS if field != 'ingestion_record_id')
-PUBLIC_PROPERTY_FIELDS = ('apn', 'county_id', 'address', 'lot_size_acres', 'zoning', 'latitude', 'longitude')
+PUBLIC_PROPERTY_FIELDS = ('apn', 'county_id', 'address', 'lot_size_acres', 'zoning', 'latitude', 'longitude', 'source_record_id')
 STATUS_MAP = {'running': 'running', 'ok': 'completed', 'completed': 'completed', 'degraded': 'partial',
               'partial': 'partial', 'error': 'failed', 'failed': 'failed', 'skipped': 'skipped'}
 

@@ -101,3 +101,17 @@ still needs real source validation/authority review, configured production
 credentials, bounded Supabase ingestion and trace inspection, and deployed
 verified-only API retrieval. No example or fixture data should ever be sent to
 the production database.
+
+
+## Read-only evidence verification
+
+Current-run checks verify unique returned properties/audit IDs, reproducible audit
+keys, complete outcome accounting and chronological run timestamps. Every stored
+property field (including vacancy evidence) is reconstructed from the source;
+a matching raw hash alone does not prove that a mutable property column is correct.
+Values and owner information are not included in mismatch diagnostics.
+
+Public API checks compare the financial values, source references and verification
+deadlines of the selected county/APN pairs, not just their identities. Unfiltered
+public database reads also check review expiry. Duplicate responses and invented
+zero values for missing facts cannot count as API/database agreement.

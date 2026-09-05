@@ -16,6 +16,8 @@ def backend(monkeypatch):
     monkeypatch.setattr(db,'get_ingestion_records',lambda _:records)
     monkeypatch.setattr(db,'get_top_deals',lambda **kw:[])
     with local.connection() as conn: properties=[dict(row) for row in conn.execute('SELECT * FROM properties')]
+    for prop in properties:
+        prop['vacancy_evidence']=json.loads(prop['vacancy_evidence'])
     def request(method,table,**kw):
         if table=='ingestion_runs':
             assert kw['params']['id']=='eq.1'
@@ -91,3 +93,68 @@ def test_empty_website_on_a_different_project_cannot_pass_smoke(monkeypatch):
     monkeypatch.setattr(smoke,'_get',request)
     with pytest.raises(smoke.SmokeFailure,match='different database'):
         smoke.verify_ingestion(1,county_id='fixture',max_records=10,app_url='https://app.example',require_web=True)
+
+
+@pytest.mark.parametrize('field,value',[
+    ('lot_size_acres',2),('assessed_value',100),('market_value',100),
+    ('owner_name','ALTERED_PRIVATE_VALUE'),('address','ALTERED_PRIVATE_VALUE'),
+    ('latitude',1),('has_improvements',True),('vacancy_status','rejected'),
+    ('vacancy_evidence',{}),('source_record_id','wrong'),
+])
+def test_smoke_replays_actual_persisted_properties_not_only_their_hash(monkeypatch,field,value):
+    _,_,properties=backend(monkeypatch)
+    properties[0][field]=value
+    with pytest.raises(smoke.SmokeFailure) as exc:
+        smoke.verify_ingestion(1,county_id='fixture',max_records=10)
+    assert 'ALTERED_PRIVATE_VALUE' not in str(exc.value)
+
+
+@pytest.mark.parametrize('mutation',['duplicate_property','extra_property','duplicate_audit','missing_audit','relabel_audit','wrong_key','inflated_count','boolean_count','future_finish','finish_before_start'])
+def test_smoke_rejects_incomplete_accounting_and_duplicate_response_rows(monkeypatch,mutation):
+    run,records,properties=backend(monkeypatch)
+    if mutation=='duplicate_property': properties[-1]=properties[0].copy()
+    elif mutation=='extra_property': properties[-1]['id']=999
+    elif mutation=='duplicate_audit': records.append(records[0].copy())
+    elif mutation=='missing_audit': records.pop()
+    elif mutation=='relabel_audit': records[0]['status']='held'
+    elif mutation=='wrong_key': records[0]['record_key']='wrong'
+    elif mutation=='inflated_count': run['records_seen']=5
+    elif mutation=='boolean_count': run['records_seen']=True
+    elif mutation=='future_finish': run['finished_at']='2999-01-01T00:00:00Z'
+    elif mutation=='finish_before_start': run['finished_at']='2000-01-01T00:00:00Z'
+    with pytest.raises(smoke.SmokeFailure): smoke.verify_ingestion(1,county_id='fixture',max_records=10)
+
+
+def public_snapshot():
+    from datetime import datetime,timedelta,timezone
+    return {'apn':'fixture','county_id':'fixture','status':'discovered','verification_status':'verified',
+        'verified_at':datetime.now(timezone.utc).isoformat(),
+        'verification_expires_at':(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat(),
+        'asking_price':20000,'estimated_costs':5000,'estimated_profit_low':55000,
+        'estimated_profit_high':75000,'source_url':'https://county.example/0','source_record_id':'1'}
+
+
+@pytest.mark.parametrize('change',[{'asking_price':1},{'estimated_costs':0},{'estimated_profit_high':999999},
+    {'lot_size_acres':0},{'source_record_id':'another'},{'verification_expires_at':'2000-01-01T00:00:00Z'}])
+def test_same_parcel_ids_do_not_prove_public_financial_or_provenance_agreement(change):
+    original=public_snapshot()
+    with pytest.raises(smoke.SmokeFailure): smoke.verify_api_snapshot([original],[{**original,**change}])
+
+
+def test_public_snapshot_rejects_duplicates_and_accepts_equivalent_numeric_storage():
+    original=public_snapshot()
+    smoke.verify_api_snapshot([{**original,'asking_price':'20000.00'}],[original])
+    with pytest.raises(smoke.SmokeFailure): smoke.verify_api_snapshot([original],[original,original])
+
+
+def test_origin_comparison_normalizes_case_and_default_port_without_accepting_credentials():
+    assert smoke.web_origin('https://DATABASE.example:443/')=='https://database.example'
+    with pytest.raises(smoke.SmokeFailure): smoke.web_origin('https://database.example:bad')
+
+
+def test_unfiltered_public_read_must_deny_expired_reviews(monkeypatch):
+    backend(monkeypatch)
+    monkeypatch.setenv('SUPABASE_PUBLISHABLE_KEY','sb_publishable_ephemeral')
+    monkeypatch.setattr(smoke,'_get',lambda *a,**kw:FakeResponse([{**public_snapshot(),'verification_expires_at':'2000-01-01T00:00:00Z'}]))
+    with pytest.raises(smoke.SmokeFailure,match='RLS exposed'):
+        smoke.verify_public_api(smoke.get_backend(),'https://app.example')
