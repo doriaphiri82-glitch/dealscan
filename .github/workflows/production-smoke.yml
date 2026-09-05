@@ -52,18 +52,28 @@ jobs:
       - name: Ingest one production county
         working-directory: pipeline
         run: python main.py --run-national 1 --max-records 250
-      - name: Verify persisted production data
+      - name: Verify persisted production data and audit trail
         working-directory: pipeline
         env:
           PYTHONPATH: .
         run: |
           python - <<'PY'
+          import os
+          import requests
           from database import get_top_deals
           from config.counties.registry import list_counties
           counties = list_counties()
           deals = get_top_deals(limit=5, min_score=0)
           successful = [c for c in counties if c.get('last_successful_run')]
-          print(f'counties={len(counties)} successful_counties={len(successful)} deals={len(deals)}')
-          if not successful:
-              raise SystemExit('Production smoke test failed: no county has a successful ETL run')
+          base = os.environ['SUPABASE_URL'].rstrip('/') + '/rest/v1'
+          headers = {'apikey': os.environ['SUPABASE_SERVICE_ROLE_KEY'], 'Authorization': 'Bearer ' + os.environ['SUPABASE_SERVICE_ROLE_KEY']}
+          runs = requests.get(base + '/ingestion_runs', params={'select':'id,status,records_seen,records_persisted','order':'id.desc','limit':'5'}, headers=headers, timeout=30)
+          runs.raise_for_status(); audit_runs = runs.json()
+          records = requests.get(base + '/ingestion_records', params={'select':'id,run_id,status,property_id','order':'id.desc','limit':'5'}, headers=headers, timeout=30)
+          records.raise_for_status(); audit_records = records.json()
+          print(f'counties={len(counties)} successful_counties={len(successful)} deals={len(deals)} audit_runs={len(audit_runs)} audit_records={len(audit_records)}')
+          if not successful: raise SystemExit('Production smoke test failed: no county has a successful ETL run')
+          if not audit_runs: raise SystemExit('Production smoke test failed: ingestion_runs is empty')
+          if not audit_records and any((r.get('records_persisted') or 0) > 0 for r in audit_runs):
+              raise SystemExit('Production smoke test failed: persisted records have no ingestion_records provenance')
           PY
