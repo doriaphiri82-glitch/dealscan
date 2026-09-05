@@ -75,3 +75,10 @@ def test_robots_reads_have_a_deadline_and_do_not_authorize_an_error_response(mon
     monkeypatch.setattr(base._session,'get',lambda *a,**kw:calls.append(kw) or Response())
     assert base.robots_allows('https://county.example/data') is False
     assert calls[0]['timeout']==(5,10) and calls[0]['allow_redirects'] is False
+
+
+def test_literal_qualified_gis_fields_and_nested_paths_are_unambiguous():
+    from normalization import source_value
+    assert source_value({'GIS.Parcel.APN':'001'},'gis.parcel.apn')=='001'
+    assert source_value({'GIS':{'APN':'002'}},'gis.apn')=='002'
+    assert source_value({'APN':'001','apn':'002'},'APN') is None

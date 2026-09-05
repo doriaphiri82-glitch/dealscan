@@ -17,6 +17,8 @@ def source_fingerprint(cfg: dict) -> str:
     identity = {key: cfg.get(key) for key in ('where', 'acreage_units', 'vacancy_codebook_url', 'vacant_use_codes',
         'authority_reviewed', 'authority_evidence_url', 'authority_source_url', 'source_county_geoid')}
     identity['url'] = source_url(cfg)
+    oid = cfg.get('object_id_field') or cfg.get('source_object_id_field')
+    identity['object_id_field'] = str(oid).casefold() if oid else None
     # Resolving source field casing does not alter its meaning.
     identity['fields'] = {key: [str(v).casefold() for v in value] if isinstance(value, (list, tuple)) else str(value).casefold()
                           for key, value in (cfg.get('fields') or cfg.get('field_mapping') or {}).items()}

@@ -14,6 +14,7 @@ def test_authorization_requires_all_steps_and_same_source():
                     {'validation_pagination_checked': False}, {'validated_source_fingerprint': 'old'},
                     {'authorized_source_fingerprint': None}, {'last_validated_at': (datetime.now(timezone.utc)-timedelta(days=8)).isoformat()}):
         assert authorization_error({**county, **changes}, cfg)
+    assert authorization_error(county, {**cfg, 'source_object_id_field': 'OTHER_ID'})
     assert authorization_error(county, {**cfg, 'where': 'different = 1'})
     assert authorization_error(county, {**cfg, 'fields': {'apn': 'OTHER'}})
     assert authorization_error(county, {**cfg, 'arcgis_layer_url': 'https://other.example/FeatureServer/0'})

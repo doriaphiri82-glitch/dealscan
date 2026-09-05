@@ -12,7 +12,7 @@ CONFIG_FIELDS = {'county_id','county_name','state','state_fips','county_fips','g
                  'geography_vintage','assessor_url','gis_url','parcel_source_url','arcgis_layer_url','data_url',
                  'data_source_type','source_vendor','scraper_type','field_mapping','where','acreage_units',
                  'vacancy_codebook_url','vacant_use_codes','authority_evidence_url','authority_source_url',
-                 'authority_reviewed','source_county_geoid'}
+                 'authority_reviewed','source_county_geoid','object_id_field','source_object_id_field'}
 
 
 def pull_registry():

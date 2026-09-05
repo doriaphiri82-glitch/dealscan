@@ -84,12 +84,17 @@ def source_value(record: dict, source: Any) -> Any:
         values = [source_value(record, item) for item in source]
         values = [str(value).strip() for value in values if value is not None and str(value).strip()]
         return ', '.join(values) if values else None
+    # ArcGIS joins can expose literal qualified names containing dots.
+    exact = [key for key in record if str(key).casefold() == str(source or '').casefold()]
+    if len(exact)>1: return None
+    if exact: return record[exact[0]]
     current: Any = record
     for part in str(source or '').split('.'):
         if not isinstance(current, dict) or not part:
             return None
-        key = next((key for key in current if str(key).casefold() == part.casefold()), None)
-        current = current.get(key)
+        matches = [key for key in current if str(key).casefold() == part.casefold()]
+        if len(matches)!=1: return None
+        current = current[matches[0]]
     return current
 
 

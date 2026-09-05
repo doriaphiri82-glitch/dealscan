@@ -20,6 +20,7 @@ export function countyFingerprint(county: Row): string {
   const identity: Row = {}
   for (const key of ['where','acreage_units','vacancy_codebook_url','vacant_use_codes','authority_reviewed','authority_evidence_url','authority_source_url','source_county_geoid']) identity[key] = source[key] ?? null
   identity.url = url(source.arcgis_layer_url || source.data_url || source.parcel_source_url)
+  identity.object_id_field = source.object_id_field || source.source_object_id_field ? fieldName(source.object_id_field || source.source_object_id_field) : null
   identity.where = source.where || '1=1'
   identity.fields = Object.fromEntries(Object.entries(object(source.field_mapping)).map(([key,value]) => [key,Array.isArray(value) ? value.map(fieldName) : fieldName(value)]))
   return createHash('sha256').update(stable(identity)).digest('hex')

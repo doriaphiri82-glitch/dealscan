@@ -12,6 +12,8 @@ def vacancy_decision(prop: dict, county_id: str = '', config: dict | None = None
     if improvement is not None and improvement < 0 or 'invalid_improvement_value' in prop.get('_normalization_issues', []):
         return False, 'invalid_improvement_value'
     land_use = str(prop.get('land_use') or '').strip().casefold()
+    if re.search(r'\b(?:sfr|house|home|dwelling|building|apartment|condominium|warehouse|improved)\b', land_use):
+        return False, 'improved_land_use_classification'
     if re.search(r'\b(?:not|non|formerly|previously)[ -]+(?:vacant|unimproved)\b', land_use):
         return False, 'contradictory_vacancy_classification'
     if re.search(r'\b(?:vacant|unimproved)\b', land_use):

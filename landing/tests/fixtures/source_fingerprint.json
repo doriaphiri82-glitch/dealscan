@@ -24,8 +24,8 @@
     "validation_pagination_checked": true,
     "validation_sample_checked": 2,
     "ingestion_authorized": true,
-    "validated_source_fingerprint": "c154a66158ab98e97b1606242a4103c18073a76a335f1d7667d9ee86af108d53",
-    "authorized_source_fingerprint": "c154a66158ab98e97b1606242a4103c18073a76a335f1d7667d9ee86af108d53"
+    "validated_source_fingerprint": "1862875a6c01ba403fffdd22fdf000a9197267f487aeee5790d6ea0687ef84ca",
+    "authorized_source_fingerprint": "1862875a6c01ba403fffdd22fdf000a9197267f487aeee5790d6ea0687ef84ca"
   },
-  "fingerprint": "c154a66158ab98e97b1606242a4103c18073a76a335f1d7667d9ee86af108d53"
+  "fingerprint": "1862875a6c01ba403fffdd22fdf000a9197267f487aeee5790d6ea0687ef84ca"
 }

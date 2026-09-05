@@ -17,6 +17,9 @@ export async function database(legacy?: string) {
 
 /** Ephemeral PostgreSQL-only evidence fixtures. Never sent to a live backend. */
 export async function publishedFixture(db: PGlite) {
+  const fields = JSON.stringify({apn:'APN',lot_size_acres:'ACRES',asking_price:'PRICE',estimated_costs:'COSTS',
+    land_use:'USE',improvement_value:'IMPROVEMENT',costs_complete:'COSTS_COMPLETE',costs_source_url:'COSTS_URL',latitude:'LAT',longitude:'LON',
+    last_sale_price:'SALE',last_sale_date:'SOLD',sale_qualified:'QUALIFIED',vacant_at_sale:'VACANT_AT_SALE'})
   await db.exec(`
     truncate counties,properties,deals,comps,ingestion_records,ingestion_runs restart identity cascade;
     insert into counties(county_id,county_name,validation_status,extra) values
@@ -53,6 +56,12 @@ export async function publishedFixture(db: PGlite) {
       source_record_id,source_apn,county_id,sale_qualified,vacant_at_sale,ingestion_record_id)
       select 1,80000+10000*i,now()-interval '1 day',public.distance_miles(35,-114,35+i*0.001,-114),1,80000+10000*i,
         'https://county.example/FeatureServer/0',(i+1)::text,'comp-'||i,'fixture',true,true,10+i from generate_series(1,3) i;
+    update ingestion_records set raw_payload=raw_payload||
+      '{"USE":"Vacant land","IMPROVEMENT":0,"COSTS_COMPLETE":true,"COSTS_URL":"https://county.example/costs","LAT":35,"LON":-114}'::jsonb where id=10;
+    update ingestion_records set field_mapping='${fields}'::jsonb,raw_payload_canonical=raw_payload::text;
+    update ingestion_runs set metadata=metadata||jsonb_build_object('source_config',
+      jsonb_build_object('fields','${fields}'::jsonb,'acreage_units','acres'));
+    update properties set source_payload_hash=(select encode(sha256(convert_to(raw_payload_canonical,'UTF8')),'hex') from ingestion_records where id=10) where id=1;
     update deals set verification_status='verified' where id=1;
   `)
 }

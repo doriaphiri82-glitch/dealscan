@@ -55,7 +55,8 @@ def update_county(county_id,**fields):
     reg=_load_registry(); entry=reg.get("counties",{}).get(county_id)
     if not entry:return None
     identity_keys = {'arcgis_layer_url', 'parcel_source_url', 'data_url', 'field_mapping', 'where', 'acreage_units',
-                     'authority_reviewed', 'authority_source_url', 'authority_evidence_url', 'source_county_geoid'}
+                     'authority_reviewed', 'authority_source_url', 'authority_evidence_url', 'source_county_geoid',
+                     'object_id_field', 'source_object_id_field'}
     if any(key in fields and fields[key] != entry.get(key) for key in identity_keys):
         entry.update(validation_status='pending', ingestion_authorized=False,
                      validated_source_fingerprint=None, authorized_source_fingerprint=None)

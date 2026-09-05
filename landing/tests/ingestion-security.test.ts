@@ -101,3 +101,29 @@ it('upgrades the earlier audit schema without treating legacy history as publica
 it('fails explicitly on an unsupported legacy audit key type rather than destroying history', async () => {
   await expect(database('create table ingestion_runs(id uuid primary key);')).rejects.toThrow(/Audit IDs must be/)
 }, 30000)
+
+
+it.each([
+  "update ingestion_records set raw_payload=jsonb_set(raw_payload,'{PRICE}','1') where id=10",
+  "update ingestion_records set raw_payload_canonical='{}' where id=10",
+  "update ingestion_records set field_mapping=jsonb_set(field_mapping,'{asking_price}','\"ACRES\"') where id=10",
+  "update ingestion_records set raw_payload=jsonb_set(raw_payload,'{SALE}','1'),raw_payload_canonical=jsonb_set(raw_payload,'{SALE}','1')::text where id=11",
+])('cannot republish changed or mis-mapped raw evidence: %s', async sql => {
+  await asRole(db,'service_role',sql)
+  await expect(asRole(db,'service_role',"update deals set verification_status='verified' where id=1")).rejects.toThrow(/Publication requires/)
+  expect((await asRole(db,'anon','select id from deals')).rows).toEqual([])
+})
+
+
+it('does not confuse a vacant building with vacant land even when hashes are consistent', async () => {
+  await db.exec(`update ingestion_records set raw_payload=jsonb_set(raw_payload,'{USE}','"Vacant house"') where id=10;
+    update ingestion_records set raw_payload_canonical=raw_payload::text where id=10;
+    update properties set source_payload_hash=(select encode(sha256(convert_to(raw_payload_canonical,'UTF8')),'hex') from ingestion_records where id=10) where id=1;`)
+  await expect(asRole(db,'service_role',"update deals set verification_status='verified' where id=1")).rejects.toThrow(/matching raw source evidence/)
+})
+
+it('accepts source casing resolution without authorizing a different mapping', async () => {
+  await db.exec(`update ingestion_records set field_mapping=jsonb_set(field_mapping,'{apn}','"apn"') where id=10`)
+  await asRole(db,'service_role',"update deals set verification_status='verified' where id=1")
+  expect((await asRole(db,'anon','select id from deals')).rows).toEqual([{id:1}])
+})

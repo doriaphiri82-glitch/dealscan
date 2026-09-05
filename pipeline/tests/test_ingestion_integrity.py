@@ -264,3 +264,30 @@ def test_all_invalid_identities_is_not_a_successful_ingestion(monkeypatch):
     result=ingest(monkeypatch,[{'OBJECTID':1,'ACRES':2}])
     assert result['status']=='error' and result['counts']['rejected']==1
     assert 'no_usable_parcel_identities' in result['error']
+
+
+def test_mapping_replacement_cannot_bypass_source_authorization(monkeypatch):
+    ingest(monkeypatch)
+    deal,records,run=verification_inputs(database.get_backend())
+    target=next(row for row in records if row.get('deal_id'))
+    # Equivalent output is not permission to replace a reviewed mapping.
+    target['field_mapping']['apn']=['APN']
+    with pytest.raises(ValueError,match='mapping differs'):
+        verify_persisted_deal(deal,records,run)
+
+
+def test_canonical_raw_snapshot_must_match_the_stored_json_and_hash(monkeypatch):
+    ingest(monkeypatch)
+    deal,records,run=verification_inputs(database.get_backend())
+    target=next(row for row in records if row.get('deal_id'))
+    target['raw_payload_canonical']='{}'
+    with pytest.raises(ValueError,match='raw source snapshot'):
+        verify_persisted_deal(deal,records,run)
+
+
+@pytest.mark.parametrize('classification',['Vacant house','Improved residential','SFR','Vacant commercial building'])
+def test_vacant_building_or_conflicting_classification_is_not_vacant_land(monkeypatch,classification):
+    rows=source_rows(); rows[0]['USE']=classification
+    result=ingest(monkeypatch,rows)
+    assert result['counts']['rejected']==1
+    assert result['counts']['qualified']==0

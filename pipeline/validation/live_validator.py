@@ -41,6 +41,7 @@ def validate_county_live(county: dict) -> dict:
         if not fields:
             raise RuntimeError('layer metadata returned no fields')
         cfg['arcgis_layer_url'] = layer
+        cfg['object_id_field'] = cfg['source_object_id_field'] = arcgis.object_id_field(metadata)
         cfg['fields'] = _resolve_mapping_to_source_case(cfg.get('fields') or {}, fields)
         report = validate_county_config(cid, cfg, source_fields=fields)
         if not report['valid']:
@@ -72,7 +73,7 @@ def validate_county_live(county: dict) -> dict:
         status = 'valid' if valid else 'invalid'
         update_county(cid, arcgis_layer_url=layer, parcel_source_url=layer, field_mapping=cfg['fields'],
                       source_record_count=count, source_max_record_count=metadata.get('maxRecordCount'),
-                      source_object_id_field=arcgis.object_id_field(metadata),
+                      source_object_id_field=arcgis.object_id_field(metadata),object_id_field=arcgis.object_id_field(metadata),
                       data_freshness=modified.isoformat() if modified else None,
                       verification_status='source_verified' if valid else 'discovered_not_verified')
         mark_county_validation(cid, status=status, errors=report['errors'], warnings=report['warnings'],

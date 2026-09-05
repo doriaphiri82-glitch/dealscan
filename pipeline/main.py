@@ -31,7 +31,7 @@ def completed(result, success_key='ok', expected_work=True):
 
 
 def safe_report(value):
-    private={'raw_payload','normalized_payload','field_mapping','source_config','source_authorization','registry_patch',
+    private={'raw_payload','raw_payload_canonical','normalized_payload','field_mapping','source_config','source_authorization','registry_patch',
              'owner_name','owner_address','owner_state','email','financial_evidence','token','key','password'}
     if isinstance(value,dict): return {key:safe_report(item) for key,item in value.items() if key not in private and not key.startswith('_')}
     if isinstance(value,list): return [safe_report(item) for item in value]

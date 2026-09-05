@@ -97,7 +97,7 @@ def _field_coverage(props):
 def _source_manifest(cfg, county):
     keys = ('county_id','arcgis_layer_url','data_url','parcel_source_url','fields','where','acreage_units',
             'vacancy_codebook_url','vacant_use_codes','authority_reviewed','authority_evidence_url',
-            'authority_source_url','source_county_geoid','geoid','source_object_id_field')
+            'authority_source_url','source_county_geoid','geoid','source_object_id_field','object_id_field')
     config = {key: cfg.get(key) for key in keys}
     config['defaults'] = {'county_state': (cfg.get('defaults') or {}).get('county_state')}
     authorization_keys = ('validation_status','last_validated_at','validated_source_fingerprint',

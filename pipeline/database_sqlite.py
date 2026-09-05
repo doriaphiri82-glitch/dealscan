@@ -63,7 +63,7 @@ class SQLiteDatabase:
                        'recommended_offer_low','recommended_offer_high','motivation_score','market_velocity','valuation_confidence',
                        'sale_price','distance_miles','price_per_acre'}
             integers = {'tax_delinquent_years','year_acquired','has_improvements','deal_score','ingestion_record_id','sale_qualified','vacant_at_sale','revision'}
-            for table, fields in [('properties', PROPERTY_FIELDS), ('deals', (*DEAL_FIELDS,'revision')), ('comps', COMP_FIELDS)]:
+            for table, fields in [('properties', PROPERTY_FIELDS), ('deals', (*DEAL_FIELDS,'revision')), ('comps', COMP_FIELDS), ('ingestion_records', ('raw_payload_canonical',))]:
                 existing = {row['name'] for row in conn.execute(f'PRAGMA table_info({table})')}
                 for field in fields:
                     if field not in existing:
@@ -83,8 +83,10 @@ class SQLiteDatabase:
             BEGIN UPDATE deals SET verification_status='pending_review',verified_at=NULL,verification_expires_at=NULL WHERE id IN (OLD.deal_id,NEW.deal_id); END;
             CREATE TRIGGER IF NOT EXISTS comp_delete_revoke AFTER DELETE ON comps
             BEGIN UPDATE deals SET verification_status='pending_review',verified_at=NULL,verification_expires_at=NULL WHERE id=OLD.deal_id; END;
-            CREATE TRIGGER IF NOT EXISTS audit_update_revoke AFTER UPDATE ON ingestion_records
+            DROP TRIGGER IF EXISTS audit_update_revoke;
+            CREATE TRIGGER audit_update_revoke AFTER UPDATE ON ingestion_records
             WHEN NEW.raw_payload IS NOT OLD.raw_payload OR NEW.normalized_payload IS NOT OLD.normalized_payload
+              OR NEW.raw_payload_canonical IS NOT OLD.raw_payload_canonical
               OR NEW.field_mapping IS NOT OLD.field_mapping OR NEW.property_id IS NOT OLD.property_id
               OR NEW.run_id IS NOT OLD.run_id OR NEW.county_id IS NOT OLD.county_id OR NEW.status IS NOT OLD.status
               OR NEW.source_url IS NOT OLD.source_url OR NEW.source_record_id IS NOT OLD.source_record_id

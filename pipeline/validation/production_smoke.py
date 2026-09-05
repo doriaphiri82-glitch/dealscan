@@ -50,7 +50,7 @@ def _require(condition, message):
 
 
 def _private_key_present(value):
-    private = {'owner_name','owner_address','owner_state','raw_payload','normalized_payload','financial_evidence','ingestion_record_id','email'}
+    private = {'owner_name','owner_address','owner_state','raw_payload_canonical','raw_payload','normalized_payload','financial_evidence','ingestion_record_id','email'}
     if isinstance(value,dict): return bool(private.intersection(value)) or any(_private_key_present(item) for item in value.values())
     if isinstance(value,list): return any(_private_key_present(item) for item in value)
     return False
@@ -96,7 +96,9 @@ def verify_ingestion(run_id: int, *, county_id: str | None = None, max_records: 
         _require(record.get('source_record_id') and record['source_record_id']==prop.get('source_record_id'), 'Source identity is missing or mismatched')
         _require(record.get('source_url')==prop.get('source_url')==run.get('source_url'), 'Source URLs do not agree')
         _require(record.get('raw_payload') and record.get('normalized_payload') and record.get('field_mapping'), 'A persisted property has incomplete source snapshots')
-        digest = hashlib.sha256(json.dumps(json_safe(record['raw_payload']),sort_keys=True).encode()).hexdigest()
+        canonical=record.get('raw_payload_canonical')
+        _require(isinstance(canonical,str) and json.loads(canonical)==json_safe(record['raw_payload']), 'Canonical source snapshot is incomplete or inconsistent')
+        digest = hashlib.sha256(canonical.encode()).hexdigest()
         _require(digest==prop.get('source_payload_hash'), 'Source payload changed after the selected run')
         _require(record['normalized_payload'].get('apn')==prop.get('apn'), 'Normalized parcel identity mismatch')
         _require(prop.get('source_fingerprint')==fingerprint, 'Property source fingerprint differs from authorized run')

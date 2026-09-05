@@ -40,7 +40,11 @@ class ArcGISFeatureServerAdapter(BaseScraperAdapter):
                 raise RuntimeError('layer metadata contains no fields')
             self._resolve_field_names(cfg, self.source_fields)
             self.resolved_fields = dict(cfg.get('fields') or {})
-            cfg['object_id_field'] = arcgis.object_id_field(metadata)
+            object_id = arcgis.object_id_field(metadata)
+            expected_id = cfg.get('object_id_field') or cfg.get('source_object_id_field')
+            if expected_id and str(expected_id).casefold() != object_id.casefold():
+                raise RuntimeError('source object identifier changed after validation')
+            cfg['object_id_field'] = object_id
             if any(field not in self.source_fields for field in self._out_fields(cfg)):
                 raise RuntimeError('configured fields no longer exist in source schema')
             for attrs in arcgis.query_layer(layer, cfg.get('where', '1=1'), self._out_fields(cfg),

@@ -63,7 +63,7 @@ class SupabaseDatabase:
         if self._schema_checked: return
         required = {'counties': 'county_id', 'properties': 'id,source_record_id,source_payload_hash,vacancy_status',
                     'deals': 'id,financial_evidence,ingestion_record_id,revision,verification_expires_at', 'comps': 'id,source_url,ingestion_record_id',
-                    'ingestion_runs': 'id,run_key,heartbeat_at,finished_at', 'ingestion_records': 'id,record_key,field_mapping'}
+                    'ingestion_runs': 'id,run_key,heartbeat_at,finished_at', 'ingestion_records': 'id,record_key,field_mapping,raw_payload_canonical'}
         for table, fields in required.items():
             self._request('GET', table, params={'select': fields, 'limit': '0'})
         self._schema_checked = True

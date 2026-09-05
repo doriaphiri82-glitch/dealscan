@@ -106,9 +106,11 @@ def audit_record(run_id: int, county_id: str, item: dict) -> dict:
     if source_id in (None, ''): source_id = normalized.get('apn')
     source_url = item.get('source_url') or normalized.get('source_url')
     raw = item.get('raw_payload') or {}
+    if not isinstance(raw,dict): raw={'value':raw}
     return json_safe({'run_id': int(run_id), 'county_id': county_id,
         'record_key': record_key(source_url, source_id, raw), 'source_record_id': str(source_id) if source_id is not None else None,
-        'source_url': source_url, 'raw_payload': raw if isinstance(raw, dict) else {'value': raw},
+        'source_url': source_url, 'raw_payload': raw,
+        'raw_payload_canonical': json.dumps(json_safe(raw),sort_keys=True),
         'normalized_payload': {key: val for key, val in normalized.items() if not key.startswith('_')},
         'field_mapping': item.get('field_mapping') or normalized.get('_field_sources') or {},
         'property_id': item.get('property_id'), 'deal_id': item.get('deal_id'),

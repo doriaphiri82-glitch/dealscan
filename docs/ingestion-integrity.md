@@ -30,7 +30,7 @@ intentionally replaced by the secure contract.
 
 Discovery, live validation, explicit authorization and ingestion are separate
 steps. Validation and authorization bind the effective URL, query, field mapping,
-units and reviewed authority evidence to a source fingerprint. Validation expires
+units, object-ID field and reviewed authority evidence to a source fingerprint. Validation expires
 after seven days. New discoveries and changed sources must repeat those steps.
 A Census county list is a geography universe, not evidence of parcel coverage.
 
@@ -52,7 +52,7 @@ a successful ingestion.
   counters, timestamps and safe diagnostics. Failed and partial are not aliases
   for completed.
 - Each source record has a deterministic per-run/source key, original payload,
-  normalized payload, mapping, identity, URL, decision and optional property/deal
+  exact canonical JSON representation, normalized payload, mapping, identity, URL, decision and optional property/deal
   links. Raw payloads and owner data must not be uploaded as public CI artifacts.
 - Counts are processing outcomes/upserts in that bounded run, not national totals
   or net-new inserts. `stored` counts properties; `qualified` counts persisted
@@ -75,7 +75,9 @@ price and complete costs; and at least three persisted source-backed qualified
 vacant-land sales. Sales must pass date, distance, area, identity and county
 checks. Financial results and score are recomputed rather than trusted.
 
-The PostgreSQL trigger independently checks durable evidence and arithmetic,
+PostgreSQL independently hashes the exact source JSON, compares it with the JSONB
+audit and property digest, binds mappings to the authorized manifest, and checks
+raw vacancy, asking price, costs, comparable facts and financial arithmetic. It
 requires current county authorization and sets a review expiry no later than the
 source validation deadline. RLS excludes expired reviews. Review does not turn
 validation time into the source's own data-freshness timestamp.
