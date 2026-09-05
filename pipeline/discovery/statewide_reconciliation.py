@@ -11,7 +11,8 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 def _norm(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+    text = re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+    return re.sub(r"\s+county$", "", text).strip()
 
 
 def _fips(value: Any) -> Optional[str]:
@@ -34,15 +35,10 @@ def reconcile_statewide_counties(
     discovery candidate and retains its original statewide source metadata.
     """
     census_rows = list(census)
-    by_geoid = {
-        str(row.get("geoid")): row
-        for row in census_rows
-        if row.get("geoid")
-    }
     by_state_fips = {
-        (str(row.get("state_fips") or ""), str(row.get("county_fips") or "").zfill(3)): row
+        (str(row.get("state_fips") or ""), _fips(row.get("county_fips"))): row
         for row in census_rows
-        if row.get("state_fips") is not None and row.get("county_fips") is not None
+        if row.get("state_fips") is not None and _fips(row.get("county_fips"))
     }
     by_state_name = {
         (str(row.get("state_fips") or ""), _norm(row.get("county_name"))): row
@@ -82,10 +78,20 @@ def reconcile_statewide_counties(
 def build_coverage_report(
     reconciled: Iterable[Dict[str, Any]],
     census: Iterable[Dict[str, Any]],
+    state_fips: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Summarize statewide coverage against the expected Census universe."""
+    """Summarize statewide coverage against the expected Census universe.
+
+    ``state_fips`` scopes the report when a caller supplies a national Census
+    universe rather than a single state's rows.
+    """
     rows = list(reconciled)
-    census_rows = list(census)
+    census_rows = [
+        row for row in census
+        if state_fips is None or str(row.get("state_fips") or "") == str(state_fips)
+    ]
+    if state_fips is not None:
+        rows = [row for row in rows if str(row.get("state_fips") or "") == str(state_fips)]
     matched = [row for row in rows if row.get("reconciliation_status") == "matched"]
     expected = len(census_rows)
     covered = len({row.get("geoid") for row in matched if row.get("geoid")})
