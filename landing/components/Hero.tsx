@@ -1,28 +1,25 @@
-'use client'
-
-import { useState, useEffect, useRef } from 'react'
-
-const SCORE_FINAL=87
-const scoreBars=[{label:'Value',val:91},{label:'Market',val:79},{label:'Seller',val:84},{label:'Access',val:72},{label:'Risk',val:88}]
-const signals=[{text:'Below comparable pricing',warn:false},{text:'Absentee ownership',warn:false},{text:'Long ownership history',warn:false},{text:'Tax history requires review',warn:true}]
-const riskChecks=[{text:'Verify legal access',warn:true},{text:'Confirm utilities availability',warn:true},{text:'Zoning appears compatible',warn:false}]
-
-export default function Hero(){
- const[stage,setStage]=useState(0);const[score,setScore]=useState(0);const barsRef=useRef<HTMLDivElement>(null)
- useEffect(()=>{const reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;if(reduced){setStage(8);setScore(SCORE_FINAL);return}const timers:ReturnType<typeof setTimeout>[]=[];const at=(ms:number,fn:()=>void)=>timers.push(setTimeout(fn,ms));at(150,()=>setStage(1));at(500,()=>setStage(2));at(900,()=>setStage(3));at(1150,()=>{const start=performance.now();const tick=(now:number)=>{const t=Math.min((now-start)/1400,1);setScore(Math.round((1-Math.pow(1-t,3))*SCORE_FINAL));if(t<1)requestAnimationFrame(tick)};requestAnimationFrame(tick)});at(1300,()=>{setStage(4);barsRef.current?.querySelectorAll<HTMLElement>('.mini-bar-fill').forEach((bar,i)=>setTimeout(()=>{bar.style.width=(bar.dataset.w??'0')+'%'},i*90))});at(2000,()=>setStage(5));at(2300,()=>setStage(6));at(2600,()=>setStage(8));return()=>timers.forEach(clearTimeout)},[])
- const stageIn=(s:number)=>`hero-stage ${stage>=s?'stage-in':''}`
- return <section className="relative min-h-screen overflow-hidden flex items-center pt-16 bg-[#f7f9f7]">
-  <div className="absolute inset-0 pointer-events-none"><div className="absolute -top-32 right-[-8%] h-[520px] w-[520px] rounded-full bg-[#dfeee5] blur-3xl opacity-70"/><div className="absolute inset-0 opacity-[.32]" style={{backgroundImage:'linear-gradient(#dce5df 1px,transparent 1px),linear-gradient(90deg,#dce5df 1px,transparent 1px)',backgroundSize:'72px 72px'}}/><div className="absolute inset-0 bg-[radial-gradient(circle_at_75%_35%,rgba(255,255,255,.85),transparent_36%)]"/></div>
-  <div className="relative z-10 mx-auto grid max-w-7xl items-center gap-12 px-4 py-16 sm:px-6 lg:grid-cols-[.88fr_1.12fr] lg:gap-16 lg:px-8 lg:py-24">
-   <div className="animate-fade-in-up"><div className="mb-5 inline-flex items-center gap-2 rounded-full border border-[#cfe1d6] bg-white/80 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[.13em] text-[#176b45] shadow-sm"><span className="h-1.5 w-1.5 rounded-full bg-[#176b45]"/>Land deal intelligence</div><h1 className="mb-6 max-w-[620px] text-5xl font-black leading-[1.02] tracking-[-.045em] text-[#15211b] sm:text-6xl">Find land worth <span className="text-[#176b45]">looking at.</span></h1><p className="mb-9 max-w-[560px] text-[17px] leading-[1.75] text-[#64716a]">DealScan brings property data, comparable sales, seller signals, and risk flags into one screening workflow — so you can discover opportunities, understand the economics, then verify before you act.</p><div className="flex flex-col gap-3 sm:flex-row"><a href="/deals" className="group inline-flex items-center justify-center gap-2 rounded-xl bg-[#153025] px-6 py-3.5 text-sm font-bold text-white shadow-[0_10px_24px_rgba(21,48,37,.16)] transition hover:-translate-y-0.5 hover:bg-[#176b45]">Explore deals <span className="transition-transform group-hover:translate-x-1">→</span></a><a href="/auth" className="inline-flex items-center justify-center rounded-xl border border-[#d7e1db] bg-white/75 px-6 py-3.5 text-sm font-bold text-[#34433b] shadow-sm transition hover:-translate-y-0.5 hover:border-[#b9cfc1]">Sign in</a></div><p className="mt-5 font-mono text-[10px] uppercase tracking-[.08em] text-[#8a958f]">Screening signals, not investment guarantees.</p></div>
-   <div className="animate-fade-in-up delay-200 relative"><div className="absolute -inset-3 rounded-[28px] border border-[#d8e4dc] bg-white/30 -z-10"/><div className={`hero-card ${stage>=1?'settled':''} overflow-hidden rounded-[22px] border border-[#dbe5df] bg-white/95 shadow-[0_28px_70px_rgba(25,49,38,.13)] backdrop-blur-xl`}>
-    <div className={stageIn(2)}><div className="flex items-center justify-between border-b border-[#edf1ee] bg-[#fbfcfb] px-5 py-4"><div><div className="text-sm font-bold text-[#203029]">Cochise County, Arizona</div><div className="mt-1 font-mono text-[10px] text-[#8a958f]">APN 123-45-678A</div></div><span className="rounded-full border border-[#eadcb9] bg-[#fff8e8] px-2.5 py-1 font-mono text-[9px] font-bold uppercase tracking-wide text-[#9a701b]">Demo · fictional</span></div></div>
-    <div className="p-5 sm:p-6"><div className="grid gap-5 sm:grid-cols-[.82fr_1.18fr]"><div className={stageIn(4)}><div className="rounded-2xl border border-[#e1ebe5] bg-[#f8faf8] p-4"><div className="font-mono text-[9px] font-bold uppercase tracking-[.1em] text-[#7c8881]">DealScore</div><div className="mt-1 flex items-end gap-1"><span className="text-5xl font-black leading-none tabular-nums text-[#176b45]">{score}</span><span className="mb-1 text-xs text-[#8a958f]">/100</span></div><div ref={barsRef} className="mt-5 space-y-2.5">{scoreBars.map(bar=><div key={bar.label} className="grid grid-cols-[45px_1fr_25px] items-center gap-2"><span className="text-[10px] font-semibold text-[#68756e]">{bar.label}</span><div className="h-1.5 overflow-hidden rounded-full bg-[#e3ebe6]"><div className="mini-bar-fill h-full w-0 rounded-full bg-[#176b45] transition-[width] duration-500" data-w={bar.val}/></div><span className="text-right font-mono text-[9px] text-[#69766f]">{bar.val}</span></div>)}</div></div></div>
-     <div className={stageIn(3)}><div className="grid grid-cols-2 gap-3">{[['Asking Price','$4,900'],['Est. Market Value','$9,700'],['Potential Spread','$4,800'],['Acreage','2.31 ac']].map(([label,value],i)=><div key={label} className="rounded-2xl border border-[#e5ebe7] bg-white p-3.5"><div className="font-mono text-[8px] font-bold uppercase tracking-[.08em] text-[#8a958f]">{label}</div><div className={`mt-1.5 text-lg font-black tabular-nums ${i===2?'text-[#176b45]':'text-[#203029]'}`}>{value}</div></div>)}</div></div></div>
-     <div className={stageIn(5)}><div className="mt-5 border-t border-[#edf1ee] pt-4"><div className="mb-2 font-mono text-[9px] font-bold uppercase tracking-[.1em] text-[#7c8881]">Signals</div><ul>{signals.map(s=><li key={s.text} className="flex items-center gap-2 border-b border-[#f0f3f1] py-2 text-xs text-[#59675f] last:border-0"><span className={s.warn?'text-[#b17d18]':'text-[#176b45]'}>{s.warn?'⚠':'✓'}</span>{s.text}</li>)}</ul></div></div>
-     <div className={stageIn(6)}><div className="mt-3 rounded-xl border border-[#efe5cb] bg-[#fffaf0] px-3 py-2.5"><div className="mb-1 font-mono text-[9px] font-bold uppercase tracking-[.1em] text-[#9a701b]">Verification queue</div><div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-[#766746]">{riskChecks.map(s=><span key={s.text}>{s.warn?'•':'✓'} {s.text}</span>)}</div></div></div></div>
-    <div className={stageIn(8)}><div className="flex items-center justify-between border-t border-[#edf1ee] bg-[#fbfcfb] px-5 py-3 font-mono text-[9px] font-bold uppercase tracking-[.08em] text-[#8a958f]"><span>Demo dataset · illustrative</span><span>Example data</span></div></div>
-   </div></div>
-  </div>
- </section>
+export default function Hero() {
+  const requirements = [
+    ['Source identity', 'A reviewed county source, live schema checks and a traceable parcel record.'],
+    ['Vacancy evidence', 'Source-backed vacant land — not an empty field or an unoccupied building.'],
+    ['Real economics', 'An actual asking price, documented costs and relevant recorded land sales.'],
+    ['Separate verification', 'Evidence checked before publication, with a bounded verification expiry.'],
+  ]
+  return <section className="relative overflow-hidden bg-[#f7f9f7] px-4 pb-16 pt-32 sm:px-6 lg:pb-24 lg:pt-40">
+    <div className="pointer-events-none absolute inset-0 parcel-grid opacity-20" aria-hidden="true" />
+    <div className="relative mx-auto grid max-w-6xl items-center gap-12 lg:grid-cols-2">
+      <div>
+        <p className="text-[11px] font-black uppercase tracking-[.16em] text-[#176b45]">Evidence-first land research</p>
+        <h1 className="mt-5 text-5xl font-black tracking-[-.05em] text-[#15211b] sm:text-6xl">Find land worth <span className="text-[#176b45]">looking at.</span></h1>
+        <p className="mt-6 max-w-xl text-base leading-8 text-[#64716a]">A conservative screening workflow for source-backed parcels. Understand the evidence and economics, then do your own due diligence before acting.</p>
+        <div className="mt-8 flex flex-wrap gap-3"><a href="/deals" className="rounded-xl bg-[#153025] px-6 py-3.5 text-sm font-bold text-white hover:bg-[#176b45]">Explore verified opportunities →</a><a href="#how-it-works" className="rounded-xl border border-[#d5dfd8] bg-white px-6 py-3.5 text-sm font-bold text-[#34423b]">How it works</a></div>
+        <p className="mt-5 text-xs leading-5 text-[#7c8981]">Missing evidence stays missing. Screening is not an investment guarantee.</p>
+      </div>
+      <div className="overflow-hidden rounded-[28px] border border-[#d9e4dc] bg-white shadow-[0_28px_80px_rgba(25,49,38,.10)]">
+        <div className="border-b border-[#e7ede9] bg-[#f8faf9] px-6 py-5"><p className="text-[10px] font-black uppercase tracking-[.16em] text-[#176b45]">Publication requirements</p><h2 className="mt-2 text-xl font-black text-[#203029]">Evidence before opportunity.</h2></div>
+        <ol className="divide-y divide-[#e7ede9] px-6">{requirements.map(([title,description],i) => <li key={title} className="flex gap-4 py-5"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#edf5f0] text-xs font-black text-[#176b45]">{i+1}</span><div><h3 className="text-sm font-bold text-[#203029]">{title}</h3><p className="mt-1 text-xs leading-6 text-[#69776f]">{description}</p></div></li>)}</ol>
+        <p className="border-t border-[#e7ede9] bg-[#f8faf9] px-6 py-4 text-xs leading-5 text-[#69776f]">This is the review process, not a property listing. The published feed may be empty.</p>
+      </div>
+    </div>
+  </section>
 }

@@ -16,10 +16,11 @@ export async function GET(request: NextRequest) {
   const countyId = query.get('county_id') || undefined
   if (countyId && !/^[a-zA-Z0-9_-]{1,150}$/.test(countyId)) return NextResponse.json({ error: 'Invalid county_id' }, { status: 400, headers })
   try {
-    const deals = await readPublishedDeals({ limit, offset, countyId })
+    const rows = await readPublishedDeals({ limit: limit+1, offset, countyId })
+    const deals = rows.slice(0,limit)
     return NextResponse.json({
       count: deals.length, deals, generated_at: null,
-      meta: { status: deals.length ? 'ok' : 'no-data', storage_source: 'supabase', scraped_counties: [], offset, limit },
+      meta: { status: deals.length ? 'ok' : 'no-data', storage_source: 'supabase', scraped_counties: [], offset, limit, has_more: rows.length>limit },
     }, { headers })
   } catch {
     return NextResponse.json({

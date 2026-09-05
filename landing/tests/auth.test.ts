@@ -59,3 +59,15 @@ it('handles missing codes, configuration, rejected exchanges and thrown auth err
   vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', '')
   expect((await callback(new Request('https://app.example/auth/callback?code=fixture'))).headers.get('location')).toContain('auth_unavailable')
 })
+
+
+it('returns a real JSON 401 for protected APIs rather than a login redirect disguised as 200',async()=>{
+  for(const configured of [true,false]){
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL',configured?'https://example.supabase.co':'')
+    const res=await middleware(new NextRequest('https://app.example/api/admin/coverage'))
+    expect(res.status).toBe(401)
+    expect(res.headers.get('location')).toBeNull()
+    expect(res.headers.get('content-type')).toContain('application/json')
+    expect(await res.json()).toEqual({error:'Authentication required'})
+  }
+})

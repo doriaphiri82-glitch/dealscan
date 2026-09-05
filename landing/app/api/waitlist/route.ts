@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { privateRpc, privateSupabaseConfig } from '@/lib/supabase-private'
+import { supportContact } from '@/lib/support'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -54,6 +55,7 @@ export async function POST(request: NextRequest) {
   try {
     // Trust proxy-provided client IPs only on the target Vercel deployment.
     // Other hosts share a conservative rate bucket; no raw IP is persisted.
+    if (!supportContact()) throw new Error('Operator contact not configured')
     const ip = process.env.VERCEL === '1'
       ? (request.headers.get('x-vercel-forwarded-for') || request.headers.get('x-forwarded-for'))?.split(',')[0].trim() || 'unknown'
       : 'unknown'

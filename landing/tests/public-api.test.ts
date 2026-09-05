@@ -10,6 +10,9 @@ const row = (extra = {}) => ({
   verified_at: new Date().toISOString(), verification_expires_at: new Date(Date.now()+3600000).toISOString(),
   source_url: 'https://county.example/parcel', asking_price: null,
   properties: { apn: 'fixture', county_id: 'fixture_county', owner_name: 'PRIVATE', owner_address: 'PRIVATE' },
+  comps: [1,2,3].map(i => ({ source_apn:`comp-${i}`,county_id:'fixture_county',source_record_id:String(i),
+    source_url:'https://county.example/sale',sale_qualified:true,vacant_at_sale:true,sale_price:10000,lot_size_acres:1,
+    price_per_acre:10000,distance_miles:i,sale_date:new Date(Date.now()-86400000).toISOString(),owner_name:'PRIVATE' })),
   notes: 'PRIVATE', raw_payload: { secret: 'PRIVATE' }, ...extra,
 })
 const request = (path: string) => new NextRequest(`https://dealscan.example${path}`)
@@ -56,6 +59,15 @@ describe('public deal boundary', () => {
     ])))
     const res = await list(request('/api/deals'))
     expect((await res.json()).deals).toEqual([])
+  })
+  it('serves traceable allowlisted comparable rows on the exact parcel detail', async () => {
+    const fetch = vi.fn().mockResolvedValue(Response.json([row()])); vi.stubGlobal('fetch',fetch)
+    const res = await detail(request('/api/deals/fixture?county_id=fixture_county'),{ params:Promise.resolve({apn:'fixture'}) })
+    const body = await res.json()
+    expect(body.deal.comps).toHaveLength(3)
+    expect(body.deal.comps[0].source_record_id).toBe('1')
+    expect(JSON.stringify(body)).not.toContain('PRIVATE')
+    expect(new URL(fetch.mock.calls[0][0]).searchParams.get('select')).toContain('comps(')
   })
   it('preserves literal percent APNs and scopes identical APNs by county', async () => {
     const fetch = vi.fn().mockResolvedValue(Response.json([row()])); vi.stubGlobal('fetch', fetch)

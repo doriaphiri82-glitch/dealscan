@@ -10,7 +10,7 @@ export async function currentUser() {
   try {
     const cookieStore = await cookies()
     const supabase = createServerClient(config.url, config.key, {
-      global: { fetch: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(8000) }) },
+      global: { fetch: (url, init) => fetch(url, { ...init, redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(8000) }) },
       cookies: { getAll: () => cookieStore.getAll(), setAll: () => {} },
     })
     const { data: { user }, error } = await supabase.auth.getUser()

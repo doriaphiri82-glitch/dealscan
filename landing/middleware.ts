@@ -9,7 +9,7 @@ export async function middleware(request: NextRequest) {
   if (config) {
     try {
       const supabase = createServerClient(config.url, config.key, {
-        global: { fetch: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(8000) }) },
+        global: { fetch: (url, init) => fetch(url, { ...init, redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(8000) }) },
         cookies: {
           getAll: () => request.cookies.getAll(),
           setAll(cookiesToSet) {
@@ -27,6 +27,11 @@ export async function middleware(request: NextRequest) {
     } catch { /* Fail closed when session verification is unavailable. */ }
   }
   if (!signedIn) {
+    if (request.nextUrl.pathname.startsWith('/api/')) {
+      const denied=NextResponse.json({error:'Authentication required'},{status:401,headers:{'Cache-Control':'private, no-store'}})
+      response.cookies.getAll().forEach(cookie=>denied.cookies.set(cookie))
+      return denied
+    }
     const url = request.nextUrl.clone()
     url.pathname = '/auth'
     url.search = ''

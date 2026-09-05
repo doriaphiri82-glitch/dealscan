@@ -7,6 +7,7 @@ const request = (input: unknown = { email: 'person@example.com', consent: true }
     headers: { origin: 'https://app.example', 'content-type': 'application/json', ...extra }, body: JSON.stringify(input) })
 
 beforeEach(() => {
+  vi.stubEnv('WAITLIST_CONTACT_EMAIL','privacy@example.com')
   vi.stubEnv('SUPABASE_URL', 'https://database.example')
   vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'sb_secret_ephemeral_test')
 })
@@ -78,5 +79,21 @@ it('never exposes waitlist emails, counts or membership over GET', async () => {
   const fetch = vi.fn(); vi.stubGlobal('fetch', fetch)
   const response = await GET()
   expect(response.status).toBe(405); expect(response.headers.get('allow')).toBe('POST')
+  expect(fetch).not.toHaveBeenCalled()
+})
+
+
+it('requires an operator contact before collecting personal data',async()=>{
+  vi.stubEnv('WAITLIST_CONTACT_EMAIL','')
+  const fetch=vi.fn();vi.stubGlobal('fetch',fetch)
+  expect((await POST(request())).status).toBe(503)
+  expect(fetch).not.toHaveBeenCalled()
+})
+
+
+it('does not mix one project auth with a different private database',async()=>{
+  vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL','https://different.example')
+  const fetch=vi.fn();vi.stubGlobal('fetch',fetch)
+  expect((await POST(request())).status).toBe(503)
   expect(fetch).not.toHaveBeenCalled()
 })

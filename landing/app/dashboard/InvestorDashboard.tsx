@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import Workspace from '../my-dealscan/Workspace'
 
 export default function InvestorDashboard({ email }: { email: string }) {
   return (
@@ -15,19 +16,7 @@ export default function InvestorDashboard({ email }: { email: string }) {
           <Link href="/deals" className="rounded-xl bg-[#153025] px-5 py-3 text-center text-sm font-bold text-white transition hover:bg-[#176b45]">Explore deals →</Link>
         </header>
 
-        <section className="mt-8 grid gap-4 md:grid-cols-3">
-          {[
-            ['Saved opportunities', '0', 'Build your watchlist from verified deals.'],
-            ['Recent research', '0', 'Your research workspace will appear here.'],
-            ['Verified deals', 'Live', 'Only published opportunities should surface here.'],
-          ].map(([label, value, description]) => (
-            <article key={label} className="rounded-3xl border border-[#dfe7e2] bg-white p-6 shadow-[0_18px_60px_rgba(23,42,32,.06)]">
-              <p className="text-xs font-bold text-[#69766f]">{label}</p>
-              <p className="mt-3 text-3xl font-black tracking-[-.04em]">{value}</p>
-              <p className="mt-2 text-sm leading-6 text-[#69766f]">{description}</p>
-            </article>
-          ))}
-        </section>
+        <div className="mt-8"><Workspace /></div>
 
         <section className="mt-6 rounded-3xl border border-[#dfe7e2] bg-white p-6 shadow-[0_18px_60px_rgba(23,42,32,.06)] sm:p-8">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

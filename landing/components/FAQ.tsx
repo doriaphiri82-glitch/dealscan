@@ -6,9 +6,9 @@ const faqs = [
   { q: 'Is DealScan an investment advisor?', a: 'No. DealScan provides data and screening tools. Users are responsible for conducting their own due diligence and making their own investment decisions.' },
   { q: 'Are the property values guaranteed?', a: 'No. Valuations are estimates based on available data and should be independently verified before making any purchase decision.' },
   { q: 'Does DealScan guarantee profitable deals?', a: 'No. DealScan identifies parcels that may be worth investigating based on available data. Profitability depends on many factors including acquisition cost, holding costs, market conditions, and your ability to find a buyer.' },
-  { q: 'Which markets are supported?', a: 'Currently: Cochise County AZ, Mohave County AZ, and El Paso County TX. Huerfano County CO and Socorro County NM are in development. Additional markets are planned based on data availability.' },
-  { q: 'How often is data updated?', a: 'County records are checked on a regular schedule. Comparable sales data is refreshed as new transactions are recorded. Update frequency varies by county based on data source availability.' },
-  { q: 'Can I cancel?', a: 'Yes. You can cancel your subscription at any time. No long-term contracts or commitments.' },
+  { q: 'Which markets are supported?', a: 'Cochise County AZ, Mohave County AZ and El Paso County TX are configured pilots, not a claim of live coverage. Sources still need current validation, authorization and successful ingestion. The explorer shows only the opportunities currently verified; it may be empty.' },
+  { q: 'How often is data updated?', a: 'Production scheduling is opt-in and depends on successful source validation. A recent ingestion is not proof of fresh source data. Review the source timestamp and verification deadline shown with each published opportunity.' },
+  { q: 'Is a paid subscription required?', a: 'No paid subscription checkout is active. Exploring available verified opportunities is free. Product updates are optional and do not subscribe you to automated deal alerts.' },
 ]
 
 export default function FAQ() {

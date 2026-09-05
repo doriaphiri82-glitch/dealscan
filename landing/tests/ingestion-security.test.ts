@@ -127,3 +127,14 @@ it('accepts source casing resolution without authorizing a different mapping', a
   await asRole(db,'service_role',"update deals set verification_status='verified' where id=1")
   expect((await asRole(db,'anon','select id from deals')).rows).toEqual([{id:1}])
 })
+
+
+it('caps publication by comparable age, not only the source-validation deadline',async()=>{
+  await db.exec(`update ingestion_records set normalized_payload=jsonb_set(normalized_payload,'{last_sale_date}',to_jsonb(now()-interval '1095 days'+interval '1 hour')),
+    raw_payload=jsonb_set(raw_payload,'{SOLD}',to_jsonb(now()-interval '1095 days'+interval '1 hour')) where id=11;
+    update ingestion_records set raw_payload_canonical=raw_payload::text where id=11;
+    update comps set sale_date=(select (normalized_payload->>'last_sale_date')::timestamptz from ingestion_records where id=11) where id=1;`)
+  await asRole(db,'service_role',"update deals set verification_status='verified' where id=1")
+  const rows=(await db.query("select verification_expires_at<=now()+interval '61 minutes' as bounded from deals where id=1")).rows
+  expect(rows).toEqual([{bounded:true}])
+})

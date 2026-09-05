@@ -37,7 +37,7 @@ def test_smoke_checks_this_run_and_accepts_honest_zero_public_deals(monkeypatch)
             assert kwargs['headers']=={'apikey':'sb_publishable_ephemeral'}
             return FakeResponse([]) if url.endswith('/deals') else FakeResponse(status_code=403)
         assert not kwargs.get('headers')  # Never forward a service credential to the website.
-        if url.endswith('/api/health'): return FakeResponse({'database':'ok'})
+        if url.endswith('/api/health'): return FakeResponse({'database':'ok','database_origin':'https://database.example'})
         return FakeResponse({'deals':[],'meta':{'storage_source':'supabase'}})
     monkeypatch.setattr(smoke,'_get',request)
     result=smoke.verify_ingestion(1,county_id='fixture',max_records=10,app_url='https://app.example',require_web=True)
@@ -79,3 +79,15 @@ def test_service_or_unknown_keys_cannot_count_as_an_rls_smoke(monkeypatch,key):
 @pytest.mark.parametrize('url',['http://app.example','https://secret@app.example','https://app.example/private?token=secret',''])
 def test_smoke_rejects_unsafe_or_ambiguous_application_origins(url):
     with pytest.raises(smoke.SmokeFailure): smoke.web_origin(url)
+
+
+def test_empty_website_on_a_different_project_cannot_pass_smoke(monkeypatch):
+    backend(monkeypatch)
+    monkeypatch.setenv('SUPABASE_PUBLISHABLE_KEY','sb_publishable_ephemeral')
+    def request(url,**kw):
+        if url.endswith('/api/health'): return FakeResponse({'database':'ok','database_origin':'https://different.example'})
+        if '/rest/v1/' in url: return FakeResponse([]) if url.endswith('/deals') else FakeResponse(status_code=403)
+        return FakeResponse({'deals':[],'meta':{'storage_source':'supabase'}})
+    monkeypatch.setattr(smoke,'_get',request)
+    with pytest.raises(smoke.SmokeFailure,match='different database'):
+        smoke.verify_ingestion(1,county_id='fixture',max_records=10,app_url='https://app.example',require_web=True)

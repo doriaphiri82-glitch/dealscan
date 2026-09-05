@@ -124,6 +124,7 @@ def verify_ingestion(run_id: int, *, county_id: str | None = None, max_records: 
             _require(response.status_code in (401,403),'A private database column is readable with the public key')
         response = _get(origin+'/api/health')
         _require(response.status_code==200 and response.json().get('database')=='ok','Deployed API health check failed')
+        _require(response.json().get('database_origin','').rstrip('/')==db.url.rstrip('/'), 'Deployed API is configured for a different database project')
         response = _get(origin+'/api/deals',params={'limit':'5'})
         _require(response.status_code==200,'Deployed public opportunities API failed')
         body = response.json(); deals = body.get('deals')

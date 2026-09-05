@@ -97,6 +97,8 @@ returns boolean language plpgsql immutable set search_path=public as $$
 declare improvement numeric; flag boolean; land_use text; zoning text; code text;
 begin
   improvement=public.source_number(public.source_mapped_value(payload,fields->'improvement_value'));
+  if improvement is null and public.source_mapped_value(payload,fields->'improvement_value') is not null
+    and public.source_mapped_value(payload,fields->'improvement_value')<>'null'::jsonb then return false; end if;
   flag=public.source_boolean(public.source_mapped_value(payload,fields->'has_improvements'));
   if flag is true or improvement>0 or improvement<0 then return false; end if;
   land_use=lower(trim(coalesce(public.source_mapped_value(payload,fields->'land_use')#>>'{}','')));
@@ -149,6 +151,7 @@ begin
           public.source_number(public.source_mapped_value(comp.raw_payload,fields->'longitude'))::double precision))<=0.02
       ) is not true then raise exception 'Publication requires raw source-backed comparable sales'; end if;
   end loop;
+  new.verification_expires_at=least(new.verification_expires_at,(select min(sale_date)+interval '1095 days' from public.comps where deal_id=new.id));
   return new;
 end;
 $$;
@@ -159,3 +162,6 @@ revoke all on function public.source_mapped_value(jsonb,jsonb),public.source_num
   public.source_acres(jsonb,jsonb,jsonb),public.source_sale_date(jsonb),public.source_mapping_identity(jsonb),public.source_vacancy_supported(jsonb,jsonb,jsonb) from public,anon,authenticated;
 grant execute on function public.source_mapped_value(jsonb,jsonb),public.source_number(jsonb),public.source_boolean(jsonb),
   public.source_acres(jsonb,jsonb,jsonb),public.source_sale_date(jsonb),public.source_mapping_identity(jsonb),public.source_vacancy_supported(jsonb,jsonb,jsonb) to service_role;
+
+-- A source's public record identifier is not an internal audit ID or owner field.
+grant select (source_record_id) on public.properties to anon,authenticated;

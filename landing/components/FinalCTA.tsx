@@ -37,7 +37,7 @@ export default function FinalCTA() {
               <button type="submit" disabled={status === 'loading'} className="px-6 py-3.5 rounded-xl bg-[#176b45] hover:bg-[#0f5637] text-white text-sm font-medium shadow-[0_8px_20px_rgba(23,107,69,0.18)] transition-all hover:-translate-y-px disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">{status === 'loading' ? 'Saving...' : 'Get updates'}</button>
               <label className="flex w-full items-start gap-2 text-left text-xs leading-5 text-[#526459]">
                 <input type="checkbox" required checked={consent} onChange={e => setConsent(e.target.checked)} className="mt-1" />
-                <span>I agree to receive DealScan product updates. This does not subscribe me to automated deal alerts.</span>
+                <span>I agree to receive DealScan product updates. This does not subscribe me to automated deal alerts. <a href="/privacy" className="underline">Privacy & data handling</a>.</span>
               </label>
             </form>
             {message && <p role="status" aria-live="polite" className={`mt-4 text-[13px] font-medium ${status === 'success' ? 'text-[#176b45]' : 'text-red-600'}`}>{message}</p>}

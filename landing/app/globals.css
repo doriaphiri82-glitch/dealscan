@@ -90,7 +90,6 @@ h1,h2,h3,h4,h5,h6 { font-family:'Manrope','DM Sans',system-ui,sans-serif; letter
   .ds-status { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:6px 10px; font-size:10px; font-weight:900; letter-spacing:.12em; text-transform:uppercase; }
   .ds-status::before { content:''; width:6px; height:6px; border-radius:50%; background:currentColor; opacity:.65; }
   .ds-status-live { color:#176b45; background:#e8f4ec; }
-  .ds-status-demo { color:#9a6515; background:#fff5df; }
   .ds-status-warning { color:#865f18; background:#fff6df; }
   .ds-status-danger { color:#a44b44; background:#fdf0ee; }
   .ds-status-neutral { color:#64716a; background:#f0f3f1; }

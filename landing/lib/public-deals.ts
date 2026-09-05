@@ -5,19 +5,23 @@ export class DealsUnavailable extends Error {}
 export class AmbiguousParcel extends Error {}
 
 const NUMERIC_FIELDS = [
-  'deal_score', 'asking_price', 'estimated_arv_low', 'estimated_arv_high',
+  'deal_score', 'asking_price', 'estimated_costs', 'estimated_arv_low', 'estimated_arv_high',
   'estimated_profit_low', 'estimated_profit_high', 'recommended_offer_low',
   'recommended_offer_high', 'valuation_confidence',
 ] as const
 const TEXT_FIELDS = [
   'status', 'verification_status', 'source', 'source_vendor', 'source_quality',
-  'data_freshness', 'valuation_basis', 'updated_at', 'verified_at', 'verification_expires_at',
+  'data_freshness', 'valuation_basis', 'valuation_model', 'updated_at', 'verified_at', 'verification_expires_at',
 ] as const
-const PROPERTY_FIELDS = ['apn', 'county_id', 'address', 'zoning'] as const
+const PROPERTY_FIELDS = ['apn', 'county_id', 'address', 'zoning', 'source_record_id'] as const
 const PROPERTY_NUMBERS = ['lot_size_acres', 'latitude', 'longitude'] as const
 const SIGNALS = new Set(['tax_delinquent', 'absentee_owner', 'long_ownership', 'no_improvements', 'vacant_land', 'probate', 'inherited'])
 const SELECT = [...NUMERIC_FIELDS, ...TEXT_FIELDS, 'source_url', 'motivation_signals',
   `properties!inner(${[...PROPERTY_FIELDS, ...PROPERTY_NUMBERS].join(',')})`].join(',')
+
+const COMP_NUMBERS = ['sale_price','lot_size_acres','price_per_acre','distance_miles'] as const
+const COMP_TEXT = ['address','source_apn','county_id','source_record_id','sale_date'] as const
+const COMP_SELECT = [...COMP_NUMBERS,...COMP_TEXT,'source_url','sale_qualified','vacant_at_sale'].join(',')
 
 type Row = Record<string, unknown>
 const object = (value: unknown): value is Row => !!value && typeof value === 'object' && !Array.isArray(value)
@@ -36,7 +40,7 @@ function sourceUrl(value: unknown): string | null {
 }
 
 /** Explicit projection is a second boundary after RLS, never object-spread DB rows. */
-export function publicDeal(row: unknown): Row | null {
+export function publicDeal(row: unknown, withComps = false): Row | null {
   if (!object(row) || row.status !== 'discovered' || row.verification_status !== 'verified' || !object(row.properties)) return null
   const verified = Date.parse(String(row.verified_at ?? ''))
   const expires = Date.parse(String(row.verification_expires_at ?? ''))
@@ -49,9 +53,28 @@ export function publicDeal(row: unknown): Row | null {
   for (const field of PROPERTY_FIELDS) deal[field] = text(property[field])
   for (const field of PROPERTY_NUMBERS) deal[field] = number(property[field])
   deal.source_url = sourceUrl(row.source_url)
+  if (!deal.source_url) return null
+  if (withComps) {
+    if (!Array.isArray(row.comps)) throw new DealsUnavailable('Comparable evidence unavailable')
+    const comps = row.comps.map(publicComp).filter((comp): comp is Row => comp !== null)
+    if (comps.length < 3 || comps.length !== row.comps.length) throw new DealsUnavailable('Comparable evidence unavailable')
+    deal.comps = comps
+  }
   const signals = typeof row.motivation_signals === 'string' ? row.motivation_signals.split(',') : row.motivation_signals
   deal.motivation_signals = Array.isArray(signals) ? [...new Set(signals.filter((s): s is string => typeof s === 'string' && SIGNALS.has(s)))] : []
   return deal
+}
+
+function publicComp(value: unknown): Row | null {
+  if (!object(value) || value.sale_qualified !== true || value.vacant_at_sale !== true || !sourceUrl(value.source_url)) return null
+  const sale = Date.parse(String(value.sale_date ?? ''))
+  if (!Number.isFinite(sale) || sale > Date.now() || sale < Date.now()-1095*86400000) return null
+  if (!text(value.source_apn) || !text(value.county_id) || !text(value.source_record_id)) return null
+  const row: Row = { source_url:sourceUrl(value.source_url) }
+  for (const key of COMP_TEXT) row[key] = text(value[key])
+  for (const key of COMP_NUMBERS) row[key] = number(value[key])
+  if (!(Number(row.sale_price)>0) || !(Number(row.lot_size_acres)>0) || row.distance_miles == null || Number(row.distance_miles)<0 || Number(row.distance_miles)>10) return null
+  return row
 }
 
 export async function supabaseRead(table: string, params: URLSearchParams): Promise<unknown[]> {
@@ -72,11 +95,11 @@ export async function supabaseRead(table: string, params: URLSearchParams): Prom
   }
 }
 
-export async function readPublishedDeals({ limit = 25, offset = 0, apn, countyId }: {
-  limit?: number; offset?: number; apn?: string; countyId?: string
+export async function readPublishedDeals({ limit = 25, offset = 0, apn, countyId, withComps = false }: {
+  limit?: number; offset?: number; apn?: string; countyId?: string; withComps?: boolean
 } = {}): Promise<Row[]> {
   const params = new URLSearchParams({
-    status: 'eq.discovered', verification_status: 'eq.verified', verification_expires_at: `gt.${new Date().toISOString()}`, select: SELECT,
+    status: 'eq.discovered', verification_status: 'eq.verified', verification_expires_at: `gt.${new Date().toISOString()}`, select: withComps ? `${SELECT},comps(${COMP_SELECT})` : SELECT,
     order: 'deal_score.desc,id.asc', limit: String(limit), offset: String(offset),
   })
   // Quote PostgREST filter values so punctuation in real APNs remains literal.
@@ -84,11 +107,11 @@ export async function readPublishedDeals({ limit = 25, offset = 0, apn, countyId
   if (apn) params.set('properties.apn', literal(apn))
   if (countyId) params.set('properties.county_id', literal(countyId))
   const rows = await supabaseRead('deals', params)
-  return rows.map(publicDeal).filter((deal): deal is Row => deal !== null)
+  return rows.map(row => publicDeal(row,withComps)).filter((deal): deal is Row => deal !== null)
 }
 
 export async function readPublishedDeal(apn: string, countyId?: string): Promise<Row | null> {
-  const rows = await readPublishedDeals({ apn, countyId, limit: 2 })
+  const rows = await readPublishedDeals({ apn, countyId, limit: 2, withComps:true })
   if (rows.length > 1) throw new AmbiguousParcel('Specify county_id to identify this parcel')
   return rows[0] ?? null
 }

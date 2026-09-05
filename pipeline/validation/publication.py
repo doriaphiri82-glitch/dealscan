@@ -94,4 +94,4 @@ def verify_persisted_deal(deal: dict, records: list[dict], run: dict) -> dict:
     require(evidence == recalculated['financial_evidence'] and deal.get('valuation_basis') == recalculated['valuation_basis'], 'Financial evidence changed after scoring')
     return {'deal_id': deal['id'], 'property_id': deal['property_id'], 'run_id': run['id'],
             'verification_status': 'verified', 'valuation_model': MODEL_VERSION, 'comparable_count': len(comps),
-            'verification_expires_at': min(sale_date(metadata['source_validated_at']) + timedelta(days=7), datetime.now(timezone.utc)+timedelta(days=7)).isoformat()}
+            'verification_expires_at': min(sale_date(metadata['source_validated_at']) + timedelta(days=7), datetime.now(timezone.utc)+timedelta(days=7), min(sale_date(comp['sale_date']) for comp in comps)+timedelta(days=1095)).isoformat()}

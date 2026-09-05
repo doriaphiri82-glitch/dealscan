@@ -10,6 +10,8 @@ export function privateSupabaseConfig(): { url: string; key: string } {
     if (!url || !key) throw new Error()
     const parsed = new URL(url)
     if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') throw new Error()
+    const publicUrl=process.env.NEXT_PUBLIC_SUPABASE_URL
+    if (publicUrl && new URL(publicUrl).origin !== parsed.origin) throw new Error()
     if (!key.startsWith('sb_secret_')) {
       const parts = key.split('.')
       if (parts.length !== 3 || JSON.parse(Buffer.from(parts[1], 'base64url').toString()).role !== 'service_role') throw new Error()
