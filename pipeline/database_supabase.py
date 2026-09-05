@@ -22,7 +22,6 @@ class SupabaseDatabase:
         return response
 
     def record_ingestion_run(self, county_id: str, status: str, counts: Dict[str, Any], error: str = "", source_url: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> int:
-        """Write one durable ETL audit record without exposing service credentials to clients."""
         status_map = {"ok": "completed", "degraded": "partial", "error": "failed", "skipped": "partial"}
         payload = {
             "county_id": county_id,
@@ -34,21 +33,39 @@ class SupabaseDatabase:
             "records_persisted": int(counts.get("stored", 0) or 0),
             "records_rejected": int(counts.get("rejected", 0) or 0),
             "error_message": error or None,
-            "started_at": None,
-            "completed_at": "now()",
             "metadata": metadata or {},
         }
-        # PostgREST does not evaluate SQL expressions inside JSON payloads.
-        # Omit timestamps and let database defaults/triggers populate them.
-        payload.pop("started_at", None)
-        payload.pop("completed_at", None)
         rows = self._request("POST", "ingestion_runs", headers={**self.headers, "Prefer": "return=representation"}, json=payload).json()
         if not rows:
             raise RuntimeError("Supabase ingestion run insert returned no row")
         return int(rows[0]["id"])
 
+    def record_ingestion_records(self, run_id: int, county_id: str, records: List[Dict[str, Any]]) -> int:
+        """Persist compact per-record provenance/audit rows in bounded batches."""
+        if not records:
+            return 0
+        inserted = 0
+        for start in range(0, len(records), 250):
+            batch = []
+            for item in records[start:start + 250]:
+                raw = item.get("raw_payload")
+                normalized = item.get("normalized_payload") or {}
+                batch.append({
+                    "run_id": int(run_id),
+                    "county_id": county_id,
+                    "source_record_id": str(item.get("source_record_id") or normalized.get("apn") or "")[:500] or None,
+                    "source_url": item.get("source_url"),
+                    "raw_payload": raw if isinstance(raw, dict) else {"value": str(raw)[:5000]} if raw is not None else {},
+                    "normalized_payload": normalized if isinstance(normalized, dict) else {},
+                    "property_id": int(item["property_id"]) if item.get("property_id") is not None else None,
+                    "status": str(item.get("status") or "normalized")[:100],
+                    "rejection_reason": str(item.get("rejection_reason") or "")[:500] or None,
+                })
+            self._request("POST", "ingestion_records", json=batch)
+            inserted += len(batch)
+        return inserted
+
     def upsert_county(self, county: Dict[str, Any]) -> None:
-        """Persist authoritative registry metadata; never invent county identity fields."""
         county_id = str(county.get("county_id") or "").strip()
         county_name = str(county.get("county_name") or "").strip()
         if not county_id or not county_name:
@@ -85,8 +102,7 @@ class SupabaseDatabase:
         existing = self._request("GET", "deals", params={"property_id": f"eq.{pid}", "select": "id", "order": "id.desc", "limit": "1"}).json()
         fields = ["deal_score","asking_price","estimated_arv_low","estimated_arv_high","estimated_costs","estimated_profit_low","estimated_profit_high","recommended_offer_low","recommended_offer_high","motivation_signals","motivation_score","market_velocity","competition_level","status","notes","source","source_url","source_vendor","source_quality","verification_status","data_freshness","valuation_basis","valuation_confidence"]
         payload = {k: data.get(k) for k in fields}
-        if payload.get("verification_status") == "source_verified":
-            payload["verification_status"] = "verified"
+        if payload.get("verification_status") == "source_verified": payload["verification_status"] = "verified"
         if existing:
             did = int(existing[0]["id"]); self._request("PATCH", "deals", params={"id": f"eq.{did}"}, json=payload); return did
         payload["property_id"] = pid
