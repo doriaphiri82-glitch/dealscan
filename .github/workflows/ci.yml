@@ -8,12 +8,14 @@ on:
       - 'landing/**'
       - '.github/workflows/ci.yml'
       - '.github/workflows/scrape.yml'
+      - '.github/workflows/production-smoke.yml'
   pull_request:
     paths:
       - 'pipeline/**'
       - 'landing/**'
       - '.github/workflows/ci.yml'
       - '.github/workflows/scrape.yml'
+      - '.github/workflows/production-smoke.yml'
 
 permissions:
   contents: read
