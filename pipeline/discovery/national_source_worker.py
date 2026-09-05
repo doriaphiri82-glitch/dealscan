@@ -83,8 +83,6 @@ def run_statewide_batch(states: Optional[Iterable[str]] = None, discovery_limit:
     queued = [row for row in queue if not wanted or str(row.get("state") or "").strip().lower() in wanted]
     persist = str(mode).lower() != "dry_run"
     discovery = discover_and_register(limit=_limit(discovery_limit), states=states, statewide_queue=queued, persist=persist)
-    queued_ids = {q.get("county_id") for q in queued}
-    discovered_ids = {row.get("county_id") for row in discovery.get("results", []) if row.get("status") == "discovered" and row.get("county_id") in queued_ids}
     refreshed = {str(row.get("county_id")): row for row in list_counties()}
     if not persist:
         for result in discovery.get("results", []):
@@ -92,9 +90,10 @@ def run_statewide_batch(states: Optional[Iterable[str]] = None, discovery_limit:
             if cid in refreshed and isinstance(patch, dict):
                 refreshed[cid]=dict(refreshed[cid]); refreshed[cid].update({k:v for k,v in patch.items() if k != "extra"}); refreshed[cid].update(patch.get("extra") or {})
     coverage = build_statewide_coverage_report(snapshot["reconciled"], snapshot["census"].values(), refreshed.values(), states=states)
+    # Discovery is deliberately not ETL authorization. A newly discovered source
+    # must pass live validation first; only validation_status=valid can enter ETL.
     valid_ids = {str(q.get("county_id")) for q in queued if str(refreshed.get(str(q.get("county_id")), {}).get("validation_status") or "").lower() == "valid"}
-    etl_ids = discovered_ids | valid_ids
-    targets = [refreshed[cid] for cid in etl_ids if cid in refreshed]
+    targets = [refreshed[cid] for cid in valid_ids if cid in refreshed]
     targets.sort(key=lambda row: (str(row.get("state_fips") or ""), str(row.get("county_fips") or ""), str(row.get("county_id") or "")))
     etl_results=[]
     for county in targets[:_limit(etl_limit,5)]:
