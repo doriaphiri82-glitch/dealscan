@@ -41,6 +41,39 @@ def discover_statewide_sources(state: str) -> List[SourceCandidate]:
         for source in statewide_sources_for_state(state)
     ]
 
+def _statewide_features(source, params: Dict[str, str]) -> List[Dict[str, Any]]:
+    """Query a statewide ArcGIS layer, falling back to server-side grouping.
+
+    Some ArcGIS services expose distinct-value queries but do not reliably
+    support them. A grouped statistics query asks the server to collapse the
+    statewide parcel table to one row per county, avoiding an expensive client
+    side scan of parcel records.
+    """
+    url = source.url.rstrip("/") + "?" + urlencode(params)
+    response = fetch(url, ttl=6 * 3600, as_json=True, respect_robots=False)
+    if response.ok and isinstance(response.body, dict):
+        body = response.body
+        if body.get("features") and not body.get("exceededTransferLimit"):
+            return body.get("features") or []
+
+    group_fields = [source.county_fips_field]
+    if source.county_name_field:
+        group_fields.insert(0, source.county_name_field)
+    grouped = {
+        "where": "1=1",
+        "outFields": ",".join(group_fields),
+        "returnGeometry": "false",
+        "groupByFieldsForStatistics": ",".join(group_fields),
+        "outStatistics": '[{"statisticType":"count","onStatisticField":"' + source.county_fips_field + '","outStatisticFieldName":"parcel_count"}]',
+        "orderByFields": source.county_fips_field,
+        "f": "json",
+    }
+    fallback_url = source.url.rstrip("/") + "?" + urlencode(grouped)
+    fallback = fetch(fallback_url, ttl=6 * 3600, as_json=True, respect_robots=False)
+    if fallback.ok and isinstance(fallback.body, dict):
+        return fallback.body.get("features") or []
+    return []
+
 def enumerate_statewide_counties(state: str) -> List[Dict[str, Any]]:
     """Enumerate county keys exposed directly by a statewide ArcGIS parcel layer.
 
@@ -64,11 +97,7 @@ def enumerate_statewide_counties(state: str) -> List[Dict[str, Any]]:
             "orderByFields": source.county_fips_field,
             "f": "json",
         }
-        url = source.url.rstrip("/") + "?" + urlencode(params)
-        response = fetch(url, ttl=6 * 3600, as_json=True, respect_robots=False)
-        if not response.ok or not isinstance(response.body, dict):
-            continue
-        for feature in response.body.get("features") or []:
+        for feature in _statewide_features(source, params):
             attrs = feature.get("attributes") or {}
             raw_fips = attrs.get(source.county_fips_field)
             if raw_fips in (None, ""):
@@ -188,9 +217,6 @@ def discover_arcgis_county_config(county_id: str, county_name: str, state: str) 
 def probe_county_sources(county_id: str, cfg: Dict[str,Any]) -> List[Dict[str,Any]]:
     results=[]
     for c in discover_sources(cfg):
-        try:
-            r=probe(c.url,county_id,c.source_type,expect="arcgis" if "arcgis" in c.source_type else "http")
-            results.append({"county_id":county_id,"source_type":c.source_type,"url":c.url,"reachable":r.reachable,"status":r.status,"detail":r.detail,"error":r.error,"verified":r.verified,"confidence":c.confidence,"notes":c.notes})
-        except Exception as exc:
-            results.append({"county_id":county_id,"source_type":c.source_type,"url":c.url,"reachable":False,"status":0,"detail":"","error":str(exc)[:200],"verified":False,"confidence":c.confidence,"notes":c.notes})
+        try: results.append({"url":c.url,"source_type":c.source_type,"confidence":c.confidence,"probe":probe(c.url)})
+        except Exception as exc: results.append({"url":c.url,"source_type":c.source_type,"confidence":c.confidence,"probe":{"ok":False,"error":str(exc)[:300]}})
     return results
