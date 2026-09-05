@@ -15,7 +15,8 @@ class SupabaseDatabase:
         self.timeout = float(os.getenv("SUPABASE_DB_TIMEOUT", "30"))
 
     def _request(self, method: str, table: str, **kwargs: Any) -> requests.Response:
-        response = requests.request(method, f"{self.base}/{table}", headers=self.headers, timeout=self.timeout, **kwargs)
+        headers = kwargs.pop("headers", None) or self.headers
+        response = requests.request(method, f"{self.base}/{table}", headers=headers, timeout=self.timeout, **kwargs)
         if not response.ok:
             raise RuntimeError(f"Supabase {method} {table} failed ({response.status_code}): {response.text[:1000]}")
         return response
@@ -28,8 +29,7 @@ class SupabaseDatabase:
     def save_property(self, data: Dict[str, Any]) -> int:
         self._ensure_county(data["county_id"])
         payload = {"apn": data["apn"], "county_id": data["county_id"], "address": data.get("address"), "lot_size_acres": data.get("lot_size_acres"), "assessed_value": data.get("assessed_value"), "market_value": data.get("market_value"), "owner_name": data.get("owner_name"), "owner_address": data.get("owner_address"), "owner_state": data.get("owner_state"), "tax_amount": data.get("tax_amount"), "tax_delinquent_years": data.get("tax_delinquent_years", 0), "year_acquired": data.get("year_acquired"), "zoning": data.get("zoning"), "land_use": data.get("land_use"), "has_improvements": bool(data.get("has_improvements", False)), "legal_description": data.get("legal_description"), "latitude": data.get("latitude"), "longitude": data.get("longitude")}
-        response = self._request("POST", "properties", params={"on_conflict": "apn,county_id"}, headers={**self.headers, "Prefer": "resolution=merge-duplicates,return=representation"}, json=payload)
-        rows = response.json()
+        rows = self._request("POST", "properties", params={"on_conflict": "apn,county_id"}, headers={**self.headers, "Prefer": "resolution=merge-duplicates,return=representation"}, json=payload).json()
         if not rows: raise RuntimeError("Supabase property upsert returned no row")
         return int(rows[0]["id"])
 
@@ -42,6 +42,7 @@ class SupabaseDatabase:
             did = int(existing[0]["id"]); self._request("PATCH", "deals", params={"id": f"eq.{did}"}, json=payload); return did
         payload["property_id"] = pid
         rows = self._request("POST", "deals", headers={**self.headers, "Prefer": "return=representation"}, json=payload).json()
+        if not rows: raise RuntimeError("Supabase deal insert returned no row")
         return int(rows[0]["id"])
 
     def save_comps(self, deal_id: int, comps: List[dict]) -> int:
