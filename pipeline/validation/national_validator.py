@@ -9,13 +9,38 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from config.counties.registry import list_counties
+from config.counties.national_registry import PILOT_COUNTIES
 from scrapers.counties import COUNTY_SCRAPERS
 from .etl_validator import validate_county_config
+
+
+_PILOT_SOURCE_KEYS = (
+    "data_source_type",
+    "parcel_source_url",
+    "gis_url",
+    "arcgis_root",
+    "arcgis_layer_url",
+    "source_vendor",
+    "scraper_type",
+)
 
 
 def _config_for(county: Dict[str, Any]) -> Dict[str, Any]:
     county_id = county["county_id"]
     cfg = dict(COUNTY_SCRAPERS.get(county_id) or {})
+    pilot = PILOT_COUNTIES.get(county_id)
+
+    # Pilot source identity is authoritative. County-specific scraper configs
+    # still supply field mappings and other adapter details, but cannot silently
+    # replace a committed pilot endpoint with stale duplicated metadata.
+    if pilot:
+        for key in _PILOT_SOURCE_KEYS:
+            if pilot.get(key) not in (None, ""):
+                cfg[key] = pilot[key]
+        if pilot.get("arcgis_layer_url"):
+            cfg["data_mode"] = "arcgis"
+            cfg["scraper_type"] = "arcgis"
+
     cfg.setdefault("scraper_type", county.get("scraper_type"))
     cfg.setdefault("data_source_type", county.get("data_source_type"))
     cfg.setdefault("parcel_source_url", county.get("parcel_source_url"))
