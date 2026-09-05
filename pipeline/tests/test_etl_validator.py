@@ -65,3 +65,14 @@ def test_invalid_sample_numeric_is_rejected():
     )
     assert report["valid"] is False
     assert any("lot_size_acres not numeric" in error for error in report["errors"])
+
+
+def test_non_finite_sample_numeric_is_rejected():
+    for value in ("NaN", "Infinity", "-Infinity"):
+        report = validate_county_config(
+            "test_aa",
+            _cfg(),
+            sample_records=[{"APN": "123", "SITUS_ADDR": "123 Main", "LAND_ACRES": value, "FULL_CASH_VALUE": 10000, "OWNER_NAME": "Owner"}],
+        )
+        assert report["valid"] is False
+        assert any("lot_size_acres not numeric" in error for error in report["errors"])
