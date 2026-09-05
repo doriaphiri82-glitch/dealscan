@@ -14,6 +14,8 @@ from scrapers.flatfile_adapter import FlatFileAdapter, CSVAdapter, ExcelAdapter
 
 ADAPTER_MAP={"arcgis":ArcGISFeatureServerAdapter,"arcgis_hub":ArcGISHubAdapter,"flatfile":FlatFileAdapter,"csv":CSVAdapter,"excel":ExcelAdapter,"state_parcel":ArcGISFeatureServerAdapter}
 
+_AUTHORITATIVE_PILOT_SOURCE_KEYS=("arcgis_layer_url","arcgis_root","gis_url","parcel_source_url","data_source_type","source_vendor","scraper_type")
+
 def _adapter_for(cfg: Dict[str,Any])->Optional[BaseScraperAdapter]:
     scraper_type=cfg.get("scraper_type"); data_mode=cfg.get("data_mode","arcgis")
     if scraper_type:
@@ -27,11 +29,17 @@ def _adapter_for(cfg: Dict[str,Any])->Optional[BaseScraperAdapter]:
 
 def _county_config(county_id:str)->Dict[str,Any]:
     cfg=dict(COUNTY_SCRAPERS.get(county_id) or {})
+    pilot=PILOT_COUNTIES.get(county_id)
+    if pilot:
+        # Scraper field mappings remain county-specific, but source identity must
+        # come from the authoritative pilot registry so endpoint changes cannot
+        # leave ETL pointed at a stale duplicated configuration.
+        for key in _AUTHORITATIVE_PILOT_SOURCE_KEYS:
+            value=pilot.get(key)
+            if value is not None: cfg[key]=value
     if not cfg:
-        pilot=PILOT_COUNTIES.get(county_id)
         if pilot: cfg=dict(pilot)
-    if not cfg:
-        cfg=dict(get_county(county_id) or {})
+        else: cfg=dict(get_county(county_id) or {})
         if cfg.get("arcgis_layer_url"):cfg["data_mode"]="arcgis"; cfg["scraper_type"]="arcgis"
         elif cfg.get("arcgis_root") or cfg.get("parcel_source_url"): cfg["data_mode"]="arcgis"; cfg["scraper_type"]="arcgis"
         if cfg.get("field_mapping"):cfg["fields"]=cfg["field_mapping"]
