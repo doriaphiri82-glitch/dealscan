@@ -28,36 +28,43 @@ STATEWIDE_PARCEL_SOURCES: Dict[str, StatewideSource] = {
         notes="Official statewide public parcel dataset assembled through county/state relationships.",
     ),
     "Connecticut": StatewideSource(
+        "Connecticut",
         "Connecticut Parcel & CAMA Data",
         "https://geodata.ct.gov/pages/parcels",
         notes="State parcel/CAMA collection page with statewide parcel viewer and open-data links.",
     ),
     "Florida": StatewideSource(
+        "Florida",
         "Florida Statewide Parcels",
         "https://geodata.floridagio.gov/datasets/FGIO::florida-statewide-parcels/about",
         notes="Statewide parcel dataset built from county property-appraiser tax-roll information.",
     ),
     "Maryland": StatewideSource(
+        "Maryland",
         "Maryland Parcel Boundaries",
         "https://data.imap.maryland.gov/datasets/maryland::maryland-parcel-boundaries/about",
         notes="Official statewide Maryland parcel boundary dataset.",
     ),
     "North Carolina": StatewideSource(
+        "North Carolina",
         "NC OneMap Parcels",
         "https://www.nconemap.gov/pages/parcels",
         notes="Official statewide parcel resource covering all 100 North Carolina counties with standardized attributes and web services.",
     ),
     "Ohio": StatewideSource(
+        "Ohio",
         "Ohio Parcels",
         "https://ohioparcels-geohio.hub.arcgis.com/",
         notes="Statewide parcel map assembled from county-maintained parcel and assessment records.",
     ),
     "Washington": StatewideSource(
+        "Washington",
         "Washington Current Parcels",
         "https://geo.wa.gov/maps/2b603a599a0842a3b2284c04c8927f35",
         notes="State geospatial open-data parcel resource.",
     ),
     "Wisconsin": StatewideSource(
+        "Wisconsin",
         "Wisconsin Statewide Parcel Map",
         "https://maps.sco.wisc.edu/Parcels/",
         notes="Statewide parcel map maintained by Wisconsin State Cartographer's Office.",
