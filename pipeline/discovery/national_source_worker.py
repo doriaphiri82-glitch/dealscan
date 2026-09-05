@@ -67,6 +67,43 @@ def discover_and_register(limit:int=25)->Dict[str,Any]:
     return response
 
 
+def run_statewide_batch(
+    states: Optional[Iterable[str]] = None,
+    discovery_limit: int = 25,
+    etl_limit: int = 5,
+    max_records: int = 5000,
+    mode: str = "dry_run",
+) -> Dict[str, Any]:
+    """Execute reconciled statewide counties through discovery and live ETL.
+
+    Discovery remains deterministic and unverified until the live runner returns
+    usable records. The default dry-run mode exercises the source without
+    persisting deals; use publish only when persistence is explicitly desired.
+    """
+    ensure_national_counties()
+    queue = _statewide_queue(states)
+    wanted = {str(state).strip().lower() for state in states} if states else None
+    queued = [row for row in queue if not wanted or str(row.get("state") or "").strip().lower() in wanted]
+    discovery = discover_and_register(limit=_limit(discovery_limit))
+    discovered_ids = {row.get("county_id") for row in discovery.get("results", []) if row.get("status") == "discovered"}
+    refreshed = {str(row.get("county_id")): row for row in list_counties()}
+    targets = [refreshed[cid] for cid in discovered_ids if cid in refreshed]
+    targets.sort(key=lambda row: (str(row.get("state_fips") or ""), str(row.get("county_fips") or ""), str(row.get("county_id") or "")))
+    etl_results = []
+    for county in targets[:_limit(etl_limit, 5)]:
+        try:
+            etl_results.append(run_county(county["county_id"], mode=mode, max_records=max(1, min(int(max_records), 10000))))
+        except Exception as exc:
+            etl_results.append({"county_id": county["county_id"], "status": "error", "error": str(exc)[:300]})
+    ok = sum(1 for result in etl_results if result.get("status") in {"ok", "degraded"})
+    return {
+        "states": sorted(wanted) if wanted else None,
+        "statewide_queued": len(queued),
+        "discovery": discovery,
+        "etl": {"attempted": len(etl_results), "ok": ok, "results": etl_results},
+    }
+
+
 def run_national_batch(limit:int=10,max_records:int=5000,mode:str="publish")->Dict[str,Any]:
     """Run live-validated counties in oldest-success-first rotation, including published counties."""
     ensure_national_counties()
