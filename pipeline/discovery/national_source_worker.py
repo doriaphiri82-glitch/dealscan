@@ -107,7 +107,7 @@ def run_statewide_batch(states: Optional[Iterable[str]] = None, discovery_limit:
     etl_results = []
     for county in targets[:_limit(etl_limit, 5)]:
         try:
-            etl_results.append(run_county(county["county_id"], mode=mode, max_records=max(1, min(int(max_records), 10000))))
+            etl_results.append(run_county(county["county_id"], mode=mode, dry_run=not persist, max_records=max(1, min(int(max_records), 10000))))
         except Exception as exc:
             etl_results.append({"county_id": county["county_id"], "status": "error", "error": str(exc)[:300]})
     ok = sum(1 for result in etl_results if result.get("status") in {"ok", "degraded"})
