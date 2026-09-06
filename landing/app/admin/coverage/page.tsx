@@ -52,7 +52,7 @@ export default function CoveragePage() {
   const [stateFilter, setStateFilter] = useState('all')
 
   useEffect(() => {
-    fetch('/api/admin/coverage')
+    fetch('/api/admin/coverage',{cache:'no-store',signal:AbortSignal.timeout(12000)})
       .then((res) => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json() })
       .then(setData)
       .catch((err) => setError(String(err)))

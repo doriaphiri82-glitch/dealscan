@@ -22,3 +22,12 @@ it('requires current, complete, configuration-bound validation and explicit auth
     expect(result.ingestion_ready).toBe(false); expect(result.status).not.toBe('active')
   }
 })
+
+
+it('does not call an empty current inventory active because old run counters are nonzero',()=>{
+  const county={...fixture.county,last_run_status:'ok',ingestion_status:'ingested',persisted_count:100}
+  const result=countyHealth({county,stored_total:0,verified_total:0},now)
+  expect(result.ingested).toBe(false)
+  expect(result.status).not.toBe('active')
+  expect(result.records).toBe(0)
+})

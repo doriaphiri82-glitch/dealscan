@@ -12,11 +12,18 @@ export async function GET() {
   if (user.app_metadata?.role !== 'admin') return NextResponse.json({ error: 'Administrator access required' }, { status: 403, headers })
   try {
     const counties: ReturnType<typeof countyHealth>[] = []
+    const identities=new Set<string>()
+    const checkedAt=Date.now()
     for (let offset = 0; ; offset += 1000) {
       if (offset >= 6000) throw new Error('Registry exceeds bounded snapshot limit')
       const batch = await privateRpc('county_operational_snapshot', { p_limit: 1000, p_offset: offset })
-      if (!Array.isArray(batch)) throw new Error('Invalid snapshot')
-      counties.push(...batch.map(row => countyHealth(row)))
+      if (!Array.isArray(batch) || batch.length>1000) throw new Error('Invalid snapshot')
+      for(const row of batch){
+        const county=countyHealth(row,checkedAt)
+        if(identities.has(county.county_id))throw new Error('Duplicate county snapshot')
+        identities.add(county.county_id)
+        counties.push(county)
+      }
       if (batch.length < 1000) break
     }
     const summary = {
