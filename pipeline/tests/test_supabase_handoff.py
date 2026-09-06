@@ -154,7 +154,7 @@ class FakeMgmt:
     success alone) is what gates the ledger."""
 
     def __init__(self, before, *, after=None, ledger=(), auth=None, fail_at=None,
-                 already_done=(), uppercase_ignored=False, writes_stick=True):
+                 already_done=(), uppercase_ignored=False, writes_stick=True, diag_at=()):
         self._base = before
         self._after = after or before
         self._ledger = list(ledger)
@@ -164,7 +164,9 @@ class FakeMgmt:
         self._already_done = set(already_done)
         self._uppercase_ignored = uppercase_ignored
         self._writes_stick = writes_stick
+        self._diag_at = dict(diag_at)
         self._bootstrap = False
+        self.last_write_diag = None
         self.applied = []
         self.completed = list(self._already_done)
         self.patches, self.ledger_inserts = [], []
@@ -219,6 +221,7 @@ class FakeMgmt:
 
     def query(self, ref, sql, *, read_only=True):
         if not read_only:
+            self.last_write_diag = {'shape': 'list', 'rows': 0}
             if 'create schema' in sql:
                 self._bootstrap = True
                 return []
@@ -234,12 +237,18 @@ class FakeMgmt:
             assert current is not None, 'unexpected extra write: ' + sql[:60]
             file_name, position, expected, total = current
             assert sql == expected, f'statement mismatch for {file_name} #{position}'
+            if (file_name, position) in self._diag_at:
+                self.last_write_diag = self._diag_at[(file_name, position)]
             if self._fail_at == (file_name, position):
                 raise sh.HandoffFailure('supabase_api_error (HTTP 400) for /v1/projects/ref111/database/query')
             return []
         if sql == 'select 1 as ok':
             return [{'ok': 1}]
         self._flush_close()
+        if sql == sh.CROSS_CHECK_SQL:
+            snap = self._served()
+            return [{'pg_triggers_public': len(snap['triggers']), 'info_triggers_public': len(snap['triggers']),
+                     'pg_policies_public': len(snap['policies']), 'pg_functions_public': len(snap['functions'])}]
         queries = sh.snapshot_queries()
         for i, probe in enumerate(queries):
             if sql == probe:
@@ -452,3 +461,18 @@ def test_auth_lowercase_fallback_when_uppercase_patch_does_not_persist():
     assert client.patches[0][2]['SITE_URL'] == ORIGIN
     assert client.patches[1][2]['site_url'] == ORIGIN
     assert report['status'] == 'supabase_verified'
+
+
+def test_catalog_cross_check_and_write_diary_are_evidence():
+    before = {'tables': {}, 'functions': set(), 'triggers': set(), 'policies': set(),
+              'indexes': set(), 'function_flags': set(), 'ledger_present': False,
+              'counts': {t: 0 for t in sh.APP_TABLES}, 'rls_enabled': set()}
+    after = full_snapshot()
+    target = '20260905170000_dealscan_production_schema.sql'
+    diag = {'shape': 'dict', 'keys': ['error', 'message'], 'pg_code': '42501'}
+    client = FakeMgmt(before, after=after, diag_at={(target, 3): diag})
+    report = sh.run_handoff(client, 'ref111', apply=True)
+    assert report['checks']['catalog_cross_check']['pg_triggers_public'] >= 0
+    diary = report['checks']['application']['non_empty_or_non_list_write_responses']
+    assert diary == [{'file': target, 'statement': '3/25', 'diag': diag}]
+    assert report['status'] == 'supabase_verified'  # a stray body shape alone does not block

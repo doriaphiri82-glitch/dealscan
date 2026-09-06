@@ -365,6 +365,19 @@ class SupabaseManagement:
             result = response.json()
         except ValueError:
             raise HandoffFailure('supabase_api_returned_non_json') from None
+        if not read_only:
+            # Structural diagnosis only: shape and keys, never values. Some upstream
+            # proxies answer DDL with HTTP success while embedding an error object.
+            if isinstance(result, list):
+                self.last_write_diag = {'shape': 'list', 'rows': len(result)}
+            elif isinstance(result, dict):
+                code = result.get('code')
+                diag = {'shape': 'dict', 'keys': sorted(str(k) for k in result.keys())[:8]}
+                if isinstance(code, str) and re.fullmatch(r'[0-9A-Z]{3,8}', code):
+                    diag['pg_code'] = code
+                self.last_write_diag = diag
+            else:
+                self.last_write_diag = {'shape': type(result).__name__}
         if isinstance(result, list):
             return result
         if isinstance(result, dict):
@@ -394,6 +407,14 @@ def snapshot_queries() -> list[str]:
         "select relname as name, relrowsecurity as enabled from pg_class c join pg_namespace n on n.oid=c.relnamespace "
         f"where n.nspname='public' and relname in ({table_list}) order by 1",
     ]
+
+
+CROSS_CHECK_SQL = (
+    "select (select count(*) from pg_trigger t join pg_class c on t.tgrelid=c.oid "
+    "join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and not t.tgisinternal) as pg_triggers_public, "
+    "(select count(distinct trigger_name) from information_schema.triggers where trigger_schema='public') as info_triggers_public, "
+    "(select count(*) from pg_policies where schemaname='public') as pg_policies_public, "
+    "(select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public') as pg_functions_public")
 
 
 def build_snapshot(rows: list[list[dict]]) -> dict:
@@ -467,6 +488,11 @@ def run_handoff(client: SupabaseManagement, ref: str, *, apply: bool, origin: st
 
     before = take_snapshot()
     checks['schema_before'] = snapshot_for_report(before)
+    try:
+        rows = client.query(ref, CROSS_CHECK_SQL)
+        checks['catalog_cross_check'] = rows[0] if rows and isinstance(rows[0], dict) else {'rows': rows}
+    except HandoffFailure as exc:
+        checks['catalog_cross_check'] = {'status': 'failed', 'reason': str(exc)}
     ledger = []
     if before['ledger_present']:
         rows = client.query(ref, f"select version from {LEDGER} order by 1")
@@ -489,6 +515,7 @@ def run_handoff(client: SupabaseManagement, ref: str, *, apply: bool, origin: st
             client.query(ref, LEDGER_BOOTSTRAP, read_only=False)
         application['performed'] = True
         wanted = targets + repairstargets
+        write_diary = []
         for path in files:
             if path.name not in wanted:
                 continue
@@ -500,6 +527,11 @@ def run_handoff(client: SupabaseManagement, ref: str, *, apply: bool, origin: st
                 except HandoffFailure as exc:
                     failed = {'file': path.name, 'statement': f'{index}/{len(statements)}', 'reason': str(exc)}
                     break
+                diag = getattr(client, 'last_write_diag', None) or {}
+                if diag.get('shape') != 'list' or diag.get('rows') not in (0, None):
+                    entry = {'file': path.name, 'statement': f'{index}/{len(statements)}', 'diag': diag}
+                    if len(write_diary) < 40:
+                        write_diary.append(entry)
             if failed is not None:
                 application['stopped_at'] = failed
                 break
@@ -517,6 +549,9 @@ def run_handoff(client: SupabaseManagement, ref: str, *, apply: bool, origin: st
         final_snapshot = take_snapshot()
         recon = reconcile(names, [s.split('_')[0] for s in [*ledger, *applied_now]], final_snapshot)
         checks['reconciliation'] = recon
+        if write_diary:
+            application['non_empty_or_non_list_write_responses'] = write_diary
+            application['note'] += ' Some write calls returned non-empty or non-list bodies; see the diary.'
     checks['application'] = application
     checks['schema_contract'] = required_columns_status(final_snapshot)
 
@@ -575,6 +610,7 @@ def annotation_summary(report: dict) -> dict:
             'checked_at': report.get('checked_at'), 'commit': report.get('commit'),
             'failure': report.get('failure'),
             'query_endpoint': (checks.get('query_endpoint') or {}).get('status'),
+            'catalog_cross_check': checks.get('catalog_cross_check'),
             'project': checks.get('project'),
             'applied_this_run': report.get('migrations_applied_this_run'),
             'application_stopped_at': (checks.get('application') or {}).get('stopped_at'),
