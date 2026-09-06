@@ -450,6 +450,30 @@ def run_handoff(client: SupabaseManagement, ref: str, *, apply: bool, origin: st
                     'No secret values, row content or owner data are included.'}
 
 
+def annotation_summary(report: dict) -> dict:
+    """Minimized Check-annotation payload (<4KB); the full report stays in the artifact."""
+    checks = report.get('checks') or {}
+    recon = checks.get('reconciliation') or {}
+    contract = checks.get('schema_contract') or {}
+    auth = checks.get('auth') or {}
+    before = checks.get('schema_before') or {}
+    return {'status': report.get('status'), 'scope': report.get('scope'),
+            'checked_at': report.get('checked_at'), 'commit': report.get('commit'),
+            'failure': report.get('failure'),
+            'query_endpoint': (checks.get('query_endpoint') or {}).get('status'),
+            'project': checks.get('project'),
+            'applied_this_run': report.get('migrations_applied_this_run'),
+            'application_stopped_at': (checks.get('application') or {}).get('stopped_at'),
+            'pending': recon.get('pending'), 'inconsistent': recon.get('inconsistent'),
+            'schema_contract': contract,
+            'auth': {key: auth.get(key) for key in ('status', 'missing', 'site_url', 'callback_allowed',
+                                                    'localhost_urls_present', 'fix_applied', 'reason')
+                     if auth.get(key) is not None},
+            'tables_present': sorted((before.get('tables') or {}).keys()),
+            'counts': before.get('counts'), 'ledger_present': before.get('ledger_present'),
+            'legacy_objects_note': 'Schema had pre-existing legacy objects; application was additive, ordered, main-sourced.'}
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--apply', action='store_true',
@@ -473,9 +497,10 @@ def main(argv=None) -> int:
     path.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
     if os.getenv('GITHUB_ACTIONS') == 'true':
-        message = json.dumps(report, separators=(',', ':')).replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+        summary = annotation_summary(report)
+        message = json.dumps(summary, separators=(',', ':')).replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
         level = 'notice' if report['status'] == 'supabase_verified' else 'error'
-        print(f'::{level} title=Supabase production handoff::{message}')
+        print(f'::{level} title=Supabase production handoff (minimized; full report in artifact)::{message}')
     return 0 if report['status'] == 'supabase_verified' else 1
 
 

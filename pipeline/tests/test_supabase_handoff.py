@@ -257,3 +257,21 @@ def test_real_query_accepts_201_and_enforces_read_only(monkeypatch):
                         lambda self, method, path, **kw: R(400, {'error': 'hidden'}))
     with pytest.raises(sh.HandoffFailure, match='HTTP 400'):
         client.query('ref111', 'select 1', read_only=False)
+
+
+def test_annotation_summary_stays_minimized_and_complete():
+    before = {'tables': {}, 'functions': set(), 'triggers': set(), 'policies': set(),
+              'indexes': set(), 'function_flags': set(), 'ledger_present': False,
+              'counts': {t: 0 for t in sh.APP_TABLES}, 'rls_enabled': set()}
+    after = full_snapshot(); after['ledger_present'] = True
+    client = FakeMgmt([before, after])
+    report = sh.run_handoff(client, 'ref111', apply=True)
+    assert report['status'] == 'supabase_verified'
+    summary = sh.annotation_summary(report)
+    import json as _json
+    encoded = _json.dumps(summary, separators=(',', ':'))
+    assert len(encoded) < 3900
+    assert summary['status'] == 'supabase_verified'
+    assert summary['applied_this_run'] == list(sh.MIGRATION_MARKERS)
+    assert summary['schema_contract']['status'] == 'passed'
+    assert summary['auth']['status'] == 'passed'
