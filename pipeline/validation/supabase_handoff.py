@@ -140,6 +140,77 @@ def marker_missing(snapshot: dict, filename: str) -> list[str]:
     return missing
 
 
+def split_sql_statements(sql: str) -> list[str]:
+    """Split a migration file into top-level statements at ';', respecting single
+    quotes, line/block comments and dollar-quoted plpgsql bodies ($$..$$, $tag$..$tag$).
+    Multi-statement POST bodies can be partially applied by management endpoints
+    without a hard error; executing statements one at a time makes any failure
+    positioned and falsifiable instead of trusting whole-file HTTP success."""
+    statements, current = [], []
+    i, n = 0, len(sql)
+    quote = None  # "'" or the active dollar-quote tag like '$$'
+    while i < n:
+        ch = sql[i]
+        if quote is None:
+            if sql.startswith('--', i):
+                end = sql.find('\n', i)
+                i = n if end == -1 else end + 1
+                continue
+            if sql.startswith('/*', i):
+                end = sql.find('*/', i)
+                i = n if end == -1 else end + 2
+                continue
+            if ch == "'":
+                quote = "'"
+                current.append(ch)
+                i += 1
+                continue
+            if ch == '$':
+                match = re.match(r'\$[A-Za-z0-9_]*\$', sql[i:])
+                if match:
+                    quote = match.group(0)
+                    current.append(quote)
+                    i += len(quote)
+                    continue
+                current.append(ch)
+                i += 1
+                continue
+            if ch == ';':
+                statement = ''.join(current).strip()
+                if statement:
+                    statements.append(statement)
+                current = []
+                i += 1
+                continue
+            current.append(ch)
+            i += 1
+        elif quote == "'":
+            current.append(ch)
+            if ch == "'":
+                if i + 1 < n and sql[i + 1] == "'":
+                    current.append("'")
+                    i += 2
+                    continue
+                quote = None
+            i += 1
+        else:  # dollar-quoted body: only the matching tag closes it
+            if sql.startswith(quote, i):
+                current.append(quote)
+                i += len(quote)
+                quote = None
+            else:
+                current.append(ch)
+                i += 1
+    tail = ''.join(current).strip()
+    if tail:
+        statements.append(tail)
+    return statements
+
+
+def file_statements(path: Path) -> list[str]:
+    return split_sql_statements(path.read_text(encoding='utf-8'))
+
+
 def reconcile(files: list[str], ledger: list[str], snapshot: dict) -> dict:
     """applied (ledger or full markers) vs pending vs inconsistent, in order."""
     rows = []
@@ -219,6 +290,16 @@ def auth_fix_body(config: dict, origin: str) -> dict:
     if wanted not in [u.rstrip('/') for u in urls] and wanted not in urls:
         urls.append(wanted)
     return {'SITE_URL': origin, 'URI_ALLOW_LIST': ','.join(urls)}
+
+
+def auth_fix_body_lower(config: dict, origin: str) -> dict:
+    """Lowercase variant of the fix body: newer Management API revisions accept
+    site_url/uri_allow_list instead of the GOTRUE-style uppercase keys. Only
+    used when the uppercase PATCH replied 200 but the setting did not persist."""
+    upper = auth_fix_body(config, origin)
+    if not upper:
+        return {}
+    return {'site_url': upper['SITE_URL'], 'uri_allow_list': upper['URI_ALLOW_LIST']}
 
 
 def required_columns_status(snapshot: dict) -> dict:
@@ -394,25 +475,45 @@ def run_handoff(client: SupabaseManagement, ref: str, *, apply: bool, origin: st
     checks['reconciliation'] = recon
 
     applied_now: list[str] = []
+    repair_inconsistent = apply and os.getenv('DEALSCAN_REPAIR_INCONSISTENT') == '1'
+    targets = list(recon['applicable'])
+    repairstargets = recon['inconsistent'] if repair_inconsistent else []
     application: dict = {'performed': False, 'applied': applied_now, 'stopped_at': None,
-                         'note': 'Idempotent reviewed files only; each is applied at most once, in order.'}
+                         'repair_inconsistent': repairstargets,
+                         'note': 'Statement-by-statement application of reviewed files, in order; a file is '
+                                 'ledgered only after its post-write markers verify. Idempotent re-application '
+                                 'of ledgered-but-incomplete files is opt-in (DEALSCAN_REPAIR_INCONSISTENT=1).'}
     final_snapshot = before
-    if apply and recon['applicable']:
-        client.query(ref, LEDGER_BOOTSTRAP, read_only=False)
+    if apply and (targets or repairstargets):
+        if before['ledger_present'] or targets:
+            client.query(ref, LEDGER_BOOTSTRAP, read_only=False)
         application['performed'] = True
+        wanted = targets + repairstargets
         for path in files:
-            if path.name not in recon['applicable']:
+            if path.name not in wanted:
                 continue
-            sql = path.read_text(encoding='utf-8')
-            try:
-                client.query(ref, sql, read_only=False)
-                version = path.name.split('_')[0]
-                client.query(ref, "insert into supabase_migrations.schema_migrations (version, name) values "
-                                  f"('{version}', '{path.name}') on conflict (version) do nothing", read_only=False)
-                applied_now.append(path.name)
-            except HandoffFailure as exc:
-                application['stopped_at'] = {'file': path.name, 'reason': str(exc)}
+            statements = file_statements(path)
+            failed = None
+            for index, statement in enumerate(statements, 1):
+                try:
+                    client.query(ref, statement, read_only=False)
+                except HandoffFailure as exc:
+                    failed = {'file': path.name, 'statement': f'{index}/{len(statements)}', 'reason': str(exc)}
+                    break
+            if failed is not None:
+                application['stopped_at'] = failed
                 break
+            probe = take_snapshot()
+            missing = marker_missing(probe, path.name)
+            if missing:
+                application['stopped_at'] = {'file': path.name, 'post_apply_markers_missing': missing,
+                                             'note': 'Statements returned HTTP success but objects are missing; '
+                                                     'file NOT ledgered, staying visible as a failure.'}
+                break
+            version = path.name.split('_')[0]
+            client.query(ref, "insert into supabase_migrations.schema_migrations (version, name) values "
+                              f"('{version}', '{path.name}') on conflict (version) do nothing", read_only=False)
+            applied_now.append(path.name)
         final_snapshot = take_snapshot()
         recon = reconcile(names, [s.split('_')[0] for s in [*ledger, *applied_now]], final_snapshot)
         checks['reconciliation'] = recon
@@ -428,14 +529,27 @@ def run_handoff(client: SupabaseManagement, ref: str, *, apply: bool, origin: st
         config = sanitize_auth_config(raw_config)
         verdict = auth_verdict(config, origin)
         if verdict['status'] != 'passed' and apply:
+            attempts = []
             body = auth_fix_body(config, origin)
             if body:
                 response = client._call('PATCH', f'/v1/projects/{ref}/config/auth', json=body)
+                attempts.append({'keys': 'uppercase', 'http_status': response.status_code})
                 if response.status_code == 200:
                     config = sanitize_auth_config(client.json('GET', f'/v1/projects/{ref}/config/auth'))
-                    verdict = {**auth_verdict(config, origin), 'fix_applied': True}
+                    verdict = auth_verdict(config, origin)
+                    verdict['fix_applied'] = True
+                    if verdict['status'] != 'passed':
+                        lower = auth_fix_body_lower(config, origin)
+                        if lower:
+                            retry = client._call('PATCH', f'/v1/projects/{ref}/config/auth', json=lower)
+                            attempts.append({'keys': 'lowercase', 'http_status': retry.status_code})
+                            if retry.status_code == 200:
+                                config = sanitize_auth_config(client.json('GET', f'/v1/projects/{ref}/config/auth'))
+                                verdict = {**auth_verdict(config, origin), 'fix_applied': True}
                 else:
                     verdict['fix'] = {'status': 'failed', 'http_status': response.status_code}
+            if attempts:
+                verdict['patch_attempts'] = attempts
         checks['auth'] = verdict
 
     reconciled = not checks['reconciliation']['pending'] and not checks['reconciliation']['inconsistent']

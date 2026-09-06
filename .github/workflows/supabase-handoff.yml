@@ -49,6 +49,11 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           PRODUCTION_APP_URL: https://dealscan-omega.vercel.app
+          # Opt-in, idempotent recovery for ledgered files whose markers went
+          # missing (whole-file application was partially executed upstream).
+          # Re-applies their reviewed statements one by one and only then
+          # re-verifies markers; any divergence still blocks the run.
+          DEALSCAN_REPAIR_INCONSISTENT: "1"
         run: |
           python -m validation.supabase_handoff --apply \
             --app-url "$PRODUCTION_APP_URL" \
