@@ -6,7 +6,7 @@ import sqlite3
 import uuid
 from contextlib import contextmanager
 from persistence import (AuditRunNotFound, COMP_FIELDS, PUBLIC_COMP_FIELDS, DEAL_FIELDS, PROPERTY_FIELDS, PUBLIC_DEAL_FIELDS, PUBLIC_PROPERTY_FIELDS,
-                         STATUS_MAP, audit_record, deal_payload, now, property_payload, run_payload)
+                         STATUS_MAP, audit_record, audit_records, deal_payload, now, property_payload, run_payload)
 
 JSON_FIELDS = {'vacancy_evidence', 'financial_evidence', 'raw_payload', 'normalized_payload', 'field_mapping', 'metadata'}
 
@@ -270,9 +270,9 @@ class SQLiteDatabase:
     def clear_active_run(self): self._active = None
 
     def record_ingestion_records(self, run_id, county_id, records):
-        payloads = {row['record_key']:row for row in (audit_record(run_id,county_id,item) for item in records)}
+        payloads = audit_records(run_id,county_id,records)
         with self.connection() as conn:
-            for payload in payloads.values():
+            for payload in payloads:
                 payload['updated_at'] = now()
                 self._upsert(conn,'ingestion_records',payload,['run_id','record_key'])
         return len(payloads)

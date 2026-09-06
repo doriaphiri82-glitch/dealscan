@@ -45,17 +45,28 @@ class BaseScraperAdapter(ABC):
         cfg = {**cfg, 'max_records': max_records}
         result = ScrapeResult(county_id=cfg.get('county_id', 'unknown'), source_type=self.__class__.__name__)
         audit = result.metadata['audit_records'] = []
+        if type(max_records) is not int or not 1<=max_records<=5000:
+            result.errors.append('invalid_record_limit')
+            return result, []
         source_url = cfg.get('arcgis_layer_url') or cfg.get('data_url') or cfg.get('parcel_source_url')
         try:
             raw = self.discover(cfg)
         except Exception as exc:
             result.errors.append(f'discover_error: {type(exc).__name__}')
             return result, []
+        if not isinstance(raw,list):
+            result.errors.append('invalid_source_collection')
+            return result, []
         result.discovered = result.downloaded = len(raw)
+        if len(raw)>max_records:
+            result.errors.append('source_exceeded_record_limit')
+            return result, []
         normalized, seen = [], set()
         for item in raw:
             try:
                 records = self.parse(item)
+                if not isinstance(records,list): raise ValueError('Parser must return a record list')
+                if result.parsed+len(records)>max_records: raise ValueError('Parser exceeded the record budget')
                 if not records:
                     result.rejected += 1
                     result.rejection_reasons['empty_parsed_record'] = result.rejection_reasons.get('empty_parsed_record', 0) + 1
@@ -73,10 +84,12 @@ class BaseScraperAdapter(ABC):
                 try:
                     if not isinstance(record, dict):
                         raise ValueError('Source record is not an object')
-                    canonical = self.normalize(record, cfg)
+                    value = self.normalize(record, cfg)
+                    if not isinstance(value,dict): raise ValueError('Normalizer must return an object')
+                    canonical=value
                     canonical['_source_record_id'] = source_identity(record, cfg, canonical)
                     result.normalized += 1
-                    if not self.validate(canonical):
+                    if self.validate(canonical) is not True:
                         reason = 'validation_failed'
                 except Exception as exc:
                     reason = 'normalize_error'
@@ -84,8 +97,10 @@ class BaseScraperAdapter(ABC):
                 if reason:
                     result.rejected += 1
                     result.rejection_reasons[reason] = result.rejection_reasons.get(reason, 0) + 1
+                    try: source_id=source_identity(record,cfg,canonical) if isinstance(record,dict) else None
+                    except Exception: source_id=None
                     audit.append({'raw_payload': record, 'normalized_payload': canonical, 'source_url': source_url,
-                                  'status': 'rejected', 'rejection_reason': reason, 'source_record_id': source_identity(record, cfg, canonical) if isinstance(record, dict) else None})
+                                  'status': 'rejected', 'rejection_reason': reason, 'source_record_id':source_id})
                     continue
                 identity = (canonical.get('county_id'), canonical.get('apn'))
                 if identity in seen:

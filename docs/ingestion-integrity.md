@@ -134,3 +134,11 @@ truthy strings, fractional/negative counts and credential-bearing authority URLs
 are not evidence. Current county permissions and the run's recorded permissions
 are checked independently. The additive typed-proof migration also revokes existing
 publications atomically when any validation-proof field changes.
+
+
+Identical audit retries remain idempotent, but different observations sharing one
+source identity in the same batch raise an explicit audit conflict before any
+batch write. Existing audit rows are not silently replaced by whichever input
+happens to appear last. The ingestion is degraded and cannot publish until its
+source identity/audit gap is reconciled. Shared adapters also enforce record caps,
+parser result shape and explicit boolean identity validation before persistence.

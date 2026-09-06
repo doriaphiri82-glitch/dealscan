@@ -116,3 +116,20 @@ def audit_record(run_id: int, county_id: str, item: dict) -> dict:
         'property_id': item.get('property_id'), 'deal_id': item.get('deal_id'),
         'status': item.get('status') or 'normalized', 'rejection_reason': item.get('rejection_reason'),
         'hold_reason': item.get('hold_reason')})
+
+
+class AuditRecordConflict(ValueError):
+    """Two different observations cannot overwrite one source identity in a batch."""
+
+
+def audit_records(run_id: int,county_id: str,records: list[dict]) -> list[dict]:
+    unique={}
+    for item in records:
+        payload=audit_record(run_id,county_id,item)
+        key=payload['record_key']
+        if key in unique and unique[key]!=payload:
+            # No values or source payloads in diagnostics. A caller can retry an
+            # identical batch, but a conflicting source identity needs review.
+            raise AuditRecordConflict('Conflicting records share an ingestion audit identity')
+        unique[key]=payload
+    return list(unique.values())

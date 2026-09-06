@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 import requests
 from normalization import sale_date
 from persistence import (AuditRunNotFound, COMP_FIELDS, PUBLIC_COMP_FIELDS, PUBLIC_DEAL_FIELDS, PUBLIC_PROPERTY_FIELDS, STATUS_MAP,
-                         audit_record, deal_payload, json_safe, now, property_payload, run_payload)
+                         audit_record, audit_records, deal_payload, json_safe, now, property_payload, run_payload)
 
 log = logging.getLogger(__name__)
 
@@ -181,8 +181,7 @@ class SupabaseDatabase:
         return int(self._active['id'])
 
     def record_ingestion_records(self, run_id: int, county_id: str, records: list[dict]) -> int:
-        payloads = {row['record_key']: row for row in (audit_record(run_id, county_id, item) for item in records)}
-        values = list(payloads.values())
+        values = audit_records(run_id,county_id,records)
         for start in range(0, len(values), 250):
             self._request('POST', 'ingestion_records', params={'on_conflict': 'run_id,record_key'},
                 headers={**self.headers, 'Prefer': 'resolution=merge-duplicates'}, json=values[start:start + 250])
