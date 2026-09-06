@@ -230,3 +230,28 @@ def test_inspection_is_read_only_without_apply():
     assert client.applied == [] and client.patches == []
     assert report['status'] == 'supabase_verified'
 EOF_MARKER = None
+
+
+def test_real_query_accepts_201_and_enforces_read_only(monkeypatch):
+    client = sh.SupabaseManagement('token')
+    calls = []
+
+    class R:
+        def __init__(self, status, payload):
+            self.status_code = status; self._p = payload
+        def json(self):
+            return self._p
+
+    monkeypatch.setattr(sh.SupabaseManagement, '_call',
+                        lambda self, method, path, **kw: (calls.append((method, path, kw.get('json'))), R(201, [{'one': 1}]))[1])
+    rows = client.query('ref111', 'select 1')
+    assert rows == [{'one': 1}]
+    assert calls[0][2] == {'query': 'select 1', 'read_only': True}
+    with pytest.raises(sh.HandoffFailure):
+        client.query('ref111', 'delete from deals')
+    assert len(calls) == 1  # the mutating statement never reached the wire
+
+    monkeypatch.setattr(sh.SupabaseManagement, '_call',
+                        lambda self, method, path, **kw: R(400, {'error': 'hidden'}))
+    with pytest.raises(sh.HandoffFailure, match='HTTP 400'):
+        client.query('ref111', 'select 1', read_only=False)

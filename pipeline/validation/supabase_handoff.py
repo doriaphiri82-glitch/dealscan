@@ -258,7 +258,14 @@ class SupabaseManagement:
         body = {'query': sql}
         if read_only:
             body['read_only'] = True
-        result = self.json('POST', f'/v1/projects/{ref}/database/query', json=body)
+        # The Management query endpoint answers 201 with the row array.
+        response = self._call('POST', f'/v1/projects/{ref}/database/query', json=body)
+        if response.status_code not in (200, 201):
+            raise HandoffFailure(f'supabase_api_error (HTTP {response.status_code}) for /v1/projects/{ref}/database/query')
+        try:
+            result = response.json()
+        except ValueError:
+            raise HandoffFailure('supabase_api_returned_non_json') from None
         if isinstance(result, list):
             return result
         if isinstance(result, dict):
