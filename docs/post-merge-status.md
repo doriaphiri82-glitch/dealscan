@@ -67,6 +67,36 @@ operator reported after the merge that:
 These must be re-confirmed by a GitHub readiness run before any write step;
 a passing source probe is not deployment verification.
 
+## Vercel runtime handoff — VERIFIED from the runner (2026-09-06 16:59Z)
+
+`VERCEL_TOKEN` was supplied in GitHub secrets. The sandbox cannot reach
+`api.vercel.com` (TLS blocked), so verification runs where the secret is
+usable: the new `dealscan-vercel-handoff` workflow on this branch (success:
+https://github.com/doriaphiri82-glitch/dealscan/actions/runs/34047146235).
+Evidence is name/target-only; no credential values were read or printed.
+
+- **Root Directory = `landing`** — matches (project `dealscan`,
+  team `doriaphiri82-4774s-projects`, framework `nextjs`, Git production
+  branch `main`).
+- **Node.js** — dashboard was found at **24.x**; the workflow patched the one
+  documented, reversible setting to **22.x** and verified the re-read
+  (`config_fix.applied, verified:true`). Versioned `package.json` already pins
+  `"node": "22.x"`.
+- **Environment variables (production target)** — `NEXT_PUBLIC_SUPABASE_URL`,
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
+  all present. `WAITLIST_CONTACT_EMAIL` is intentionally satisfied by
+  versioned `landing/vercel.json` (build + runtime), not a dashboard entry.
+- **Current production deployment** — READY, commit `afee487` = exact current
+  `main` HEAD; the merge-era promotion is the serving deployment. No further
+  promotion was needed (`already_current`).
+- **Live endpoints** — `/` 200, `/privacy` 200 with the operator contact,
+  `/api/health` 200 `database:ok`.
+- **Read-only preflight gate** — the smoke workflow's deployment check now
+  **passes** (16:59Z) and the El Paso source probe passes; the GitHub-side
+  Production environment still lacks `SUPABASE_SERVICE_ROLE_KEY`, so
+  database/public-boundary checks remain `not_checked`.
+  `preflight_only` remains **true**; no ingestion was run or authorized.
+
 ## Re-confirmed access blockers (unchanged)
 
 - `403 Resource not accessible by integration` for repository/environment
@@ -80,15 +110,14 @@ a passing source probe is not deployment verification.
 Per `docs/production-runbook.md` and `docs/production-handoff.md`:
 
 1. Supply the still-missing matching `SUPABASE_SERVICE_ROLE_KEY` in the GitHub
-   **Production** environment (`SUPABASE_URL` and a public key appear to be
-   supplied already per the 07:38Z readiness run) and add environment
-   protection rules before any write-enabled dispatch.
-2. In Vercel: verify root `landing`, Node 22, and set the matching
-   `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY` (production
-   health currently 503s for lack of them), plus separate server-only Supabase
-   secrets, `WAITLIST_CONTACT_EMAIL=doriaphiri82@gmail.com` (already in
-   versioned `vercel.json`), and Supabase Auth site/callback URLs for
-   `https://dealscan-omega.vercel.app`.
+   **Production** environment (Vercel is fully configured as of 16:59Z; the
+   GitHub Actions side is not) and add environment protection rules before any
+   write-enabled dispatch.
+2. In Supabase: verify Auth site URL `https://dealscan-omega.vercel.app` and
+   allowed `/auth/callback` redirects. A Vercel token cannot read Auth config;
+   provide `SUPABASE_ACCESS_TOKEN` through the secure secret store if the agent
+   is to verify it mechanically. (Vercel root/Node/env checks from the earlier
+   version of this item are now verified complete.)
 3. Back up/inspect the real Supabase schema, then apply the unapplied ordered
    migrations in `supabase/migrations/` before any ingestion.
 4. Run read-only readiness (a push to this session's branch triggers it now

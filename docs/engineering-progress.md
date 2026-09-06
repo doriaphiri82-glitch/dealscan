@@ -102,10 +102,21 @@ Resumed after PR #10 merged as `afee487` (`main`). HEAD was verified to equal
   remain externally blocked, and scheduled ingestion stays disabled.
 - The retargeted push trigger produced fresh read-only readiness evidence on
   commit `adff79f` (2026-09-06T07:38:56Z): production health now responds with
-  an honest 503 (web app lacks public Supabase env) instead of the earlier
-  middleware crash; the Production environment now supplies `SUPABASE_URL` and
+  an honest 503 (web app lacked public Supabase env) instead of the earlier
+  middleware crash; the Production environment then supplied `SUPABASE_URL` and
   a public key, with only `SUPABASE_SERVICE_ROLE_KEY` still missing; the El
   Paso read-only source probe passed again unchanged; no writes or ingestion
   were attempted. CI passed on-branch and on PR #11.
+- **Vercel handoff (operator task, completed via runner):** with `VERCEL_TOKEN`
+  in GitHub secrets, `pipeline/validation/vercel_handoff.py` and the
+  `dealscan-vercel-handoff` workflow verified from the runner (16:59Z,
+  `handoff_verified`): root `landing`, Node aligned 24.x→**22.x** via one
+  documented PATCH (verified on re-read), all four Supabase production env vars
+  present plus the versioned `vercel.json` contact, production deployment READY
+  at the exact `main` HEAD (`afee487`), and live `/`, `/privacy` (contact
+  match) and `/api/health` (`database:ok`). The idempotent main-promotion path
+  exists but was a no-op. Preflight deployment + source checks pass; full
+  preflight stays blocked only on the GitHub-side `SUPABASE_SERVICE_ROLE_KEY`,
+  and `preflight_only` remains true. 440 Python tests pass.
 
 No production-ready claim is made or implied by these changes.
