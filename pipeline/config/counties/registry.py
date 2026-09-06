@@ -64,10 +64,14 @@ def update_county(county_id,**fields):
     _recompute_meta(reg); _save_registry(reg); return entry
 
 def mark_county_validation(county_id:str, *, status:str, errors:Optional[List[str]]=None, warnings:Optional[List[str]]=None, source_fields_checked:bool=False, sample_checked:int=0, pagination_checked:bool=False, fingerprint:Optional[str]=None):
+    if status not in {'validating','valid','invalid','unreachable'}:
+        raise ValueError('Invalid source validation status')
+    if type(source_fields_checked) is not bool or type(pagination_checked) is not bool or type(sample_checked) is not int or not 0<=sample_checked<=5:
+        raise ValueError('Validation evidence must use explicit booleans and a bounded integer sample count')
     entry=get_county(county_id)
     if not entry:return None
     now=datetime.now(timezone.utc).isoformat()
-    return update_county(county_id,last_validated_at=now,validation_status=str(status),validation_errors=(errors or [])[:20],validation_warnings=(warnings or [])[:20],validation_source_fields_checked=bool(source_fields_checked),validation_sample_checked=max(0,int(sample_checked)),validation_pagination_checked=pagination_checked,validated_source_fingerprint=fingerprint if status=='valid' else None,ingestion_authorized=False,authorized_source_fingerprint=None)
+    return update_county(county_id,last_validated_at=now,validation_status=str(status),validation_errors=(errors or [])[:20],validation_warnings=(warnings or [])[:20],validation_source_fields_checked=source_fields_checked,validation_sample_checked=sample_checked,validation_pagination_checked=pagination_checked,validated_source_fingerprint=fingerprint if status=='valid' else None,ingestion_authorized=False,authorized_source_fingerprint=None)
 
 def mark_county_run(county_id:str, *, record_count:int, qualified_count:int=0, published_count:int=0, persisted_count:int=0, status:str="ok", error:str=""):
     entry=get_county(county_id)

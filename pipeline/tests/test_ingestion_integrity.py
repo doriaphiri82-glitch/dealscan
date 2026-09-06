@@ -303,3 +303,14 @@ def test_review_rejects_persisted_fields_that_no_longer_match_source(monkeypatch
     else: deal['properties'][change]='ALTERED_PRIVATE_VALUE'
     with pytest.raises(ValueError) as exc: verify_persisted_deal(deal,records,run)
     assert 'ALTERED_PRIVATE_VALUE' not in str(exc.value)
+
+
+@pytest.mark.parametrize('field,value',[('validation_source_fields_checked',False),('validation_pagination_checked','true'),('validation_sample_checked',0),('last_validated_at','2020-01-01T00:00:00Z'),('validated_source_fingerprint','different')])
+def test_changing_validation_proof_revokes_existing_local_publication(monkeypatch,field,value):
+    ingest(monkeypatch)
+    db=database.get_backend();db.verify_deal(1)
+    assert db.get_top_deals(min_score=0)
+    with db.connection() as connection:
+        county=json.loads(connection.execute("SELECT payload FROM counties WHERE county_id='fixture'").fetchone()[0])
+    db.upsert_county({**county,field:value})
+    assert db.get_top_deals(min_score=0)==[]

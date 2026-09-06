@@ -145,3 +145,20 @@ it.each(['1','null'])('cannot republish an incorrect materialized comparable pri
   await expect(asRole(db,'service_role',"update deals set verification_status='verified' where id=1")).rejects.toThrow(/price-per-acre arithmetic/)
   expect((await asRole(db,'anon','select id from deals')).rows).toEqual([])
 })
+
+
+it.each([
+  ['validation_source_fields_checked','"true"'],['validation_pagination_checked','"false"'],
+  ['validation_sample_checked','true'],['validation_sample_checked','"5"'],
+  ['validation_sample_checked','6'],['validated_source_fingerprint','"wrong"'],
+  ['last_validated_at','"now"'],['last_validated_at','"2020-01-01T00:00:00Z"'],
+])('rejects untyped or stale county proof before publication: %s',async(field,value)=>{
+  await db.query("update counties set extra=jsonb_set(extra,$1::text[],$2::jsonb) where county_id='fixture'",[[field],value])
+  await expect(asRole(db,'service_role',"update deals set verification_status='verified' where id=1")).rejects.toThrow(/typed source validation/)
+  expect((await asRole(db,'anon','select id from deals')).rows).toEqual([])
+})
+
+it('requires typed validation in the recorded run as well as the current county',async()=>{
+  await db.exec(`update ingestion_runs set metadata=jsonb_set(metadata,'{source_authorization,validation_source_fields_checked}','"true"') where id=1`)
+  await expect(asRole(db,'service_role',"update deals set verification_status='verified' where id=1")).rejects.toThrow(/typed source validation/)
+})

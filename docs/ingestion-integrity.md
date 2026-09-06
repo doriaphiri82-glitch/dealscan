@@ -127,3 +127,10 @@ financial evidence, invalid identifiers, contradictory model arithmetic or
 inconsistent comparable sets. Missing optional address/zoning/freshness fields
 remain null. Filtered lookup responses must match the requested county/APN; repeated
 rows cannot inflate inventory or turn into a comparison of a parcel with itself.
+
+
+Validation proof uses explicit booleans and integer sample counts from one to five;
+truthy strings, fractional/negative counts and credential-bearing authority URLs
+are not evidence. Current county permissions and the run's recorded permissions
+are checked independently. The additive typed-proof migration also revokes existing
+publications atomically when any validation-proof field changes.

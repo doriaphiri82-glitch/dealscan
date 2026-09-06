@@ -2,6 +2,7 @@
 from __future__ import annotations
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from normalization import sale_date
@@ -26,16 +27,24 @@ def source_fingerprint(cfg: dict) -> str:
     return hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def authority_verified(cfg: dict) -> bool:
+def _reviewable_https(value) -> bool:
+    if not isinstance(value,str) or not value or any(ord(char)<32 or ord(char)==127 for char in value):
+        return False
     try:
-        evidence = urlsplit(str(cfg.get('authority_evidence_url') or ''))
-        source = urlsplit(source_url(cfg))
-        return (cfg.get('authority_reviewed') is True and evidence.scheme == 'https' and bool(evidence.hostname)
-                and source.scheme == 'https' and bool(source.hostname) and not source.username and not source.password
-                and str(cfg.get('authority_source_url') or '').rstrip('/') == source_url(cfg)
-                and bool(cfg.get('geoid')) and cfg.get('source_county_geoid') == cfg.get('geoid'))
+        parsed=urlsplit(value)
+        return parsed.scheme=='https' and bool(parsed.hostname) and not (parsed.username or parsed.password) and (parsed.port is None or 1<=parsed.port<=65535)
     except ValueError:
         return False
+
+
+def authority_verified(cfg: dict) -> bool:
+    geoid=cfg.get('geoid')
+    return (cfg.get('authority_reviewed') is True
+            and _reviewable_https(cfg.get('authority_evidence_url'))
+            and _reviewable_https(source_url(cfg))
+            and str(cfg.get('authority_source_url') or '').rstrip('/')==source_url(cfg)
+            and isinstance(geoid,str) and re.fullmatch(r'[0-9]{5}',geoid) is not None
+            and cfg.get('source_county_geoid')==geoid)
 
 
 def validation_error(county: dict, cfg: dict) -> str:
@@ -47,7 +56,8 @@ def validation_error(county: dict, cfg: dict) -> str:
     now = datetime.now(timezone.utc)
     if validated_at is None or not now - MAX_VALIDATION_AGE <= validated_at <= now + timedelta(minutes=5):
         return 'source_validation_expired'
-    if not county.get('validation_source_fields_checked') or not county.get('validation_pagination_checked') or not county.get('validation_sample_checked'):
+    sample_count=county.get('validation_sample_checked')
+    if county.get('validation_source_fields_checked') is not True or county.get('validation_pagination_checked') is not True or type(sample_count) is not int or not 1<=sample_count<=5:
         return 'source_validation_incomplete'
     return ''
 

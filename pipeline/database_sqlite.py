@@ -104,6 +104,15 @@ class SQLiteDatabase:
               OR json_extract(NEW.payload,'$.field_mapping') IS NOT json_extract(OLD.payload,'$.field_mapping')
             BEGIN UPDATE deals SET verification_status='pending_review',verified_at=NULL,verification_expires_at=NULL
               WHERE property_id IN (SELECT id FROM properties WHERE county_id=NEW.county_id); END;
+            DROP TRIGGER IF EXISTS county_validation_proof_revoke;
+            CREATE TRIGGER county_validation_proof_revoke AFTER UPDATE ON counties
+            WHEN json_extract(NEW.payload,'$.validation_source_fields_checked') IS NOT json_extract(OLD.payload,'$.validation_source_fields_checked')
+              OR json_extract(NEW.payload,'$.validation_pagination_checked') IS NOT json_extract(OLD.payload,'$.validation_pagination_checked')
+              OR json_extract(NEW.payload,'$.validation_sample_checked') IS NOT json_extract(OLD.payload,'$.validation_sample_checked')
+              OR json_extract(NEW.payload,'$.last_validated_at') IS NOT json_extract(OLD.payload,'$.last_validated_at')
+              OR json_extract(NEW.payload,'$.validated_source_fingerprint') IS NOT json_extract(OLD.payload,'$.validated_source_fingerprint')
+            BEGIN UPDATE deals SET verification_status='pending_review',verified_at=NULL,verification_expires_at=NULL
+              WHERE verification_status='verified' AND property_id IN (SELECT id FROM properties WHERE county_id=NEW.county_id); END;
             CREATE TRIGGER IF NOT EXISTS publication_guard BEFORE UPDATE ON deals
             WHEN NEW.verification_status='verified' AND (
               NEW.verified_at IS NULL OR NEW.verification_expires_at IS NULL OR julianday(NEW.verification_expires_at)<=julianday('now')

@@ -62,6 +62,14 @@ export async function publishedFixture(db: PGlite) {
     update ingestion_runs set metadata=metadata||jsonb_build_object('source_config',
       jsonb_build_object('fields','${fields}'::jsonb,'acreage_units','acres'));
     update properties set source_payload_hash=(select encode(sha256(convert_to(raw_payload_canonical,'UTF8')),'hex') from ingestion_records where id=10) where id=1;
+    update counties set extra=extra||jsonb_build_object('validation_source_fields_checked',true,
+      'validation_pagination_checked',true,'validation_sample_checked',5,
+      'validated_source_fingerprint',repeat('a',64),'last_validated_at',now());
+    update ingestion_runs set metadata=metadata||jsonb_build_object('source_authorization',
+      jsonb_build_object('validation_status','valid','validation_source_fields_checked',true,
+        'validation_pagination_checked',true,'validation_sample_checked',5,'ingestion_authorized',true,
+        'validated_source_fingerprint',repeat('a',64),'authorized_source_fingerprint',repeat('a',64),
+        'last_validated_at',metadata->'source_validated_at'));
     update deals set verification_status='verified' where id=1;
   `)
 }

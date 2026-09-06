@@ -1,3 +1,4 @@
+import pytest
 from datetime import datetime, timedelta, timezone
 from helpers import authorized_county
 from config.source_config import county_config
@@ -55,3 +56,41 @@ def test_national_worker_does_not_ingest_valid_but_unauthorized_sources(monkeypa
     monkeypatch.setattr(worker, 'list_counties', lambda: [{'county_id': 'fixture', 'validation_status': 'valid', 'arcgis_layer_url': 'https://county.example/FeatureServer/0'}])
     monkeypatch.setattr(worker, 'run_county', lambda *a, **kw: (_ for _ in ()).throw(AssertionError('Must not ingest')))
     assert worker.run_national_batch(limit=1)['attempted'] == 0
+
+
+@pytest.mark.parametrize('field',['validation_source_fields_checked','validation_pagination_checked'])
+@pytest.mark.parametrize('value',['false','true',1,[],{},None])
+def test_truthy_values_are_not_boolean_validation_evidence(field,value):
+    county=authorized_county({'county_id':'fixture'})
+    cfg=county_config('fixture',county)
+    assert authorization_error({**county,field:value},cfg)=='source_validation_incomplete'
+
+
+@pytest.mark.parametrize('value',[True,False,'5',-1,0,6,2.5,None,float('inf')])
+def test_sample_count_must_be_a_real_bounded_integer(value):
+    county=authorized_county({'county_id':'fixture'})
+    cfg=county_config('fixture',county)
+    assert authorization_error({**county,'validation_sample_checked':value},cfg)=='source_validation_incomplete'
+
+
+@pytest.mark.parametrize('url',['https://user:password@county.example/gis','https://county.example:bad/gis','https://county.example/\nGIS','http://county.example/gis'])
+def test_review_evidence_cannot_hide_credentials_or_invalid_origins(url):
+    from validation.gates import authority_verified
+    county=authorized_county({'county_id':'fixture'})
+    cfg=county_config('fixture',county)
+    assert not authority_verified({**cfg,'authority_evidence_url':url})
+
+
+@pytest.mark.parametrize('geoid',['',12345,'1234','abcde','123456'])
+def test_county_identity_needs_a_five_digit_geoid(geoid):
+    from validation.gates import authority_verified
+    county=authorized_county({'county_id':'fixture'})
+    cfg=county_config('fixture',county)
+    assert not authority_verified({**cfg,'geoid':geoid,'source_county_geoid':geoid})
+
+
+@pytest.mark.parametrize('patch',[{'source_fields_checked':'false'},{'pagination_checked':'false'},{'sample_checked':True},{'sample_checked':'5'},{'status':'unknown'}])
+def test_registry_does_not_coerce_invalid_proof_into_permission(monkeypatch,patch):
+    from config.counties import registry
+    monkeypatch.setattr(registry,'update_county',lambda *a,**kw:(_ for _ in ()).throw(AssertionError('No write allowed')))
+    with pytest.raises(ValueError): registry.mark_county_validation('fixture',**{'status':'valid',**patch})

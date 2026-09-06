@@ -42,14 +42,14 @@ export function countyHealth(snapshot: unknown, now = Date.now()) {
   const current = county.validation_status === 'valid' && Number.isFinite(validatedAt)
     && validatedAt >= now - 7*86400000 && validatedAt <= now + 300000
     && county.validation_source_fields_checked === true && county.validation_pagination_checked === true
-    && numeric(county.validation_sample_checked) > 0 && county.validated_source_fingerprint === countyFingerprint(stored)
+    && numeric(county.validation_sample_checked) > 0 && numeric(county.validation_sample_checked)<=5 && county.validated_source_fingerprint === countyFingerprint(stored)
   let authority = false
   try {
     const evidence = new URL(String(county.authority_evidence_url))
     const source = new URL(sourceUrl)
     authority = county.authority_reviewed === true && evidence.protocol === 'https:' && source.protocol === 'https:'
-      && !source.username && !source.password && url(county.authority_source_url) === sourceUrl
-      && !!county.geoid && county.source_county_geoid === county.geoid
+      && !evidence.username && !evidence.password && !source.username && !source.password && url(county.authority_source_url) === sourceUrl
+      && typeof county.geoid==='string' && /^[0-9]{5}$/.test(county.geoid) && county.source_county_geoid === county.geoid
   } catch { /* unknown authority is not authorization */ }
   const ready = current && authority && county.ingestion_authorized === true
     && county.authorized_source_fingerprint === county.validated_source_fingerprint
