@@ -162,3 +162,39 @@ are local to the browser profile, not synchronized private account data.
 No production datasource is replaced with an illustrative property or an invented
 map point. Optional diagnostic cache exports are disabled unless explicitly
 requested, reread current verified rows and are never read by the web API.
+
+## Supabase management handoff
+
+The `dealscan-supabase-handoff` workflow (push to the session branch or manual
+dispatch, `environment: production`) runs `pipeline/validation/supabase_handoff.py`
+with `SUPABASE_ACCESS_TOKEN` and `SUPABASE_URL` from GitHub secrets. It is
+inspection-first and evidence-only:
+
+1. Probe `select 1`, then take a logical schema snapshot (tables/columns,
+   functions, triggers, policies, indexes, RLS flags, migration ledger, row
+   counts). No row content, no credentials, no secret-shaped values.
+2. Reconcile the 11 reviewed `supabase/migrations` files (materialized from
+   `main` on the runner, never the unmerged branch) against a
+   `supabase_migrations.schema_migrations` ledger plus marker objects
+   (table/function/trigger/policy/index/column/body-flag names).
+3. Apply any pending files **one SQL statement per call** (dollar-quote aware
+   splitting), re-verify each file's markers after application and only then
+   write its ledger row; any failure reports the exact statement index or the
+   missing markers and stops. `applied=ledger` with missing markers is an
+   `inconsistent` state that blocks by design; idempotent re-application is
+   opt-in via `DEALSCAN_REPAIR_INCONSISTENT=1` and still re-verifies.
+4. Require the schema contract (required non-credential columns), sanitize the
+   Auth config (only site URL, redirect list, core email toggles; secrets are
+   dropped), and ensure `SITE_URL` plus the production `/auth/callback`
+   redirect. PATCH fixes are re-read before being claimed, with a lowercase
+   payload fallback if the API accepts an uppercase payload without persisting.
+
+Operational caveat learned on the live project (eu-west-1): for the Management
+query role, `information_schema.triggers` is privilege-filtered and returned
+**zero** while `pg_trigger` held all 15 public triggers — probes now read the
+`pg_catalog` views directly. `pg_get_functiondef` renders
+`SET search_path TO ...` (uppercase), which a case-sensitive `LIKE` cannot
+match. The Check annotation carries a minimized summary (<4 KB); the full JSON
+report is a 7-day artifact. The endpoint answers HTTP 201 (not 200) with the
+row array. Physical `pg_dump` still needs `SUPABASE_DB_URL` (not available);
+the schema/count snapshot is the verified surrogate.

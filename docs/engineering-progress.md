@@ -120,3 +120,44 @@ Resumed after PR #10 merged as `afee487` (`main`). HEAD was verified to equal
   and `preflight_only` remains true. 440 Python tests pass.
 
 No production-ready claim is made or implied by these changes.
+- **Supabase handoff (operator task, completed via runner):** with
+  `SUPABASE_ACCESS_TOKEN` in GitHub secrets, `pipeline/validation/supabase_handoff.py`
+  and the `dealscan-supabase-handoff` workflow went from first contact to
+  `supabase_verified` in five observed runner iterations (each annotation was
+  actable evidence; nothing was ever asserted without it):
+  1. token valid; project ref resolved and `GET /v1/projects` healthy, but the
+     query endpoint answered **HTTP 201** (not 200) — acceptance fixed;
+  2. **HTTP 400** on the query endpoint — hardened error extraction (codes
+     only, never free text that can echo SQL), an explicit `select 1` probe,
+     per-query diagnostics;
+  3. real evidence: project `ACTIVE_HEALTHY` in `eu-west-1`, pre-existing legacy
+     schema with all 10 app tables (all row counts 0), migrations applied in
+     order from `main`, Auth PATCH applied, but 5 files read as
+     ledger-vs-marker inconsistent;
+  4. statement-wise application with post-write marker verification + a
+     read-only catalog cross-check delivered the decisive clue: **every
+     trigger had persisted since run 1** — `information_schema.triggers` is
+     privilege-filtered (0 rows vs 15 in `pg_trigger`), and the hardening flag
+     check used a case-sensitive `LIKE` while `pg_get_functiondef` renders
+     `SET search_path TO` (uppercase);
+  5. probes corrected (pg_catalog reads, `ILIKE`): repair env re-applied the
+     single statement of the hardening file, post-write verification passed,
+     and the run went **`supabase_verified`** (run 34059778402, 21:02Z):
+     reconciliation clean (no pending/inconsistent), schema contract passed,
+     Auth config verified (`site_url` = production, `/auth/callback` allowed;
+     no localhost entries — non-failing informational flag), all counts 0.
+- Ordered operator steps now closed with live evidence: (5) Auth site URL +
+  callback config, (8) project inspection + migration reconciliation, (9)
+  logical pre/post schema backup (schema + row counts; physical `pg_dump` still
+  needs `SUPABASE_DB_URL`), (10) reviewed, ordered, additive migrations only —
+  never a blind recreate, with a `supabase_migrations` ledger and halting on
+  first failure.
+- Step (11) read-only production preflight re-ran inside the smoke workflow on
+  the same commit: deployment + source probes pass; still blocked **only** by
+  the missing GitHub-Production-environment `SUPABASE_SERVICE_ROLE_KEY`.
+  Consequently (12) `preflight_only` stays true and (13) the 250-record
+  el_paso_tx production smoke remains **not safe to run** until that secret is
+  configured and an operator dispatches the gate (my dispatch returns 403).
+- 461 Python tests pass (20 offline Supabase-management contracts, incl.
+  statement-wise halting, untrusted-write detection, repair opt-in, Auth
+  fallback casing, probe catalog checks).
