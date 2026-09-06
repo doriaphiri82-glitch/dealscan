@@ -161,3 +161,31 @@ No production-ready claim is made or implied by these changes.
 - 461 Python tests pass (20 offline Supabase-management contracts, incl.
   statement-wise halting, untrusted-write detection, repair opt-in, Auth
   fallback casing, probe catalog checks).
+- **Operator supplied both remaining server-side secrets** (2026-09-06 ~22:00Z;
+  used only inside Actions runners, names only, never values):
+  - Read-only production preflight is now fully green: **ready_for_bounded_smoke**
+    (run on `a4f3d64`, 22:18Z) — configuration passed, SUPABASE_DB_URL access
+    mapped, deployment 200 with operator-contact match, El Paso read-only source
+    probe (138,863 matching, ObjectID_1) with ingestion_authorized=false, schema
+    columns checked, public boundary verified. Step (11) closes.
+  - Physical pg_dump backup was added to the handoff workflow (schema-only +
+    counts, secret never echoed, credential-redacted, non-failing) but currently
+    reports: **connection to db.<ref>.supabase.co (IPv6), port 5432 — Network is
+    unreachable**. GitHub-hosted runners are IPv4-only. OPERATOR ACTION: replace
+    the SUPABASE_DB_URL secret with the project's **Supavisor pooler** connection
+    string (IPv4, port 6543 transaction or 5432 session mode) from the Supabase
+    dashboard Connect panel. Until then the logical schema/count snapshot
+    remains the verified surrogate (and is unaffected).
+  - The Management token began answering **HTTP 401** at 22:22Z although it was
+    valid at 21:02Z — consistent with SUPABASE_ACCESS_TOKEN being overwritten or
+    rotated during the secrets update. OPERATOR ACTION: re-store the PAT
+    (sbp_...) from supabase.com/dashboard/account/tokens. The module handles the
+    denial cleanly (blocked report, no crash, no leakage).
+- Step (12) remains as designed: `preflight_only=false` runs only via manual
+  dispatch; the sandbox token is denied dispatch rights (HTTP 403), so the
+  250-record el_paso_tx smoke stays a one-click operator action that is now
+  technically safe to launch (bounded 250, read-only preflight green, service
+  key server-side only, source authorization halting guard in main.py chain).
+- Full local sweep re-verified: 461 Python tests, 208 web tests, typecheck,
+  production build; final diff scanned — no secrets, no credentials, no debug
+  code (the four print()s are the handoff CLIs' sanitized report emitters).
