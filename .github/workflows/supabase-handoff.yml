@@ -85,7 +85,8 @@ jobs:
               fi
             else
               echo "failed_exit_$code_dump" > data/supabase-backup-status.txt
-              echo "::warning::Physical pg_dump backup failed (exit $code_dump). Full diagnosis is in the redacted error excerpt inside the run artifact; the logical schema/count snapshot remains the verified surrogate."
+              first_line=$(head -1 data/supabase-backup-error.txt | cut -c1-200 || true)
+              echo "::warning::Physical pg_dump backup failed (exit $code_dump). $first_line [redacted excerpt; full excerpt in artifact; logical snapshot remains the verified surrogate]"
             fi
           fi
       - name: Inspect, snapshot, apply reviewed ordered migrations, verify Auth
