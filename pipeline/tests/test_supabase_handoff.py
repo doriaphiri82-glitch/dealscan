@@ -149,6 +149,8 @@ class FakeMgmt:
                 raise sh.HandoffFailure('supabase_api_error (HTTP 400) for /v1/projects/ref111/database/query')
             self.applied.append(name)
             return []
+        if sql == 'select 1 as ok':
+            return [{'ok': 1}]
         queries = sh.snapshot_queries()
         for i, probe in enumerate(queries):
             if sql == probe:

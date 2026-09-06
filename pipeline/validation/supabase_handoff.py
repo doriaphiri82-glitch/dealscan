@@ -243,6 +243,22 @@ class SupabaseManagement:
             raise HandoffFailure(f'supabase_token_denied (HTTP {response.status_code})')
         return response
 
+    @staticmethod
+    def error_struct(response: requests.Response) -> dict:
+        """Only machine-shaped error codes; free-text bodies may echo SQL."""
+        try:
+            body = response.json()
+        except ValueError:
+            return {}
+        if not isinstance(body, dict):
+            return {}
+        detail = {}
+        for key in ('code', 'error', 'name'):
+            value = body.get(key)
+            if isinstance(value, (str, int)) and re.fullmatch(r'[A-Za-z0-9_.\-]{1,48}', str(value)):
+                detail[key] = str(value)
+        return detail
+
     def json(self, method: str, path: str, **kwargs):
         response = self._call(method, path, **kwargs)
         if response.status_code != 200:
@@ -261,7 +277,9 @@ class SupabaseManagement:
         # The Management query endpoint answers 201 with the row array.
         response = self._call('POST', f'/v1/projects/{ref}/database/query', json=body)
         if response.status_code not in (200, 201):
-            raise HandoffFailure(f'supabase_api_error (HTTP {response.status_code}) for /v1/projects/{ref}/database/query')
+            detail = self.error_struct(response)
+            suffix = f' {json.dumps(detail)}' if detail else ''
+            raise HandoffFailure(f'supabase_api_error (HTTP {response.status_code}) for /v1/projects/{ref}/database/query{suffix}')
         try:
             result = response.json()
         except ValueError:
@@ -328,7 +346,8 @@ def snapshot_for_report(snapshot: dict) -> dict:
             'functions': sorted(snapshot['functions']), 'triggers': sorted(snapshot['triggers']),
             'policies': sorted(snapshot['policies']), 'indexes': sorted(snapshot['indexes']),
             'ledger_present': snapshot['ledger_present'], 'counts': snapshot['counts'],
-            'function_flags': sorted(snapshot['function_flags']), 'rls_enabled': sorted(snapshot['rls_enabled'])}
+            'function_flags': sorted(snapshot['function_flags']), 'rls_enabled': sorted(snapshot['rls_enabled']),
+            **({'query_failures': snapshot['query_failures']} if snapshot.get('query_failures') else {})}
 
 
 def run_handoff(client: SupabaseManagement, ref: str, *, apply: bool, origin: str = PRODUCTION_ORIGIN) -> dict:
@@ -341,8 +360,29 @@ def run_handoff(client: SupabaseManagement, ref: str, *, apply: bool, origin: st
     names = [f.name for f in files]
 
     def take_snapshot() -> dict:
-        rows = [client.query(ref, sql) for sql in snapshot_queries()]
-        return build_snapshot(rows)
+        failures = []
+        rows = []
+        for index, sql in enumerate(snapshot_queries()):
+            try:
+                rows.append(client.query(ref, sql))
+            except HandoffFailure as exc:
+                failures.append({'query_index': index, 'reason': str(exc)})
+                rows.append([])
+        snapshot = build_snapshot(rows)
+        if failures:
+            snapshot['query_failures'] = failures
+        return snapshot
+
+    try:
+        client.query(ref, 'select 1 as ok')
+        checks['query_endpoint'] = {'status': 'passed'}
+    except HandoffFailure as exc:
+        checks['query_endpoint'] = {'status': 'failed', 'reason': str(exc)}
+        return {'status': 'blocked', 'scope': 'supabase_management_handoff',
+                'checked_at': datetime.now(timezone.utc).isoformat(), 'commit': os.getenv('GITHUB_SHA'),
+                'project_ref': ref, 'checks': checks, 'migrations_applied_this_run': [], 'failure': str(exc),
+                'note': 'The Management query endpoint is required for schema inspection. '
+                        'Grant/retry with SUPABASE_DB_URL operator access for psql fallback.'}
 
     before = take_snapshot()
     checks['schema_before'] = snapshot_for_report(before)
@@ -379,19 +419,24 @@ def run_handoff(client: SupabaseManagement, ref: str, *, apply: bool, origin: st
     checks['application'] = application
     checks['schema_contract'] = required_columns_status(final_snapshot)
 
-    raw_config = client.json('GET', f'/v1/projects/{ref}/config/auth')
-    config = sanitize_auth_config(raw_config)
-    verdict = auth_verdict(config, origin)
-    if verdict['status'] != 'passed' and apply:
-        body = auth_fix_body(config, origin)
-        if body:
-            response = client._call('PATCH', f'/v1/projects/{ref}/config/auth', json=body)
-            if response.status_code == 200:
-                config = sanitize_auth_config(client.json('GET', f'/v1/projects/{ref}/config/auth'))
-                verdict = {**auth_verdict(config, origin), 'fix_applied': True}
-            else:
-                verdict['fix'] = {'status': 'failed', 'http_status': response.status_code}
-    checks['auth'] = verdict
+    try:
+        raw_config = client.json('GET', f'/v1/projects/{ref}/config/auth')
+    except HandoffFailure as exc:
+        checks['auth'] = {'status': 'failed', 'reason': str(exc)}
+        raw_config = None
+    else:
+        config = sanitize_auth_config(raw_config)
+        verdict = auth_verdict(config, origin)
+        if verdict['status'] != 'passed' and apply:
+            body = auth_fix_body(config, origin)
+            if body:
+                response = client._call('PATCH', f'/v1/projects/{ref}/config/auth', json=body)
+                if response.status_code == 200:
+                    config = sanitize_auth_config(client.json('GET', f'/v1/projects/{ref}/config/auth'))
+                    verdict = {**auth_verdict(config, origin), 'fix_applied': True}
+                else:
+                    verdict['fix'] = {'status': 'failed', 'http_status': response.status_code}
+        checks['auth'] = verdict
 
     reconciled = not checks['reconciliation']['pending'] and not checks['reconciliation']['inconsistent']
     healthy = (reconciled and checks['schema_contract']['status'] == 'passed'
