@@ -398,12 +398,17 @@ def snapshot_queries() -> list[str]:
         f"and table_name in ({table_list}) order by 1,2",
         "select p.proname as name from pg_proc p join pg_namespace n on n.oid=p.pronamespace "
         "where n.nspname='public' order by 1",
-        "select distinct trigger_name as name from information_schema.triggers where trigger_schema='public' order by 1",
+        # information_schema.triggers is privilege-filtered and came back EMPTY on the live
+        # project while pg_trigger held all 15 triggers; read the catalog instead.
+        "select t.tgname as name from pg_trigger t join pg_class c on t.tgrelid=c.oid "
+        "join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and not t.tgisinternal order by 1",
         "select distinct policyname as name from pg_policies where schemaname='public' order by 1",
         f"select indexname as name from pg_indexes where schemaname='public' and tablename in ({table_list}) order by 1",
         "select to_regclass('" + LEDGER + "') is not null as exists",
         f"select {counts_select}",
-        "select pg_get_functiondef('public.set_updated_at()'::regprocedure) like '%set search_path%' as hardened",
+        # pg_get_functiondef renders the option as 'SET search_path TO ...' (uppercase),
+        # so the case-sensitive LIKE could never match.
+        "select pg_get_functiondef('public.set_updated_at()'::regprocedure) ilike '%set search_path%' as hardened",
         "select relname as name, relrowsecurity as enabled from pg_class c join pg_namespace n on n.oid=c.relnamespace "
         f"where n.nspname='public' and relname in ({table_list}) order by 1",
     ]

@@ -476,3 +476,12 @@ def test_catalog_cross_check_and_write_diary_are_evidence():
     diary = report['checks']['application']['non_empty_or_non_list_write_responses']
     assert diary == [{'file': target, 'statement': '3/25', 'diag': diag}]
     assert report['status'] == 'supabase_verified'  # a stray body shape alone does not block
+
+
+def test_probes_read_real_catalogs_case_insensitively():
+    probes = sh.snapshot_queries()
+    trigger_probe = [p for p in probes if 'tgname' in p or 'information_schema.triggers' in p]
+    assert len(trigger_probe) == 1 and 'pg_trigger' in trigger_probe[0]
+    assert 'information_schema.triggers' not in trigger_probe[0]
+    hardened = [p for p in probes if 'pg_get_functiondef' in p]
+    assert len(hardened) == 1 and 'ilike' in hardened[0]
