@@ -73,3 +73,32 @@ about five seconds**; cross-scheme origins returned 403 and the admin endpoint
 returned 401 without a session. No valid signup or production write was attempted.
 Previously documented cloud-access limitations were deferred while code work
 continued; no production-ready claim is made.
+
+
+## Session continuation — `arena/01a0759b-dealscan`
+
+Resumed after PR #10 merged as `afee487` (`main`). HEAD was verified to equal
+`origin/main` exactly before any change; no rebuild or architecture replacement.
+
+- Re-verified the merged baseline in this sandbox: **421 Python tests passed**
+  (locked Python 3.11 venv), **208 web/database tests passed**, `compileall`,
+  typecheck, production build and `npm audit` (**0 vulnerabilities**).
+- Retargeted the read-only readiness push trigger in
+  `.github/workflows/production-smoke.yml` from the closed session branch
+  `arena/01a072f4-dealscan` to this session's branch so fresh pushes produce
+  current read-only readiness evidence. The write step remains
+  `workflow_dispatch + preflight_only=false`; the workflow permissions,
+  concurrency lock and environment gating are unchanged. The pinning test in
+  `pipeline/tests/test_cli_integrity.py` and the runbook paragraph were updated
+  together.
+- Recreated `docs/post-merge-status.md` (the prior local-only note was never
+  pushed) with this session's sandbox-verified results, GitHub-observed
+  readiness evidence, operator-reported production state and remaining
+  operator actions.
+- Re-confirmed blockers instead of stopping: secret/variable management and
+  manual workflow dispatch return HTTP 403; sandbox TLS to Vercel/ArcGIS/GitHub
+  blob hosts fails; no Supabase/Vercel credentials exist in this environment.
+  Actual production migrations, persistence and the el_paso_tx 250-record smoke
+  remain externally blocked, and scheduled ingestion stays disabled.
+
+No production-ready claim is made or implied by these changes.

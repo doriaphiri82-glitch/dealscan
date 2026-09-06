@@ -3,8 +3,9 @@ name: dealscan-production-smoke
 on:
   # Read-only handoff evidence for this trusted session branch. This trigger
   # cannot select the write step and still honors environment protection rules.
+  # Each new Arena session branch retargets this pin to itself explicitly.
   push:
-    branches: ['arena/01a072f4-dealscan']
+    branches: ['arena/01a0759b-dealscan']
   workflow_dispatch:
     inputs:
       county_id:
