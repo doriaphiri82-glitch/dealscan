@@ -1,0 +1,60 @@
+name: dealscan-vercel-handoff
+
+on:
+  # Evidence + idempotent main promotion for this trusted session branch. The
+  # only mutating step promotes an already-built READY deployment whose commit
+  # equals origin/main (obtained live via ls-remote); it can never select the
+  # pushed branch or any unreviewed commit. Environment protection rules still
+  # apply. The operator authorized this exact promotion in the handoff request.
+  push:
+    branches: ['arena/01a0759b-dealscan']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dealscan-vercel-handoff
+  cancel-in-progress: false
+
+jobs:
+  handoff:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: pipeline
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: pipeline/requirements.lock.txt
+      - name: Install dependencies
+        run: pip install -r requirements.lock.txt
+      - name: Resolve the reviewed main commit
+        working-directory: .
+        id: main
+        run: |
+          sha="$(git ls-remote origin refs/heads/main | cut -f1)"
+          echo "Reading refs/heads/main only: reviewed=$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Inspect, promote-to-main if stale, and verify the live runtime
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          REVIEWED_MAIN_SHA: ${{ steps.main.outputs.sha }}
+        run: |
+          python -m validation.vercel_handoff --project dealscan \
+            --alias "https://dealscan-omega.vercel.app" \
+            --main-sha "$REVIEWED_MAIN_SHA" --promote \
+            --report-file data/vercel-handoff.json
+      - name: Upload minimized handoff summary
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24
+        with:
+          name: vercel-handoff-${{ github.run_id }}
+          path: pipeline/data/vercel-handoff.json
+          if-no-files-found: warn
+          retention-days: 7
