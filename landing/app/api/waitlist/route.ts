@@ -2,49 +2,43 @@ import { createHmac } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { privateRpc, privateSupabaseConfig } from '@/lib/supabase-private'
 import { supportContact } from '@/lib/support'
+import { readJsonBody, RequestBodyError } from '@/lib/request-body'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
+export const maxDuration = 15
 const headers = { 'Cache-Control': 'no-store' }
 const MAX_BODY = 2048
 const emailPattern = /^[^\s@<>"\\]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i
 
-async function boundedBody(request: NextRequest): Promise<unknown> {
-  const reader = request.body?.getReader()
-  if (!reader) throw new Error('Invalid request')
-  const chunks: Uint8Array[] = []
-  let length = 0
+function sameOrigin(request:NextRequest):boolean {
   try {
-    for (;;) {
-      const { value, done } = await reader.read()
-      if (done) break
-      length += value.byteLength
-      if (length > MAX_BODY) { await reader.cancel(); throw new Error('Too large') }
-      chunks.push(value)
-    }
-  } finally { reader.releaseLock() }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
+    const header=request.headers.get('origin')||''
+    const origin=new URL(header)
+    const incoming=new URL(request.url)
+    const host=request.headers.get('host')||incoming.host
+    const previewHost=new URL('https://'+host).hostname.toLowerCase()
+    // Known deployment proxies terminate TLS before forwarding to Next. Do not
+    // trust a caller-supplied forwarded-protocol header as an origin override.
+    const protocol=process.env.VERCEL==='1'||previewHost.endsWith('.e2b.app')?'https:':incoming.protocol
+    const expected=new URL(protocol+'//'+host)
+    return ['https:','http:'].includes(origin.protocol) && header===origin.origin
+      && !expected.username && !expected.password && !expected.search && !expected.hash && expected.pathname==='/' && origin.origin===expected.origin
+  } catch {return false}
 }
 
 export async function POST(request: NextRequest) {
   // JSON + same-origin browser requests; never accept a cross-site HTML form.
-  const origin = request.headers.get('origin')
-  try {
-    if (!origin || new URL(origin).host !== request.headers.get('host') && origin !== request.nextUrl.origin) throw new Error()
-    if (!['https:', 'http:'].includes(new URL(origin).protocol)) throw new Error()
-  } catch { return NextResponse.json({ error: 'Same-origin request required' }, { status: 403, headers }) }
-  if (request.headers.get('content-type')?.split(';')[0].trim() !== 'application/json') {
+  if(!sameOrigin(request))return NextResponse.json({error:'Same-origin request required'},{status:403,headers})
+  if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
     return NextResponse.json({ error: 'JSON request required' }, { status: 415, headers })
-  }
-  if (Number(request.headers.get('content-length')) > MAX_BODY) {
-    return NextResponse.json({ error: 'Request too large' }, { status: 413, headers })
   }
   let input: Record<string, unknown>
   try {
-    const value = await boundedBody(request)
+    const value = await readJsonBody(request,MAX_BODY,5000)
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error()
     input = value as Record<string, unknown>
-  } catch { return NextResponse.json({ error: 'Invalid or oversized request' }, { status: 400, headers }) }
+  } catch(error) { return NextResponse.json({ error: error instanceof RequestBodyError?error.message:'Invalid request' }, { status: error instanceof RequestBodyError?error.status:400, headers }) }
   const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : ''
   if (!email || email.length > 254 || !emailPattern.test(email) || email.split('@')[0].length > 64) {
     return NextResponse.json({ error: 'Please enter a valid email address.' }, { status: 400, headers })

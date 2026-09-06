@@ -71,7 +71,7 @@ it('rejects cross-origin and form-based signup attempts', async () => {
 
 it('caps streamed bodies even without a declared content length', async () => {
   const fetch = vi.fn(); vi.stubGlobal('fetch', fetch)
-  expect((await POST(request({ email: 'x'.repeat(10000) }))).status).toBe(400)
+  expect((await POST(request({ email: 'x'.repeat(10000) }))).status).toBe(413)
   expect(fetch).not.toHaveBeenCalled()
 })
 
@@ -95,5 +95,29 @@ it('does not mix one project auth with a different private database',async()=>{
   vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL','https://different.example')
   const fetch=vi.fn();vi.stubGlobal('fetch',fetch)
   expect((await POST(request())).status).toBe(503)
+  expect(fetch).not.toHaveBeenCalled()
+})
+
+
+it.each(['http://app.example','https://app.example/path','https://user@app.example','https://app.example?extra=1','null'])('rejects non-origin and cross-scheme origin headers: %s',async origin=>{
+  const fetch=vi.fn();vi.stubGlobal('fetch',fetch)
+  expect((await POST(request(undefined,{origin,host:'app.example'}))).status).toBe(403)
+  expect(fetch).not.toHaveBeenCalled()
+})
+
+it('accepts the HTTPS preview host without trusting an injected forwarded protocol',async()=>{
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json(true)))
+  const send=(origin:string)=>new NextRequest('http://0.0.0.0:3000/api/waitlist',{method:'POST',
+    headers:{origin,host:'3000-example.e2b.app','content-type':'application/json','x-forwarded-proto':'http'},
+    body:JSON.stringify({email:'person@example.com',consent:true})})
+  expect((await POST(send('https://3000-example.e2b.app'))).status).toBe(202)
+  expect((await POST(send('http://3000-example.e2b.app'))).status).toBe(403)
+})
+
+it('rejects invalid UTF-8 before invoking private storage',async()=>{
+  const fetch=vi.fn();vi.stubGlobal('fetch',fetch)
+  const body=new Uint8Array([...new TextEncoder().encode('{"email":"'),0xff,...new TextEncoder().encode('@example.com","consent":true}')])
+  const incoming=new NextRequest('https://app.example/api/waitlist',{method:'POST',headers:{origin:'https://app.example','content-type':'application/json'},body})
+  expect((await POST(incoming)).status).toBe(400)
   expect(fetch).not.toHaveBeenCalled()
 })
