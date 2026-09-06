@@ -100,5 +100,12 @@ Resumed after PR #10 merged as `afee487` (`main`). HEAD was verified to equal
   blob hosts fails; no Supabase/Vercel credentials exist in this environment.
   Actual production migrations, persistence and the el_paso_tx 250-record smoke
   remain externally blocked, and scheduled ingestion stays disabled.
+- The retargeted push trigger produced fresh read-only readiness evidence on
+  commit `adff79f` (2026-09-06T07:38:56Z): production health now responds with
+  an honest 503 (web app lacks public Supabase env) instead of the earlier
+  middleware crash; the Production environment now supplies `SUPABASE_URL` and
+  a public key, with only `SUPABASE_SERVICE_ROLE_KEY` still missing; the El
+  Paso read-only source probe passed again unchanged; no writes or ingestion
+  were attempted. CI passed on-branch and on PR #11.
 
 No production-ready claim is made or implied by these changes.

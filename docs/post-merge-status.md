@@ -24,13 +24,28 @@ authorization or deployment success.
 
 - Merge CI on `main` (`afee487`) succeeded:
   https://github.com/doriaphiri82-glitch/dealscan/actions/runs/34016161996
-- Last read-only readiness annotation (prior branch, commit `837aef9`,
-  2026-09-06T06:10:25Z): configuration **failed** — `SUPABASE_URL`,
-  `SUPABASE_SERVICE_ROLE_KEY` and a public Supabase key still not supplied;
-  deployment **failed** (HTTP 500 at that time); source probe **passed**
-  (El Paso query `legal_acreage > 0 AND imprv_val = 0`, 138,863 matching
-  records, 5 samples across 3 pages, object-ID field `ObjectID_1`);
-  database/public boundary **not checked**; ingestion **not attempted**.
+- Fresh read-only readiness on this branch, commit `adff79f`,
+  2026-09-06T07:38:56Z (run 34019687589, Check annotation retargeted push
+  trigger working as intended):
+  - **configuration: failed** — now missing **only** `SUPABASE_SERVICE_ROLE_KEY`.
+    `SUPABASE_URL` and a public Supabase key are present in the Production
+    environment, so secret configuration has begun since the previous run.
+  - **deployment: failed, HTTP 503** `deployed_health_unavailable` — the
+    runner now reaches the deployed application (the earlier HTTP 500 /
+    middleware crash is gone); production health returns 503 because the web
+    app still has no public Supabase configuration.
+  - **source: passed** (read-only technical probe, unchanged): El Paso query
+    `legal_acreage > 0 AND imprv_val = 0`, 138,863 matching records,
+    5 samples across 3 pages, object-ID field `ObjectID_1`,
+    `ingestion_authorized:false`.
+  - **database / public_boundary: not checked** (service key missing);
+    `production_writes_performed:false`; `ingestion_status:"not_attempted"`.
+- CI on this branch and its PR passed:
+  https://github.com/doriaphiri82-glitch/dealscan/actions/runs/34019687689 and
+  https://github.com/doriaphiri82-glitch/dealscan/actions/runs/34019725407.
+- Previous readiness annotation (prior branch, commit `837aef9`,
+  2026-09-06T06:10:25Z) reported all three required secrets missing and the
+  deployment at HTTP 500; that is superseded by the fresh run above.
 - `Production` environment still has **no protection rules** and no branch
   policy restriction (read via API, 2 environments exist).
 - Legacy `county-source-smoke` workflow references
@@ -64,13 +79,15 @@ a passing source probe is not deployment verification.
 
 Per `docs/production-runbook.md` and `docs/production-handoff.md`:
 
-1. Supply matching `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and a public
-   `SUPABASE_PUBLISHABLE_KEY`/`SUPABASE_ANON_KEY` in the GitHub **Production**
-   environment or repository Actions secrets; add environment protection rules.
-2. In Vercel: root `landing`, Node 22, matching `NEXT_PUBLIC_SUPABASE_URL`/
-   `NEXT_PUBLIC_SUPABASE_ANON_KEY`, separate server-only Supabase secrets,
-   `WAITLIST_CONTACT_EMAIL=doriaphiri82@gmail.com` (already in versioned
-   `vercel.json`), and Supabase Auth site/callback URLs for
+1. Supply the still-missing matching `SUPABASE_SERVICE_ROLE_KEY` in the GitHub
+   **Production** environment (`SUPABASE_URL` and a public key appear to be
+   supplied already per the 07:38Z readiness run) and add environment
+   protection rules before any write-enabled dispatch.
+2. In Vercel: verify root `landing`, Node 22, and set the matching
+   `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY` (production
+   health currently 503s for lack of them), plus separate server-only Supabase
+   secrets, `WAITLIST_CONTACT_EMAIL=doriaphiri82@gmail.com` (already in
+   versioned `vercel.json`), and Supabase Auth site/callback URLs for
    `https://dealscan-omega.vercel.app`.
 3. Back up/inspect the real Supabase schema, then apply the unapplied ordered
    migrations in `supabase/migrations/` before any ingestion.
