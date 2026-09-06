@@ -48,7 +48,7 @@ jobs:
         run: |
           python -m validation.vercel_handoff --project dealscan \
             --alias "https://dealscan-omega.vercel.app" \
-            --main-sha "$REVIEWED_MAIN_SHA" --promote \
+            --main-sha "$REVIEWED_MAIN_SHA" --promote --fix-config \
             --report-file data/vercel-handoff.json
       - name: Upload minimized handoff summary
         if: always()

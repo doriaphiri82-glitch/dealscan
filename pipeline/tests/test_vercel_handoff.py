@@ -103,13 +103,16 @@ def test_client_requires_token_and_hides_denial_bodies(monkeypatch):
 
 
 class FakeClient:
-    def __init__(self, *, env_keys, prod, recent, promote_status=200):
+    def __init__(self, *, env_keys, prod, recent, promote_status=200, node='22.x', patch_status=200):
         self._env = env_keys; self._prod = prod; self._recent = recent
         self.promotions = []; self._promote_status = promote_status
+        self._patch_status = patch_status
+        self.patches = []
+        self._project = {'id': 'p1', 'name': 'dealscan', 'rootDirectory': 'landing',
+                         'framework': 'nextjs', 'nodeVersion': node}
 
     def resolve_project(self, name):
-        return {'id': 'p1', 'name': 'dealscan', 'rootDirectory': 'landing',
-                'framework': 'nextjs', 'nodeVersion': '22.x'}, 'team-slug'
+        return self._project, 'team-slug'
 
     def json(self, method, path, **kwargs):
         if '/env' in path:
@@ -124,8 +127,23 @@ class FakeClient:
         raise AssertionError(path)
 
     def _call(self, method, path, **kwargs):
+        if method == 'PATCH':
+            self.patches.append((path, kwargs.get('json')))
+            if self._patch_status in (200, 201):
+                self._project.update(kwargs.get('json') or {})
+            return response(self._patch_status, {'ok': True})
         self.promotions.append(path.rsplit('/', 1)[-1])
         return response(self._promote_status, {'ok': True})
+
+
+def vercel_json(tmp_path, contact=vh.EXPECTED_CONTACT, with_build=True):
+    import json as _json
+    config = {'env': {'WAITLIST_CONTACT_EMAIL': contact}}
+    if with_build:
+        config['build'] = {'env': {'WAITLIST_CONTACT_EMAIL': contact}}
+    path = tmp_path / 'vercel.json'
+    path.write_text(_json.dumps(config))
+    return path
 
 
 def live_response(mapping):
@@ -209,3 +227,78 @@ def test_handoff_refuses_wrong_root_and_promotion_failure(monkeypatch):
     monkeypatch.setattr(vh, '_public_get', live_response({origin + '/': (200, None, '')}))
     with pytest.raises(vh.HandoffFailure, match='vercel_promotion_failed'):
         vh.run_handoff(client, 'dealscan', origin, SHA, promote=True)
+
+
+def live_ok(monkeypatch, origin, health=(200, {'database': 'ok'})):
+    monkeypatch.setattr(vh, '_public_get', live_response({
+        origin + '/': (200, None, '<html></html>'),
+        origin + '/privacy': (200, None, 'mailto:' + vh.EXPECTED_CONTACT),
+        origin + '/api/health': (health[0], health[1], '')}))
+
+
+def test_config_provided_env_contract(tmp_path):
+    provided = vh.config_provided_env(vercel_json(tmp_path))
+    assert set(provided) == {'WAITLIST_CONTACT_EMAIL'}
+    assert provided['WAITLIST_CONTACT_EMAIL'].endswith('vercel.json')
+    assert vh.config_provided_env(vercel_json(tmp_path, contact='someone-else@example.com')) == {}
+    assert vh.config_provided_env(vercel_json(tmp_path, with_build=False)) == {}
+    assert vh.config_provided_env(tmp_path / 'does-not-exist.json') == {}
+    assert vh.config_provided_env(None) == {}
+
+
+def test_config_provided_contact_satisfies_only_the_operator_key():
+    rows = vh.sanitize_env([env_item(key) for key in (*vh.REQUIRED_PUBLIC_ENV, *vh.REQUIRED_SERVER_ENV)])
+    status = vh.required_env_status(rows, config_provided={'WAITLIST_CONTACT_EMAIL': 'vercel.json',
+                                                           'SUPABASE_SERVICE_ROLE_KEY': 'must-not-count'})
+    assert status['status'] == 'passed'
+    assert status['satisfied_via_config'] == {'WAITLIST_CONTACT_EMAIL': 'vercel.json'}
+    assert 'SUPABASE_SERVICE_ROLE_KEY' in status['present']
+
+
+def test_config_fix_actions_only_flags_documented_settings():
+    assert vh.config_fix_actions({'nodeVersion': '24.x'}) == {'nodeVersion': {'from': '24.x', 'to': '22.x'}}
+    assert vh.config_fix_actions({'nodeVersion': '22.x'}) == {}
+    assert vh.config_fix_actions({'nodeVersion': None}) == {}
+    assert vh.config_fix_actions({'rootDirectory': 'wrong', 'nodeVersion': '22.x'}) == {}
+
+
+def test_handoff_applies_documented_node_fix(monkeypatch, tmp_path):
+    dep = raw_dep('d1', SHA)
+    client = FakeClient(env_keys=[*vh.REQUIRED_PUBLIC_ENV, *vh.REQUIRED_SERVER_ENV],
+                        prod=dict(dep), recent=[dict(dep)], node='24.x')
+    origin = 'https://dealscan-omega.vercel.app'
+    live_ok(monkeypatch, origin)
+    report = vh.run_handoff(client, 'dealscan', origin, SHA, promote=False, fix_config=True,
+                            config_env=vercel_json(tmp_path))
+    assert client.patches == [('/v9/projects/p1', {'nodeVersion': '22.x'})]
+    assert report['checks']['config_fix']['status'] == 'applied'
+    assert report['checks']['config_fix']['verified'] is True
+    assert report['checks']['project']['node_version'] == '22.x'
+    assert report['checks']['environment']['satisfied_via_config']['WAITLIST_CONTACT_EMAIL']
+    assert report['status'] == 'handoff_verified'
+
+
+def test_handoff_reports_rejected_config_fix(monkeypatch, tmp_path):
+    dep = raw_dep('d1', SHA)
+    client = FakeClient(env_keys=[*vh.REQUIRED_PUBLIC_ENV, *vh.REQUIRED_SERVER_ENV],
+                        prod=dict(dep), recent=[dict(dep)], node='24.x', patch_status=400)
+    origin = 'https://dealscan-omega.vercel.app'
+    live_ok(monkeypatch, origin)
+    report = vh.run_handoff(client, 'dealscan', origin, SHA, promote=False, fix_config=True,
+                            config_env=vercel_json(tmp_path))
+    assert report['checks']['config_fix']['status'] == 'failed'
+    assert report['checks']['project']['node_version'] == '24.x'
+    assert report['status'] == 'blocked'
+
+
+def test_handoff_flags_fix_without_enablement(monkeypatch, tmp_path):
+    dep = raw_dep('d1', SHA)
+    client = FakeClient(env_keys=[*vh.REQUIRED_PUBLIC_ENV, *vh.REQUIRED_SERVER_ENV],
+                        prod=dict(dep), recent=[dict(dep)], node='24.x')
+    origin = 'https://dealscan-omega.vercel.app'
+    live_ok(monkeypatch, origin)
+    report = vh.run_handoff(client, 'dealscan', origin, SHA, promote=False, fix_config=False,
+                            config_env=vercel_json(tmp_path))
+    assert client.patches == []
+    assert report['checks']['config_fix']['status'] == 'needed'
+    assert report['status'] == 'blocked'

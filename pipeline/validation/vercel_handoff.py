@@ -25,9 +25,16 @@ EXPECTED_ROOT = 'landing'
 EXPECTED_NODE = '22.x'
 # Mirrors production_preflight: the operator-provided public contact, not a credential.
 EXPECTED_CONTACT = 'doriaphiri82@gmail.com'
+# Version-controlled runtime configuration that legitimately satisfies an
+# environment requirement without a dashboard entry (vercel.json `env`).
+CONFIG_ENV_FILE = Path(__file__).resolve().parents[2] / 'landing' / 'vercel.json'
+_CONFIG_ENV_KEYS = ('WAITLIST_CONTACT_EMAIL',)
 _ENV_ALLOWLIST = ('key', 'target', 'type')
 _PROJECT_ALLOWLIST = ('id', 'name', 'framework', 'rootDirectory', 'buildCommand',
                       'installCommand', 'outputDirectory', 'nodeVersion')
+# Only a same-value boolean flip/to an expected string setting; never arbitrary
+# project mutations. Currently exactly one documented setting is aligned.
+FIXABLE_PROJECT_SETTINGS = {'nodeVersion': EXPECTED_NODE}
 _TIMEOUT = (5, 20)
 
 
@@ -62,16 +69,44 @@ def sanitize_env(items: object) -> list[dict]:
     return out
 
 
-def required_env_status(items: list[dict], *, target: str = 'production') -> dict:
+def config_provided_env(path: Path | None = CONFIG_ENV_FILE, *,
+                        contact: str = EXPECTED_CONTACT) -> dict:
+    """Versioned vercel.json env that satisfies requirements at build/runtime.
+
+    Only exact operator-approved values count; a wrong value is treated as
+    missing so the dashboard entry remains required.
+    """
+    provided = {}
+    if path is None:
+        return provided
+    try:
+        config = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return provided
+    if not isinstance(config, dict):
+        return provided
+    for key in _CONFIG_ENV_KEYS:
+        value = (config.get('env') or {}).get(key) if isinstance(config.get('env'), dict) else None
+        if key == 'WAITLIST_CONTACT_EMAIL' and value == contact \
+                and (config.get('build') or {}).get('env', {}).get(key) == value:
+            provided[key] = str(path.relative_to(path.parents[1]))
+    return provided
+
+
+def required_env_status(items: list[dict], *, target: str = 'production',
+                        config_provided: dict | None = None) -> dict:
     """Which required variables exist for the target, by name only."""
     present = {}
     for item in items:
         key = item.get('key')
         if isinstance(key, str) and target in (item.get('target') or []):
             present[key] = item.get('type')
+    config_provided = {key: value for key, value in (config_provided or {}).items()
+                       if key in REQUIRED_OPERATOR_ENV}
     required = [*REQUIRED_PUBLIC_ENV, *REQUIRED_SERVER_ENV, *REQUIRED_OPERATOR_ENV]
-    missing = [key for key in required if key not in present]
+    missing = [key for key in required if key not in present and key not in config_provided]
     return {'target': target, 'present': sorted(present), 'missing': missing,
+            'satisfied_via_config': config_provided,
             'status': 'passed' if not missing else 'failed'}
 
 
@@ -109,6 +144,17 @@ def promotion_decision(main_sha: str | None, production: dict, ready: list[dict]
                     'current_production_commit': prod_sha if isinstance(prod_sha, str) else None}
     return {'action': 'blocked', 'reason': 'no_ready_deployment_for_reviewed_main',
             'commit': main_sha, 'current_production_commit': prod_sha if isinstance(prod_sha, str) else None}
+
+
+def config_fix_actions(project: dict) -> dict:
+    """Bounded, reversible project-settings alignment to the tested contract."""
+    actions = {}
+    for setting, expected in FIXABLE_PROJECT_SETTINGS.items():
+        actual = project.get(setting)
+        # An absent setting is governed by package.json engines, not patched.
+        if actual is not None and actual != expected:
+            actions[setting] = {'from': actual, 'to': expected}
+    return actions
 
 
 def health_verdict(status_code: int, body: object) -> dict:
@@ -182,7 +228,7 @@ def _public_get(url: str) -> requests.Response:
 
 
 def run_handoff(client: VercelClient, project_name: str, alias: str, main_sha: str | None,
-                *, promote: bool) -> dict:
+                *, promote: bool, fix_config: bool = False, config_env: Path | None = CONFIG_ENV_FILE) -> dict:
     checks = {}
     origin = https_origin(alias, name='Production alias')
     info, team = client.resolve_project(project_name)
@@ -191,6 +237,22 @@ def run_handoff(client: VercelClient, project_name: str, alias: str, main_sha: s
     if not isinstance(project_id, str):
         raise HandoffFailure('vercel_project_id_missing')
     params = {'slug': team} if team else {}
+    fix = config_fix_actions(project)
+    if fix and fix_config:
+        fix_result = {'status': 'applied', 'settings': fix}
+        response = client._call('PATCH', f'/v9/projects/{project_id}', params=params,
+                                json={key: action['to'] for key, action in fix.items()})
+        if response.status_code not in (200, 201):
+            fix_result = {'status': 'failed', 'http_status': response.status_code, 'settings': fix,
+                          'note': 'Align the project setting in the Vercel dashboard instead'}
+        else:
+            info, _ = client.resolve_project(project_name)
+            project = sanitize_project(info)
+            fix_result['verified'] = not config_fix_actions(project)
+        checks['config_fix'] = fix_result
+    elif fix:
+        checks['config_fix'] = {'status': 'needed', 'settings': fix,
+                                'note': 'Run with --fix-config or align the setting in the Vercel dashboard'}
     checks['project'] = {'status': 'passed', 'team': team, **project}
     checks['project']['root_directory_matches'] = project.get('rootDirectory') == EXPECTED_ROOT
     node = project.get('nodeVersion')
@@ -200,7 +262,7 @@ def run_handoff(client: VercelClient, project_name: str, alias: str, main_sha: s
     checks['project']['node_version_matches'] = node in (None, EXPECTED_NODE)
 
     env_rows = sanitize_env(client.json('GET', f'/v9/projects/{project_id}/env', params={**params, 'limit': '100'}).get('envs', []))
-    checks['environment'] = required_env_status(env_rows)
+    checks['environment'] = required_env_status(env_rows, config_provided=config_provided_env(config_env))
 
     deployments = client.json('GET', '/v6/deployments',
         params={**params, 'projectId': project_id, 'target': 'production', 'limit': '5'}).get('deployments', [])
@@ -255,8 +317,7 @@ def run_handoff(client: VercelClient, project_name: str, alias: str, main_sha: s
         live['/api/health'] = {'status': 'failed', 'reason': str(exc)}
     checks['live'] = live
 
-    node = checks['project'].get('node_version')
-    passed = (checks['project']['root_directory_matches'] and node in (None, EXPECTED_NODE)
+    passed = (checks['project']['root_directory_matches'] and checks['project']['node_version_matches']
               and checks['environment']['status'] == 'passed'
               and checks['production'].get('status') == 'passed'
               and checks['production'].get('commit') == main_sha
@@ -276,12 +337,14 @@ def main(argv=None) -> int:
     parser.add_argument('--main-sha', default=os.getenv('REVIEWED_MAIN_SHA', ''))
     parser.add_argument('--promote', action='store_true',
                         help='Allow the idempotent promote-to-reviewed-main step (operator authorized)')
+    parser.add_argument('--fix-config', action='store_true',
+                        help='Align documented project settings (e.g. Node 22.x) to the tested contract')
     parser.add_argument('--report-file', required=True)
     args = parser.parse_args(argv)
     try:
         client = VercelClient(os.getenv('VERCEL_TOKEN', ''))
         report = run_handoff(client, args.project, args.alias, args.main_sha.strip().lower() or None,
-                             promote=args.promote)
+                             promote=args.promote, fix_config=args.fix_config)
     except HandoffFailure as exc:
         report = {'status': 'blocked', 'scope': 'vercel_runtime_inspection',
                   'checked_at': datetime.now(timezone.utc).isoformat(),
