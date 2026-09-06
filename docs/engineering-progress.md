@@ -73,3 +73,119 @@ about five seconds**; cross-scheme origins returned 403 and the admin endpoint
 returned 401 without a session. No valid signup or production write was attempted.
 Previously documented cloud-access limitations were deferred while code work
 continued; no production-ready claim is made.
+
+
+## Session continuation — `arena/01a0759b-dealscan`
+
+Resumed after PR #10 merged as `afee487` (`main`). HEAD was verified to equal
+`origin/main` exactly before any change; no rebuild or architecture replacement.
+
+- Re-verified the merged baseline in this sandbox: **421 Python tests passed**
+  (locked Python 3.11 venv), **208 web/database tests passed**, `compileall`,
+  typecheck, production build and `npm audit` (**0 vulnerabilities**).
+- Retargeted the read-only readiness push trigger in
+  `.github/workflows/production-smoke.yml` from the closed session branch
+  `arena/01a072f4-dealscan` to this session's branch so fresh pushes produce
+  current read-only readiness evidence. The write step remains
+  `workflow_dispatch + preflight_only=false`; the workflow permissions,
+  concurrency lock and environment gating are unchanged. The pinning test in
+  `pipeline/tests/test_cli_integrity.py` and the runbook paragraph were updated
+  together.
+- Recreated `docs/post-merge-status.md` (the prior local-only note was never
+  pushed) with this session's sandbox-verified results, GitHub-observed
+  readiness evidence, operator-reported production state and remaining
+  operator actions.
+- Re-confirmed blockers instead of stopping: secret/variable management and
+  manual workflow dispatch return HTTP 403; sandbox TLS to Vercel/ArcGIS/GitHub
+  blob hosts fails; no Supabase/Vercel credentials exist in this environment.
+  Actual production migrations, persistence and the el_paso_tx 250-record smoke
+  remain externally blocked, and scheduled ingestion stays disabled.
+- The retargeted push trigger produced fresh read-only readiness evidence on
+  commit `adff79f` (2026-09-06T07:38:56Z): production health now responds with
+  an honest 503 (web app lacked public Supabase env) instead of the earlier
+  middleware crash; the Production environment then supplied `SUPABASE_URL` and
+  a public key, with only `SUPABASE_SERVICE_ROLE_KEY` still missing; the El
+  Paso read-only source probe passed again unchanged; no writes or ingestion
+  were attempted. CI passed on-branch and on PR #11.
+- **Vercel handoff (operator task, completed via runner):** with `VERCEL_TOKEN`
+  in GitHub secrets, `pipeline/validation/vercel_handoff.py` and the
+  `dealscan-vercel-handoff` workflow verified from the runner (16:59Z,
+  `handoff_verified`): root `landing`, Node aligned 24.x→**22.x** via one
+  documented PATCH (verified on re-read), all four Supabase production env vars
+  present plus the versioned `vercel.json` contact, production deployment READY
+  at the exact `main` HEAD (`afee487`), and live `/`, `/privacy` (contact
+  match) and `/api/health` (`database:ok`). The idempotent main-promotion path
+  exists but was a no-op. Preflight deployment + source checks pass; full
+  preflight stays blocked only on the GitHub-side `SUPABASE_SERVICE_ROLE_KEY`,
+  and `preflight_only` remains true. 440 Python tests pass.
+
+No production-ready claim is made or implied by these changes.
+- **Supabase handoff (operator task, completed via runner):** with
+  `SUPABASE_ACCESS_TOKEN` in GitHub secrets, `pipeline/validation/supabase_handoff.py`
+  and the `dealscan-supabase-handoff` workflow went from first contact to
+  `supabase_verified` in five observed runner iterations (each annotation was
+  actable evidence; nothing was ever asserted without it):
+  1. token valid; project ref resolved and `GET /v1/projects` healthy, but the
+     query endpoint answered **HTTP 201** (not 200) — acceptance fixed;
+  2. **HTTP 400** on the query endpoint — hardened error extraction (codes
+     only, never free text that can echo SQL), an explicit `select 1` probe,
+     per-query diagnostics;
+  3. real evidence: project `ACTIVE_HEALTHY` in `eu-west-1`, pre-existing legacy
+     schema with all 10 app tables (all row counts 0), migrations applied in
+     order from `main`, Auth PATCH applied, but 5 files read as
+     ledger-vs-marker inconsistent;
+  4. statement-wise application with post-write marker verification + a
+     read-only catalog cross-check delivered the decisive clue: **every
+     trigger had persisted since run 1** — `information_schema.triggers` is
+     privilege-filtered (0 rows vs 15 in `pg_trigger`), and the hardening flag
+     check used a case-sensitive `LIKE` while `pg_get_functiondef` renders
+     `SET search_path TO` (uppercase);
+  5. probes corrected (pg_catalog reads, `ILIKE`): repair env re-applied the
+     single statement of the hardening file, post-write verification passed,
+     and the run went **`supabase_verified`** (run 34059778402, 21:02Z):
+     reconciliation clean (no pending/inconsistent), schema contract passed,
+     Auth config verified (`site_url` = production, `/auth/callback` allowed;
+     no localhost entries — non-failing informational flag), all counts 0.
+- Ordered operator steps now closed with live evidence: (5) Auth site URL +
+  callback config, (8) project inspection + migration reconciliation, (9)
+  logical pre/post schema backup (schema + row counts; physical `pg_dump` still
+  needs `SUPABASE_DB_URL`), (10) reviewed, ordered, additive migrations only —
+  never a blind recreate, with a `supabase_migrations` ledger and halting on
+  first failure.
+- Step (11) read-only production preflight re-ran inside the smoke workflow on
+  the same commit: deployment + source probes pass; still blocked **only** by
+  the missing GitHub-Production-environment `SUPABASE_SERVICE_ROLE_KEY`.
+  Consequently (12) `preflight_only` stays true and (13) the 250-record
+  el_paso_tx production smoke remains **not safe to run** until that secret is
+  configured and an operator dispatches the gate (my dispatch returns 403).
+- 461 Python tests pass (20 offline Supabase-management contracts, incl.
+  statement-wise halting, untrusted-write detection, repair opt-in, Auth
+  fallback casing, probe catalog checks).
+- **Operator supplied both remaining server-side secrets** (2026-09-06 ~22:00Z;
+  used only inside Actions runners, names only, never values):
+  - Read-only production preflight is now fully green: **ready_for_bounded_smoke**
+    (run on `a4f3d64`, 22:18Z) — configuration passed, SUPABASE_DB_URL access
+    mapped, deployment 200 with operator-contact match, El Paso read-only source
+    probe (138,863 matching, ObjectID_1) with ingestion_authorized=false, schema
+    columns checked, public boundary verified. Step (11) closes.
+  - Physical pg_dump backup was added to the handoff workflow (schema-only +
+    counts, secret never echoed, credential-redacted, non-failing) but currently
+    reports: **connection to db.<ref>.supabase.co (IPv6), port 5432 — Network is
+    unreachable**. GitHub-hosted runners are IPv4-only. OPERATOR ACTION: replace
+    the SUPABASE_DB_URL secret with the project's **Supavisor pooler** connection
+    string (IPv4, port 6543 transaction or 5432 session mode) from the Supabase
+    dashboard Connect panel. Until then the logical schema/count snapshot
+    remains the verified surrogate (and is unaffected).
+  - The Management token began answering **HTTP 401** at 22:22Z although it was
+    valid at 21:02Z — consistent with SUPABASE_ACCESS_TOKEN being overwritten or
+    rotated during the secrets update. OPERATOR ACTION: re-store the PAT
+    (sbp_...) from supabase.com/dashboard/account/tokens. The module handles the
+    denial cleanly (blocked report, no crash, no leakage).
+- Step (12) remains as designed: `preflight_only=false` runs only via manual
+  dispatch; the sandbox token is denied dispatch rights (HTTP 403), so the
+  250-record el_paso_tx smoke stays a one-click operator action that is now
+  technically safe to launch (bounded 250, read-only preflight green, service
+  key server-side only, source authorization halting guard in main.py chain).
+- Full local sweep re-verified: 461 Python tests, 208 web tests, typecheck,
+  production build; final diff scanned — no secrets, no credentials, no debug
+  code (the four print()s are the handoff CLIs' sanitized report emitters).
