@@ -5,11 +5,10 @@ landing/out/
 *.tsbuildinfo
 landing/next-env.d.ts
 
-# ===== Runtime data — waitlist API stores real submitter emails here =====
+# ===== Private runtime files and generated snapshots (never commit source rows) =====
 landing/data/*
-!landing/data/bundle.json
-!landing/data/registry.json
 data/*
+pipeline/data/*
 !landing/data/
 *.db
 *.sqlite
@@ -39,3 +38,6 @@ Thumbs.db
 *.swp
 .idea/
 .vercel
+
+# Local engineering reports and test scratch files
+.arena/

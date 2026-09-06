@@ -1,90 +1,204 @@
-"""DealScan AI - Main Pipeline Orchestrator."""
-import argparse, sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from scrapers.counties import COUNTY_SCRAPERS, probe_county
-from database import init_db
+"""DealScan CLI. Failed, partial, skipped or unattempted ingestion is nonzero."""
+from __future__ import annotations
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0,os.path.dirname(os.path.abspath(__file__)))
+from database import get_backend, init_db, verify_deal
 from runners import run as run_county
-from runregistry import load_bundle
-from cli.county_commands import add_county_commands
-from config.counties.national_registry import ensure_national_counties
-from config.counties.registry import county_summary, list_counties
+from config.counties.national_registry import ensure_national_counties, ensure_pilot_counties
+from config.counties.registry import _load_registry, list_counties
+from config.source_config import county_config
+from validation.gates import authorization_error, authorize_county, authorize_validated_batch, validation_error
+from validation.live_validator import validate_live_batch
+from registry_sync import pull_registry, push_registry
 
 
-def _print_run_summary(summary):
-    c=summary.get("counts",{}); print(f"[{summary.get('county_id','?')}] {summary.get('status','unknown')} found={c.get('discovered',0)} downloaded={c.get('downloaded',0)} parsed={c.get('parsed',0)} normalized={c.get('normalized',0)} rejected={c.get('rejected',0)} stored={c.get('stored',0)} scored={c.get('scored',0)} qualified={c.get('qualified',0)} published={c.get('published',0)}")
-    if summary.get("error"): print(f"  ERROR: {summary['error'][:300]}")
+def bounded(value, low=0, high=100):
+    try: result=int(value)
+    except ValueError: raise argparse.ArgumentTypeError('Expected an integer') from None
+    if not low<=result<=high: raise argparse.ArgumentTypeError(f'Expected {low}–{high}')
+    return result
 
-def run_all(mode='publish',only=''):
-    ensure_national_counties(); ids=[only] if only else list(COUNTY_SCRAPERS.keys())
-    for cid in ids:_print_run_summary(run_county(cid,mode=mode))
 
-def cmd_probe():
-    ensure_national_counties(); print("Probing configured county data sources...\n")
-    for cid in COUNTY_SCRAPERS:
-        for r in probe_county(cid):print(f"  {'OK' if r.reachable else 'FAIL':4} {cid:12} {r.source_name:28} {r.detail or r.error[:60]}")
-    print("\nSource probe complete.")
+def completed(result, success_key='ok', expected_work=True):
+    if 'status' in result: return result['status'] in {'ok','completed','verified'}
+    attempted=result.get('attempted',0)
+    return (not expected_work and attempted==0) or attempted>0 and result.get(success_key,0)==attempted
 
-def cmd_run(args):
-    init_db(); run_all(mode='etl-only' if args.etl_only else 'publish',only=args.county or '')
 
-def cmd_discover(args):
-    from discovery.national_source_worker import discover_and_register
-    result=discover_and_register(args.discover_national); print(f"National discovery: attempted={result['attempted']} found={result['found']}")
-    for row in result['results']:print(f"  {row['county_id']:24} {row['status']:12} fields={row.get('field_count','-')} {row.get('url','')}")
+def safe_report(value):
+    private={'raw_payload','raw_payload_canonical','normalized_payload','field_mapping','source_config','source_authorization','registry_patch',
+             'owner_name','owner_address','owner_state','email','financial_evidence','token','key','password'}
+    if isinstance(value,dict): return {key:safe_report(item) for key,item in value.items() if key not in private and not key.startswith('_')}
+    if isinstance(value,list): return [safe_report(item) for item in value]
+    return value
 
-def cmd_run_national(args):
-    from discovery.national_source_worker import run_national_batch
-    init_db(); result=run_national_batch(args.run_national,args.max_records,'etl-only' if args.etl_only else 'publish'); print(f"National ETL: attempted={result['attempted']} ok={result['ok']}")
-    for row in result['results']:_print_run_summary(row)
 
-def cmd_validate():
-    ensure_national_counties(); from validation.national_validator import validate_all_counties
-    report=validate_all_counties(); c=report['counts']; print(f"National config validation: total={c['total']} ready={c['ready']} invalid={c['invalid']} not_started={c['not_started']} etl_verified={c['etl_verified']}")
-    for row in report['results']:
-        if row['status']!='ready':print(f"  {row['county_id']:28} {row['status']:12} {'; '.join(row.get('errors',[])[:3])}")
-    print("Configuration validation is read-only; it does not claim live source health or ETL success.")
+def coverage():
+    counties=list_counties(); meta=_load_registry().get('meta',{})
+    configs={county['county_id']:county_config(county['county_id'],county) for county in counties}
+    return {'scope':'county_registry','counties':len(counties),'universe_complete':bool(meta.get('universe_complete')),
+            'universe_source':meta.get('universe_source'),'discovered':sum(bool(cfg.get('arcgis_layer_url') or cfg.get('data_url')) for cfg in configs.values()),
+            'validating':sum(c.get('validation_status')=='validating' for c in counties),
+            'live_validated':sum(not validation_error(c,configs[c['county_id']]) for c in counties),
+            'ingestion_ready':sum(not authorization_error(c,configs[c['county_id']]) for c in counties),
+            'ingested':sum(c.get('ingestion_status')=='ingested' and (c.get('persisted_count') or 0)>0 for c in counties),
+            'unavailable':sum(c.get('validation_status') in {'invalid','unreachable'} for c in counties),
+            'note':'County geography and configured sources do not imply national parcel or opportunity coverage'}
 
-def cmd_validate_live(args):
-    ensure_national_counties(); from validation.live_validator import validate_live_batch
-    report=validate_live_batch(args.validate_live,args.include_validated); print(f"National live validation: attempted={report['attempted']} valid={report['valid']} invalid={report['invalid']} unreachable={report['unreachable']}")
-    for row in report['results']:
-        detail='; '.join(row.get('errors',[])[:2]); print(f"  {row['county_id']:28} {row['status']:12} {detail}")
 
-def cmd_coverage():
-    ensure_national_counties(); s=county_summary(); counties=list_counties(); total=s['total'] or 1
-    discovered=sum(1 for c in counties if c.get('data_source_type') or c.get('arcgis_layer_url') or c.get('parcel_source_url'))
-    source_verified=sum(1 for c in counties if c.get('verification_status') in ('source_verified','verified'))
-    live_verified=sum(1 for c in counties if c.get('validation_status')=='valid')
-    etl_verified=sum(1 for c in counties if c.get('verification_status')=='verified')
-    covered=sum(1 for c in counties if c.get('coverage_status') in ('tier_4','tier_5') and c.get('last_successful_run'))
-    published=sum(1 for c in counties if c.get('coverage_status')=='tier_5' and c.get('last_successful_run'))
-    print(f"National counties: {s['total']}")
-    print(f"Sources discovered: {discovered} ({discovered/total:.1%})")
-    print(f"Sources field/sample live-validated: {live_verified} ({live_verified/total:.1%})")
-    print(f"Sources verified by successful ETL: {etl_verified} ({etl_verified/total:.1%})")
-    print(f"Actually covered with persisted ETL data: {covered} ({covered/total:.1%})")
-    print(f"Counties with published deals: {published} ({published/total:.1%})")
-    print(f"By status: {s['by_coverage_status']}")
+def run_all(mode='publish',only='',max_records=5000):
+    from validation.gates import authorization_error
+    counties=list_counties()
+    ids=[only] if only else [c['county_id'] for c in counties if not authorization_error(c,county_config(c['county_id'],c))]
+    results=[run_county(cid,mode=mode,max_records=max_records) for cid in ids]
+    return {'attempted':len(results),'ok':sum(completed(row) for row in results),'results':results}
 
-def cmd_bundle():
-    bundle=load_bundle()
-    if bundle is None:print("No bundle present yet. Run --run or --run-national first.");return
-    print(f"generated_at={bundle.get('generated_at')} count={bundle.get('count')} counties={bundle.get('meta',{}).get('scraped_counties')} status={bundle.get('meta',{}).get('status')}")
-    for d in bundle.get('deals',[]):print(f"  {d.get('deal_score',0):>3}/100 {d.get('county_id',''):12} {d.get('address','')}")
 
-def main():
-    parser=argparse.ArgumentParser(description='DealScan AI Pipeline'); parser.add_argument('--setup-db',action='store_true'); parser.add_argument('--run',action='store_true'); parser.add_argument('--county','-c'); parser.add_argument('--etl-only',action='store_true'); parser.add_argument('--probe',action='store_true'); parser.add_argument('--deliver',action='store_true'); parser.add_argument('--bundle',action='store_true'); parser.add_argument('--discover-national',type=int,metavar='N',help='Discover up to N new public ArcGIS sources'); parser.add_argument('--run-national',type=int,metavar='N',help='Run up to N discovered counties through ETL'); parser.add_argument('--validate-live',type=int,metavar='N',help='Live-validate up to N counties with discovered/configured sources'); parser.add_argument('--include-validated',action='store_true',help='Allow live validation to revisit recently validated counties'); parser.add_argument('--max-records',type=int,default=5000); parser.add_argument('--coverage',action='store_true'); parser.add_argument('--validate',action='store_true',help='Validate every registered county configuration without changing coverage state'); add_county_commands(parser.add_subparsers()); args=parser.parse_args()
-    if args.setup_db:init_db();print('Database initialized.')
-    elif args.probe:cmd_probe()
-    elif args.validate:cmd_validate()
-    elif args.validate_live is not None:cmd_validate_live(args)
-    elif args.coverage:cmd_coverage()
-    elif args.discover_national is not None:cmd_discover(args)
-    elif args.run_national is not None:cmd_run_national(args)
-    elif args.bundle:cmd_bundle()
-    elif args.run:cmd_run(args)
-    elif args.deliver:print('Delivery requires EMAIL_API_KEY in .env. See pipeline README.')
-    elif hasattr(args,'func'):args.func()
-    else:parser.print_help()
+def production_smoke(county_id, max_records, app_url):
+    from validation.production_smoke import public_key, verify_ingestion, verify_public_api, web_origin
+    if os.getenv('DEALSCAN_DB_BACKEND')!='supabase' or os.getenv('DEALSCAN_ENV')!='production':
+        raise RuntimeError('Production smoke requires DEALSCAN_ENV=production and DEALSCAN_DB_BACKEND=supabase')
+    from database_supabase import SupabaseDatabase
+    if not isinstance(get_backend(),SupabaseDatabase):
+        raise RuntimeError('The initialized database backend is not Supabase')
+    # Reject missing deployment/RLS configuration before making ingestion writes.
+    web_origin(app_url or ''); public_key(); init_db()
+    verify_public_api(get_backend(),app_url or '',expected_contact=os.getenv('WAITLIST_CONTACT_EMAIL') or None)
+    pull_registry(); ensure_pilot_counties()
+    validation=validate_live_batch(1,True,county_id=county_id)
+    push_registry()
+    if not completed(validation,'valid'): return {'status':'error','stage':'validate','validation':validation}
+    authorization=authorize_county(county_id); push_registry()
+    if not authorization['authorized']: return {'status':'error','stage':'authorize','authorization':authorization}
+    ingestion=run_county(county_id,mode='etl-only',max_records=max_records)
+    push_registry()
+    if not completed(ingestion): return {'status':'error','stage':'ingest','ingestion':ingestion}
+    verified=verify_ingestion(ingestion['audit_run_id'],county_id=county_id,max_records=max_records,app_url=app_url,require_web=True)
+    return {'status':'verified','scope':'bounded_real_ingestion_and_public_api','ingestion':ingestion,'verification':verified,
+            'note':'No deal is automatically published; zero verified opportunities is valid when financial evidence is missing'}
 
-if __name__=='__main__':main()
+
+def parser():
+    p=argparse.ArgumentParser(description='Source-backed DealScan pipeline')
+    action=p.add_mutually_exclusive_group()
+    for flag in ('setup-db','run','probe','bundle','coverage','validate','refresh-universe','sync-registry','statewide-audit','deliver'):
+        action.add_argument('--'+flag,action='store_true')
+    for flag in ('discover-national','run-national','validate-live','authorize-valid'):
+        action.add_argument('--'+flag,type=bounded,metavar='N')
+    action.add_argument('--authorize-county','--authorize-ingestion',dest='authorize_county',metavar='COUNTY_ID')
+    action.add_argument('--verify-deal',type=lambda v:bounded(v,1,2**63-1),metavar='ID')
+    action.add_argument('--verify-ingestion-run',type=lambda v:bounded(v,1,2**63-1),metavar='ID')
+    action.add_argument('--production-smoke',metavar='COUNTY_ID')
+    p.add_argument('--county','-c')
+    p.add_argument('--max-records',type=lambda v:bounded(v,1,5000),default=250)
+    p.add_argument('--etl-only',action='store_true')
+    p.add_argument('--dry-run',action='store_true')
+    p.add_argument('--include-validated',action='store_true')
+    p.add_argument('--app-url',default=os.getenv('PRODUCTION_APP_URL'))
+    p.add_argument('--require-web-api',action='store_true')
+    p.add_argument('--report-file')
+    p.add_argument('--states',default='')
+    p.add_argument('--discovery-limit',type=bounded,default=25)
+    p.add_argument('--etl-limit',type=bounded,default=0)
+    from cli.county_commands import add_county_commands
+    add_county_commands(p.add_subparsers())
+    return p
+
+
+def main(argv=None):
+    p=parser(); args=p.parse_args(argv)
+    if args.dry_run and not (args.run or args.run_national is not None or args.discover_national is not None or args.statewide_audit):
+        p.error('--dry-run is supported only for ingestion and source discovery')
+    mutable=any((args.run,args.run_national is not None,args.validate_live is not None,args.authorize_county,
+                 args.authorize_valid is not None,args.discover_national is not None,args.refresh_universe,args.sync_registry,args.production_smoke)) and not args.dry_run
+    # The smoke owns registry writes only after its read-only access checks pass.
+    needs_registry = not args.production_smoke and (mutable or args.coverage or args.validate or args.probe or args.dry_run or hasattr(args,'func'))
+    result={}; code=0; registry_loaded=False
+    try:
+        if needs_registry:
+            pull_registry()
+            if mutable: ensure_pilot_counties()
+            registry_loaded=True
+        if args.setup_db: init_db(); result={'status':'ok','schema':'checked'}
+        elif args.refresh_universe:
+            ensure_national_counties(); result=coverage()
+            code=0 if _load_registry().get('meta',{}).get('universe_refresh_status')=='ok' else 1
+        elif args.sync_registry: push_registry(); result={'status':'ok','scope':'registry_metadata'}
+        elif args.validate_live is not None:
+            result=validate_live_batch(args.validate_live,args.include_validated,county_id=args.county)
+            code=0 if completed(result,'valid',args.validate_live>0) else 1
+        elif args.authorize_county:
+            result=authorize_county(args.authorize_county); code=0 if result['authorized'] else 1
+        elif args.authorize_valid is not None:
+            result=authorize_validated_batch(args.authorize_valid)
+            code=0 if completed(result,'authorized',args.authorize_valid>0) else 1
+        elif args.run:
+            result=run_all(mode='dry_run' if args.dry_run else 'etl-only' if args.etl_only else 'publish',only=args.county or '',max_records=args.max_records)
+            code=0 if completed(result) else 1
+        elif args.run_national is not None:
+            from discovery.national_source_worker import run_national_batch
+            result=run_national_batch(args.run_national,args.max_records,'dry_run' if args.dry_run else 'etl-only' if args.etl_only else 'publish')
+            code=0 if completed(result,expected_work=args.run_national>0) else 1
+        elif args.discover_national is not None:
+            from discovery.national_source_worker import discover_and_register
+            result=discover_and_register(args.discover_national,persist=not args.dry_run)
+            code=1 if result.get('statewide_error') or any(row.get('status')=='error' for row in result.get('results',[])) else 0
+        elif args.production_smoke:
+            result=production_smoke(args.production_smoke,args.max_records,args.app_url)
+            code=0 if completed(result) else 1
+        elif args.verify_ingestion_run:
+            from validation.production_smoke import verify_ingestion
+            result=verify_ingestion(args.verify_ingestion_run,county_id=args.county,max_records=args.max_records,
+                                    app_url=args.app_url,require_web=args.require_web_api)
+        elif args.verify_deal:
+            init_db(); result=verify_deal(args.verify_deal)
+        elif args.coverage: result=coverage()
+        elif args.validate:
+            from validation.national_validator import validate_all_counties
+            result=validate_all_counties()
+            result['scope']='configuration_only_not_live_validation'
+            code=1 if result.get('counts',{}).get('invalid') else 0
+        elif args.statewide_audit:
+            from discovery.national_source_worker import run_statewide_batch
+            result=run_statewide_batch(states=[s.strip() for s in args.states.split(',') if s.strip()] or None,
+                discovery_limit=args.discovery_limit,etl_limit=args.etl_limit,max_records=args.max_records,mode='dry_run')
+            etl=result.get('etl',{})
+            code=1 if (args.etl_limit and not completed(etl)) or result.get('discovery',{}).get('statewide_error') else 0
+        elif args.probe:
+            from scrapers.counties import COUNTY_SCRAPERS,probe_county
+            result={'results':[{'county_id':cid,'reachable':r.reachable,'error':r.error} for cid in ([args.county] if args.county else COUNTY_SCRAPERS) for r in probe_county(cid)]}
+            code=0 if result['results'] and all(row['reachable'] for row in result['results']) else 1
+        elif args.bundle:
+            from runregistry import load_bundle
+            value=load_bundle()
+            result={'status':'ok' if value else 'not_found','count':value.get('count') if value else None}
+            code=0 if value else 1
+        elif args.deliver:
+            result={'status':'unavailable','error':'Automated email delivery requires configured consent, unsubscribe and delivery controls'}; code=1
+        elif hasattr(args,'func'):
+            result=args.func() or {'status':'ok','scope':'registry_display'}
+            code=0 if completed(result) else 1
+        else: p.print_help(); return 0
+    except Exception as exc:
+        # Request bodies and source/owner data must never enter workflow artifacts.
+        result={'status':'error','error':f'{type(exc).__name__}: operation failed; check configuration, schema and source connectivity'}
+        code=1
+    finally:
+        if mutable and registry_loaded:
+            try: push_registry()
+            except Exception as exc:
+                result['registry_sync']='unavailable'; result['status']='degraded' if code==0 else 'error'; code=1
+    report=safe_report(result)
+    print(json.dumps(report,indent=2,allow_nan=False))
+    if args.report_file:
+        path=Path(args.report_file); path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text(json.dumps(report,indent=2,allow_nan=False)+'\n',encoding='utf-8')
+    return code
+
+
+if __name__=='__main__': raise SystemExit(main())

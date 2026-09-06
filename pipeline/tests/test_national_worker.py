@@ -1,3 +1,4 @@
+from helpers import authorized_county
 from discovery import national_source_worker
 
 
@@ -8,6 +9,7 @@ def test_national_etl_only_runs_live_validated_counties(monkeypatch):
         {"county_id": "valid", "validation_status": "valid", "coverage_status": "tier_3", "arcgis_layer_url": "https://valid"},
         {"county_id": "published", "validation_status": "valid", "coverage_status": "tier_5", "arcgis_layer_url": "https://published"},
     ]
+    counties = [authorized_county(c) if c.get('validation_status') == 'valid' else c for c in counties]
     calls = []
     monkeypatch.setattr(national_source_worker, "ensure_national_counties", lambda: None)
     monkeypatch.setattr(national_source_worker, "list_counties", lambda: counties)
@@ -25,6 +27,7 @@ def test_national_etl_rotates_oldest_successful_run_first(monkeypatch):
         {"county_id": "never", "county_name": "Never County", "state": "Arizona", "validation_status": "valid", "coverage_status": "tier_3", "arcgis_layer_url": "https://never"},
         {"county_id": "old", "county_name": "Old County", "state": "Arizona", "validation_status": "valid", "coverage_status": "tier_5", "arcgis_layer_url": "https://old", "last_successful_run": "2026-09-01T12:00:00+00:00"},
     ]
+    counties = [authorized_county(c) if c.get('validation_status') == 'valid' else c for c in counties]
     calls = []
     monkeypatch.setattr(national_source_worker, "ensure_national_counties", lambda: None)
     monkeypatch.setattr(national_source_worker, "list_counties", lambda: counties)

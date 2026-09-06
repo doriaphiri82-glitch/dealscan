@@ -1,73 +1,87 @@
-# DealScan Pipeline
+# DealScan pipeline
 
-Land-deal screening pipeline: discovers authoritative county parcel sources, validates them, ingests real records, scores opportunities, persists production data to Supabase, and publishes a web bundle.
+The canonical entry point is `main.py`. `runner.py` and `scheduler.py --run-once`
+delegate to it and preserve failures. Production scheduling belongs to the
+controlled GitHub workflow, not an independently running watcher.
 
-## Architecture
+## Install and test
 
-- **Production database:** Supabase/Postgres (`DEALSCAN_DB_BACKEND=supabase`)
-- **Local development:** SQLite fallback
-- **Source discovery:** county registry + ArcGIS/public parcel sources
-- **Audit trail:** `ingestion_runs` + `ingestion_records`
-- **Web app:** Next.js under `landing/`
-- **Production schedule:** GitHub Actions `.github/workflows/scrape.yml` every 15 minutes
-- **Optional cache:** Redis/Vercel KV; not required for primary Supabase reads
+From the repository root:
 
-## Layout
-
-```
-pipeline/
-├── config/            # national county registry + settings
-├── scrapers/          # ArcGIS, flat-file and county adapters
-├── scoring/           # deal scoring, valuation and comparables
-├── delivery/          # optional email delivery
-├── runners.py         # one-county ETL orchestration
-├── runregistry.py     # local run history + Supabase audit finalization
-├── database.py        # backend selector
-├── database_supabase.py # production PostgREST persistence + provenance
-├── main.py            # CLI
-└── tests/             # offline unit tests
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r pipeline/requirements.lock.txt
+.venv/bin/python -m pytest -q
+.venv/bin/python -m compileall -q pipeline
 ```
 
-## Commands
+Python 3.11 is the tested runtime. The exact lock was also installed and tested in
+a clean environment. Tests isolate databases, registries and credentials, and
+reject unmocked network access. Do not run fixtures against production.
+
+## Operation
+
+Source discovery is research, **not ingestion permission**. New and changed
+sources must pass live schema/pagination/record checks and authority review before
+explicit authorization. Validation expires after seven days.
+
+From `pipeline/`, after securely configuring the intended backend:
 
 ```bash
 python main.py --setup-db
-python main.py --validate
-python main.py --discover-national 50
-python main.py --validate-live 50
-python main.py --run-national 20 --max-records 5000
 python main.py --coverage
+python main.py --validate
+python main.py --validate-live 1 --county el_paso_tx
+python main.py --authorize-ingestion el_paso_tx
+python main.py --run --county el_paso_tx --max-records 250 --etl-only
 ```
 
-For local SQLite development, omit `DEALSCAN_DB_BACKEND=supabase`. Production ingestion must have both `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` configured.
+`--authorize-ingestion` must follow review of the exact source and its authority
+evidence. The commands above do not create test records. Real source access and
+validation are required. For production, set `DEALSCAN_ENV=production`,
+`DEALSCAN_DB_BACKEND=supabase`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY`.
+There is no fallback to SQLite when production configuration is missing.
 
-## Production workflow
+Use the [production runbook](../docs/production-runbook.md) for migrated-schema,
+current-run and deployed-API proof. CLI partial, failed, skipped and unattempted
+ingestion remain non-successful. Discovery/coverage may report unavailable sources
+without pretending that they were ingested.
 
-`.github/workflows/scrape.yml` runs the production pipeline in this order:
+## Storage and publication
 
-1. Verify Supabase credentials.
-2. Run the complete offline test suite.
-3. Initialize/verify the database schema.
-4. Validate the national county universe.
-5. Discover and live-validate authoritative parcel sources.
-6. Ingest a bounded batch of validated counties.
-7. Persist properties/deals/comparables to Supabase.
-8. Record ingestion provenance in `ingestion_runs` and `ingestion_records`.
-9. Publish optional Redis/KV cache data when configured.
-10. Commit the generated web bundle as a fallback artifact.
+- County state is hydrated from Supabase, including an authoritative empty registry.
+- Primary parcel identity is `(county_id, apn)`; writes are idempotent.
+- Audits retain exact raw JSON, JSONB, normalized values, mapping, URL, source ID,
+  run identity and the authorization manifest. Raw/owner data stays private.
+- Supported vacancy is required. Financially incomplete parcels remain held.
+- An assessment is private until `--verify-deal` replays its complete evidence.
+- Publication expires no later than validation or comparable-age deadlines.
+- Public APIs and RLS exclude revoked, expired and unverified records.
 
-The web API reads verified deals directly from Supabase first, then optional Redis/KV caches. It does **not** expose hard-coded demo opportunities.
+Read [ingestion integrity](../docs/ingestion-integrity.md) for the detailed model.
+Local summaries are operational aids, not fallback APIs or proof of deployment.
+Optional cache export rereads the verified database; supplied bundles are ignored.
 
-## Tests
+## Coverage limits
 
-```bash
-python -m pytest pipeline/tests/
-```
+The three configured ArcGIS pilots are not nationwide live coverage. The official
+Census Gazetteer is geography only. Use `--refresh-universe` explicitly; a failed
+refresh is a failure, not a fabricated county list. Expansion requires per-source
+validation and authorization.
 
-The production smoke test is intentionally manual because it requires real production Supabase credentials:
+CSV/delimited readers enforce byte, record, schema and ZIP-expansion limits.
+Headerless/multi-file sources require explicit configuration. Excel readers need
+an installed compatible engine and fail explicitly if unavailable. These reader
+classes do not constitute live-validated, production-authorized flat-file coverage.
 
-`.github/workflows/production-smoke.yml`
+Email CLI delivery is disabled. Optional provider utilities require actual consent,
+a real unsubscribe URL and explicit enabling; they report provider acceptance,
+not confirmed inbox delivery. Waitlist requests do not become alert subscriptions.
 
-## Data quality
 
-DealScan does not manufacture opportunities when a county source is missing, stale, malformed, or insufficiently verifiable. Candidates are rejected when required source/valuation/vacancy evidence is not strong enough. Only deals marked `verification_status=verified` are eligible for the public deals API.
+HTTP reads and ArcGIS query responses enforce a 16 MiB default expanded-byte cap,
+a per-request deadline, bounded retries and no redirects. Bulk readers have their
+own explicit cap. JSON duplicate keys and nonfinite JSON constants are errors.
+Optional private caches are atomic, size-bounded and separated by response format;
+cache failure does not falsify a successful uncached read. ArcGIS pagination must
+actually produce strictly increasing, valid object IDs, including 64-bit IDs.

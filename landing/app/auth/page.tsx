@@ -3,11 +3,7 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
-
-function safeNext(value: string | null): string {
-  if (!value || !value.startsWith('/') || value.startsWith('//')) return '/my-dealscan'
-  return value
-}
+import { safeNext } from '@/lib/safe-redirect'
 
 export default function AuthPage() {
   const router = useRouter()

@@ -6,6 +6,9 @@ Polite, cache-backed HTTP client + source probing + shared adapter interface.
 from __future__ import annotations
 
 import json
+import logging
+import math
+import tempfile
 import os
 import time
 import urllib.robotparser as robotparser
@@ -15,10 +18,13 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import requests
+from urllib3.exceptions import HTTPError as TransportError
 
 USER_AGENT = "DealScanBot/0.1 (+https://github.com/doriaphiri82-glitch/dealscan; land screening research)"
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "cache")
 DEFAULT_TTL = 7 * 24 * 3600
+DEFAULT_MAX_BYTES = 16 * 1024 * 1024
+log = logging.getLogger(__name__)
 MIN_DELAY = 2.0
 MAX_DELAY = 4.0
 
@@ -38,38 +44,53 @@ class FetchResult:
 
 def _cache_path(url: str, ns: str = "") -> str:
     import hashlib
-    h = hashlib.sha256(f"{ns}:{url}".encode()).hexdigest()[:24]
-    host = urlparse(url).netloc.replace(":", "_")
-    d = os.path.join(CACHE_DIR, host)
-    os.makedirs(d, exist_ok=True)
-    return os.path.join(d, f"{h}.cache")
+    # Never turn an untrusted hostname into a filesystem path.
+    host = hashlib.sha256(urlparse(url).netloc.encode()).hexdigest()[:16]
+    key = hashlib.sha256(f"{ns}:{url}".encode()).hexdigest()
+    return os.path.join(CACHE_DIR,host,key+'.cache')
 
 
-def _cached(url: str, ttl: int, ns: str = "") -> Optional[Any]:
-    p = _cache_path(url, ns)
-    if not os.path.exists(p) or time.time() - os.path.getmtime(p) > ttl:
-        return None
+def _cached(url: str, ttl: int, ns: str = "", max_bytes: int = DEFAULT_MAX_BYTES) -> Optional[Any]:
     try:
-        with open(p, "r", encoding="utf-8") as f:
-            envelope = json.load(f)
-        if envelope.get("b64"):
+        path = _cache_path(url,ns)
+        stat = os.stat(path)
+        age = time.time()-stat.st_mtime
+        if age<0 or age>ttl or stat.st_size>max_bytes*2+16384: return None
+        with open(path,encoding='utf-8') as source: envelope=json.load(source)
+        if not isinstance(envelope,dict) or 'body' not in envelope: return None
+        value=envelope['body']
+        if envelope.get('b64'):
             import base64
-            return base64.b64decode(envelope.get("body") or "")
-        return envelope.get("body")
-    except Exception:
+            value=base64.b64decode(value,validate=True)
+        size=len(value) if isinstance(value,bytes) else len(json.dumps(value,ensure_ascii=False,allow_nan=False).encode())
+        return value if size<=max_bytes else None
+    except FileNotFoundError: return None
+    except (OSError,ValueError,TypeError,RecursionError):
+        log.warning('Source cache read unavailable; performing a fresh request')
         return None
 
 
 def _store_cache(url: str, body: Any, ns: str = "") -> None:
+    temporary=None
     try:
-        stored = body
-        if isinstance(body, bytes):
+        stored=body
+        if isinstance(body,bytes):
             import base64
-            stored = base64.b64encode(body).decode("ascii")
-        with open(_cache_path(url, ns), "w", encoding="utf-8") as f:
-            json.dump({"url": url, "fetched_at": time.time(), "b64": isinstance(body, bytes), "body": stored}, f)
-    except Exception:
-        pass
+            stored=base64.b64encode(body).decode('ascii')
+        path=_cache_path(url,ns)
+        os.makedirs(os.path.dirname(path),mode=0o700,exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=os.path.dirname(path),delete=False) as target:
+            temporary=target.name
+            json.dump({'fetched_at':time.time(),'b64':isinstance(body,bytes),'body':stored},target,allow_nan=False,ensure_ascii=False)
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temporary,path)
+    except (OSError,ValueError,TypeError,RecursionError):
+        log.warning('Optional source cache write unavailable; fetched data remains usable')
+    finally:
+        if temporary:
+            try: os.unlink(temporary)
+            except OSError: pass
 
 
 def _politeness_delay(url: str) -> None:
@@ -83,68 +104,123 @@ def _politeness_delay(url: str) -> None:
     _last_request_at[host] = time.time()
 
 
-def robots_allows(url: str) -> bool:
+def _valid_url(url: str) -> bool:
     try:
-        parsed = urlparse(url)
-        rp = robotparser.RobotFileParser()
-        rp.set_url(f"{parsed.scheme}://{parsed.netloc}/robots.txt")
-        rp.read()
-        return rp.can_fetch(USER_AGENT, url)
-    except Exception:
-        return True
+        parsed=urlparse(url)
+        return isinstance(url,str) and not any(ord(char)<32 or ord(char)==127 for char in url) and parsed.scheme in {'https','http'} and bool(parsed.hostname) and not (parsed.username or parsed.password) and (parsed.port is None or 1<=parsed.port<=65535)
+    except (TypeError,ValueError): return False
 
 
-def fetch(url: str, ttl: int = DEFAULT_TTL, as_json: bool = False,
-          respect_robots: bool = True, retries: int = 2,
-          timeout: int = 30, raw: bool = False) -> FetchResult:
-    ns = "raw" if raw else ""
-    cached = _cached(url, ttl, ns)
-    if cached is not None:
-        return FetchResult(ok=True, status=200, body=cached, from_cache=True)
+def _bounded_content(response, max_bytes: int, deadline: float | None = None) -> bytes:
+    try:
+        size=response.headers.get('content-length')
+        if size and int(size)>max_bytes: raise ValueError('Response exceeds byte limit')
+        raw=getattr(response,'raw',None)
+        read1=getattr(raw,'read1',None)
+        def chunks():
+            if callable(read1):
+                # read1 returns available data, rather than waiting to fill a large
+                # buffer while a slow peer keeps resetting the socket timeout.
+                while True:
+                    if deadline is not None and time.monotonic()>deadline: raise TimeoutError()
+                    chunk=read1(65536,decode_content=True)
+                    if not chunk: break
+                    yield chunk
+            else:
+                yield from response.iter_content(chunk_size=65536)
+        content=bytearray()
+        for chunk in chunks():
+            if deadline is not None and time.monotonic()>deadline: raise TimeoutError()
+            if len(content)+len(chunk)>max_bytes: raise ValueError('Response exceeds byte limit')
+            content.extend(chunk)
+        return bytes(content)
+    finally:
+        response.close()
+
+
+def robots_allows(url: str) -> bool:
+    if not _valid_url(url): return False
+    try:
+        parsed=urlparse(url)
+        response=_session.get(f'{parsed.scheme}://{parsed.netloc}/robots.txt',timeout=(5,10),allow_redirects=False,stream=True)
+        if response.status_code in (404,410):
+            response.close()
+            return True
+        if response.status_code!=200:
+            response.close()
+            return False
+        rp=robotparser.RobotFileParser()
+        rp.parse(_bounded_content(response,65536,time.monotonic()+10).decode('utf-8',errors='replace').splitlines())
+        return rp.can_fetch(USER_AGENT,url)
+    except (requests.RequestException,TransportError,OSError,ValueError): return False
+
+
+def _json(content: bytes):
+    def constant(_): raise ValueError('Nonfinite JSON value')
+    def pairs(items):
+        result={}
+        for key,value in items:
+            if key in result: raise ValueError('Duplicate JSON field')
+            result[key]=value
+        return result
+    return json.loads(content,parse_constant=constant,object_pairs_hook=pairs)
+
+
+def _network(method: str,url: str,*,payload=None,raw=False,as_json=False,
+             timeout=30,retries=2,max_bytes=DEFAULT_MAX_BYTES) -> FetchResult:
+    if not _valid_url(url): return FetchResult(False,error='Invalid source URL')
+    if type(max_bytes) is not int or not 1<=max_bytes<=128*1024*1024:
+        return FetchResult(False,error='Invalid response byte cap')
+    if type(retries) is not int or not 0<=retries<=3 or not isinstance(timeout,(int,float)) or isinstance(timeout,bool) or not math.isfinite(timeout) or not 0<timeout<=120:
+        return FetchResult(False,error='Invalid request timeout or retry budget')
+    for attempt in range(retries+1):
+        _politeness_delay(url)
+        response=None
+        try:
+            deadline=time.monotonic()+timeout
+            options={'timeout':(min(5,timeout),min(10,timeout)),'allow_redirects':False,'stream':True}
+            response=_session.post(url,data=payload,**options) if method=='POST' else _session.get(url,**options)
+            if response.status_code!=200:
+                status=response.status_code
+                response.close()
+                if status in (429,500,502,503,504) and attempt<retries:
+                    time.sleep(2**attempt*5)
+                    continue
+                return FetchResult(False,status,error=f'HTTP {status}')
+            content=_bounded_content(response,max_bytes,deadline)
+            body=content if raw else _json(content) if as_json or 'json' in response.headers.get('content-type','') else content.decode(response.encoding or 'utf-8')
+            if time.monotonic()>deadline: raise TimeoutError()
+            return FetchResult(True,200,body)
+        except (ValueError,UnicodeError,RecursionError):
+            return FetchResult(False,error='Invalid or oversized source response')
+        except (requests.RequestException,TransportError,OSError) as exc:
+            if attempt>=retries: return FetchResult(False,error=type(exc).__name__)
+            time.sleep(2**attempt*5)
+        finally:
+            if response is not None: response.close()
+    return FetchResult(False,error='unreachable')
+
+
+def fetch(url: str,ttl: int=DEFAULT_TTL,as_json: bool=False,respect_robots: bool=True,
+          retries: int=2,timeout: int=30,raw: bool=False,max_bytes: int | None=DEFAULT_MAX_BYTES) -> FetchResult:
+    max_bytes=DEFAULT_MAX_BYTES if max_bytes is None else max_bytes
+    if not _valid_url(url): return FetchResult(False,error='Invalid source URL')
+    if type(max_bytes) is not int or not 1<=max_bytes<=128*1024*1024:
+        return FetchResult(False,error='Invalid response byte cap')
+    # A text/JSON/raw request must never reuse an incompatible cached value.
+    ns='v2-'+('raw' if raw else 'json' if as_json else 'auto')
+    cached=_cached(url,ttl,ns,max_bytes) if ttl>0 else None
+    if cached is not None: return FetchResult(True,200,cached,from_cache=True)
     if respect_robots and not robots_allows(url):
-        return FetchResult(ok=False, error="robots.txt disallows this URL")
-    for attempt in range(retries + 1):
-        _politeness_delay(url)
-        try:
-            resp = _session.get(url, timeout=timeout)
-            if resp.status_code == 200:
-                if raw:
-                    body: Any = resp.content
-                elif as_json:
-                    body = resp.json()
-                else:
-                    ctype = resp.headers.get("content-type", "")
-                    body = resp.json() if "application/json" in ctype else resp.text
-                _store_cache(url, body, ns)
-                return FetchResult(ok=True, status=200, body=body)
-            if resp.status_code in (429, 503) and attempt < retries:
-                time.sleep(2 ** attempt * 5)
-                continue
-            return FetchResult(ok=False, status=resp.status_code, error=f"HTTP {resp.status_code}")
-        except requests.RequestException as exc:
-            if attempt >= retries:
-                return FetchResult(ok=False, error=str(exc)[:200])
-            time.sleep(2 ** attempt * 5)
-    return FetchResult(ok=False, error="unreachable")
+        return FetchResult(False,error='robots.txt disallows or cannot verify this URL')
+    result=_network('GET',url,raw=raw,as_json=as_json,timeout=timeout,retries=retries,max_bytes=max_bytes)
+    if result.ok and ttl>0: _store_cache(url,result.body,ns)
+    return result
 
 
-def post_json(url: str, payload: Dict[str, Any], timeout: int = 30,
-              retries: int = 1) -> FetchResult:
-    for attempt in range(retries + 1):
-        _politeness_delay(url)
-        try:
-            resp = _session.post(url, data=payload, timeout=timeout)
-            if resp.status_code == 200:
-                return FetchResult(ok=True, status=200, body=resp.json())
-            if resp.status_code == 429 and attempt < retries:
-                time.sleep(5)
-                continue
-            return FetchResult(ok=False, status=resp.status_code, error=f"HTTP {resp.status_code}")
-        except requests.RequestException as exc:
-            if attempt >= retries:
-                return FetchResult(ok=False, error=str(exc)[:200])
-            time.sleep(5)
-    return FetchResult(ok=False, error="unreachable")
+def post_json(url: str,payload: Dict[str,Any],timeout: int=30,retries: int=1,
+              max_bytes: int=DEFAULT_MAX_BYTES) -> FetchResult:
+    return _network('POST',url,payload=payload,as_json=True,timeout=timeout,retries=retries,max_bytes=max_bytes)
 
 
 @dataclass
@@ -177,124 +253,6 @@ def probe(url: str, county_id: str, source_name: str, expect: str = "http") -> P
     return ProbeResult(county_id, source_name, url, False, r.status, r.error or "unreachable", verified=False)
 
 
-@dataclass
-class ScrapeResult:
-    county_id: str
-    source_type: str
-    discovered: int = 0
-    downloaded: int = 0
-    parsed: int = 0
-    normalized: int = 0
-    rejected: int = 0
-    rejection_reasons: Dict[str, int] = field(default_factory=dict)
-    stored: int = 0
-    scored: int = 0
-    qualified: int = 0
-    published: int = 0
-    errors: List[str] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-
-class BaseScraperAdapter(ABC):
-    @abstractmethod
-    def discover(self, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
-        pass
-
-    @abstractmethod
-    def parse(self, raw: Any) -> List[Dict[str, Any]]:
-        pass
-
-    @abstractmethod
-    def validate(self, record: Dict[str, Any]) -> bool:
-        pass
-
-    def normalize(self, record: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
-        field_map = cfg.get("fields") or {}
-        defaults = dict(cfg.get("defaults") or {})
-        county_id = cfg.get("county_id")
-
-        def get_value(src_field: Any) -> Any:
-            if isinstance(src_field, (list, tuple)):
-                values = [get_value(part) for part in src_field]
-                values = [str(v).strip() for v in values if v not in (None, "") and str(v).strip()]
-                return ", ".join(values) if values else None
-            if not src_field:
-                return None
-            if "." in str(src_field):
-                cur: Any = record
-                for part in str(src_field).split("."):
-                    if isinstance(cur, dict):
-                        cur = cur.get(part)
-                    else:
-                        return None
-                return cur
-            return record.get(src_field)
-
-        normalized = dict(record)
-        normalized.update(defaults)
-        for canonical, source in field_map.items():
-            value = get_value(source)
-            if value is not None or canonical not in normalized:
-                normalized[canonical] = value
-        if county_id:
-            normalized["county_id"] = county_id
-
-        for key in ("lot_size_acres", "assessed_value", "market_value", "tax_amount", "latitude", "longitude", "improvement_value"):
-            value = normalized.get(key)
-            if value in (None, "", " "):
-                normalized[key] = None
-            else:
-                try:
-                    normalized[key] = float(value)
-                except (TypeError, ValueError):
-                    normalized[key] = None
-
-        if "has_improvements" not in normalized or normalized.get("has_improvements") in (None, "", " "):
-            improvement_value = normalized.get("improvement_value")
-            if improvement_value is not None:
-                normalized["has_improvements"] = improvement_value > 0
-
-        for key in ("tax_delinquent_years", "year_acquired"):
-            value = normalized.get(key)
-            try:
-                normalized[key] = int(float(value)) if value not in (None, "", " ") else 0
-            except (TypeError, ValueError):
-                normalized[key] = 0
-        return normalized
-
-    def run(self, cfg: Dict[str, Any], max_records: int = 5000):
-        county_id = cfg.get("county_id", "unknown")
-        result = ScrapeResult(county_id=county_id, source_type=self.__class__.__name__)
-        try:
-            raw = self.discover(cfg)
-        except Exception as exc:
-            result.errors.append(f"discover_error: {exc}")
-            return result, []
-        result.discovered = len(raw)
-        result.downloaded = len(raw)
-        parsed: List[Dict[str, Any]] = []
-        for item in raw:
-            try:
-                records = self.parse(item)
-                result.parsed += len(records)
-                parsed.extend(records)
-            except Exception as exc:
-                result.rejected += 1
-                result.rejection_reasons["parse_error"] = result.rejection_reasons.get("parse_error", 0) + 1
-                result.errors.append(f"parse_error: {exc}")
-        normalized: List[Dict[str, Any]] = []
-        for record in parsed:
-            try:
-                canonical = self.normalize(record, cfg)
-            except Exception as exc:
-                result.rejected += 1
-                result.rejection_reasons["normalize_error"] = result.rejection_reasons.get("normalize_error", 0) + 1
-                result.errors.append(f"normalize_error: {exc}")
-                continue
-            result.normalized += 1
-            if not self.validate(canonical):
-                result.rejected += 1
-                result.rejection_reasons["validation_failed"] = result.rejection_reasons.get("validation_failed", 0) + 1
-                continue
-            normalized.append(canonical)
-        return result, normalized
+# Compatibility exports: a single adapter implementation avoids divergent
+# normalization/vacancy behavior between legacy and current import paths.
+from .adapter import BaseScraperAdapter, ScrapeResult  # noqa: E402,F401

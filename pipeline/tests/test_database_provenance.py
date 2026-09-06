@@ -39,11 +39,11 @@ def test_deal_provenance_fields_persist(tmp_path, monkeypatch):
 
     rows = database.get_top_deals(limit=5, min_score=0, county_id="test_county")
     assert deal_id > 0
-    assert len(rows) == 1
-    row = rows[0]
+    assert rows == []
+    row = database.get_backend().get_deal_for_verification(deal_id)
     assert row["source_url"].endswith("FeatureServer/0")
     assert row["source_vendor"] == "esri"
     assert row["source_quality"] == "strong"
-    assert row["verification_status"] == "verified"
+    assert row["verification_status"] == "pending_review"
     assert row["valuation_basis"] == "market_value"
     assert row["valuation_confidence"] == 0.75

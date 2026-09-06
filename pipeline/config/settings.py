@@ -11,12 +11,12 @@ except ImportError:
 
 
 # Database
-DATABASE_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'dealscan.db')
+DATABASE_PATH = os.getenv('DEALSCAN_SQLITE_PATH') or os.path.join(os.path.dirname(__file__), '..', 'data', 'dealscan.db')
 
 # Email (using Resend or SendGrid)
-EMAIL_PROVIDER = os.getenv('EMAIL_PROVIDER', 'console')  # 'console', 'resend', 'sendgrid'
+EMAIL_PROVIDER = os.getenv('EMAIL_PROVIDER', 'disabled')  # disabled unless explicitly configured for a real provider
 EMAIL_API_KEY = os.getenv('EMAIL_API_KEY', '')
-EMAIL_FROM = os.getenv('EMAIL_FROM', 'deals@dealscan.ai')
+EMAIL_FROM = os.getenv('EMAIL_FROM', '')
 EMAIL_FROM_NAME = 'DealScan AI'
 
 # Scoring weights (must sum to 1.0)
@@ -41,20 +41,4 @@ TAX_DELINQUENT_YEARS = 2        # Years of tax delinquency to flag
 ABSENTEE_OWNER = True           # Flag if owner lives in different state
 MIN_OWNERSHIP_YEARS = 10        # Years owned (long-term = more motivated)
 
-# County data
-DEFAULT_COUNTIES = [
-    'cochise_az',
-    'mohave_az',
-    'el_paso_tx',
-    'hudson_co',
-    'socorro_nm',
-]
-
-# Delivery
-DELIVERY_HOUR = 6               # 6 AM delivery
-DELIVERY_MINUTE = 0
-TIMEZONE = 'America/Phoenix'    # Arizona time
-
-# Free tier settings
-FREE_TIER_DEALS_PER_WEEK = 3
-FREE_TIER_DELAY_HOURS = 48      # Free members get deals 48hrs after paid
+# County configuration lives in config/counties/; discovery grants no permission.

@@ -24,3 +24,25 @@ def test_supabase_backend_requires_credentials(monkeypatch):
         # subsequent SQLite tests.
         monkeypatch.delenv("DEALSCAN_DB_BACKEND", raising=False)
         importlib.reload(database)
+
+
+def test_production_cannot_accidentally_fall_back_to_sqlite(monkeypatch):
+    import database
+    monkeypatch.setenv('DEALSCAN_ENV','production')
+    try:
+        with __import__('pytest').raises(RuntimeError,match='Production ingestion requires'):
+            importlib.reload(database)
+    finally:
+        monkeypatch.delenv('DEALSCAN_ENV')
+        importlib.reload(database)
+
+
+def test_unknown_backend_is_an_error_not_a_silent_local_fallback(monkeypatch):
+    import database
+    monkeypatch.setenv('DEALSCAN_DB_BACKEND','supabse')
+    try:
+        with __import__('pytest').raises(RuntimeError,match='must be sqlite or supabase'):
+            importlib.reload(database)
+    finally:
+        monkeypatch.setenv('DEALSCAN_DB_BACKEND','sqlite')
+        importlib.reload(database)

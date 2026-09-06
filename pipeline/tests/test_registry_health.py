@@ -23,17 +23,6 @@ from config.counties.registry import (
 from config.counties.national_registry import ensure_pilot_counties, PILOT_COUNTIES
 from monitoring.health import build_county_health, coverage_tier_name, _registry_health
 
-REGTEST_PATH = os.path.join(os.path.dirname(__file__), "test_registry.json")
-
-@pytest.fixture(autouse=True)
-def _isolate_registry(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DEALSCAN_TEST_REGISTRY", "1")
-    import config.counties.registry as reg_mod
-    monkeypatch.setattr(reg_mod, "REGISTRY_PATH", REGTEST_PATH, raising=False)
-    if os.path.exists(REGTEST_PATH): os.remove(REGTEST_PATH)
-    yield
-    if os.path.exists(REGTEST_PATH): os.remove(REGTEST_PATH)
-
 
 def test_register_and_get_county() -> None:
     register_county(county_id="test_aa", county_name="Test County", state="Arizona", state_fips="04", county_fips="999", geoid="04999", population=1000, scraper_type="arcgis", verification_status="verified", coverage_status="tier_4")
@@ -101,7 +90,7 @@ def test_county_summary_counts() -> None:
 
 def test_health_tier_mapping() -> None:
     entry = build_county_health({"county_id": "ok_aa", "status": "ok", "counts": {"found": 100, "saved": 10, "published": 2}})
-    assert coverage_tier_name(entry.coverage_tier) == "Production Monitored"
+    assert coverage_tier_name(entry.coverage_tier) == "Verified Opportunities Published"
     assert entry.records_stored == 10
     assert entry.records_published == 2
 
@@ -131,7 +120,8 @@ def test_registry_health_never_infers_published_from_stored_records() -> None:
         "county_id": "truth_aa",
         "verification_status": "verified",
         "coverage_status": "tier_5",
-        "last_record_count": 100,
+        "last_record_count": 999,
+        "persisted_count": 100,
         "last_published_count": 7,
     })
     assert health.records_stored == 100
@@ -143,7 +133,33 @@ def test_registry_health_defaults_unknown_published_count_to_zero() -> None:
         "county_id": "legacy_aa",
         "verification_status": "verified",
         "coverage_status": "tier_5",
-        "last_record_count": 100,
+        "last_record_count": 999,
+        "persisted_count": 100,
     })
     assert health.records_stored == 100
     assert health.records_published == 0
+
+
+def test_health_never_equates_stored_with_qualified_or_run_time_with_freshness():
+    health = build_county_health({'county_id':'fixture','status':'degraded','at':'2026-09-05T00:00:00Z',
+                                 'counts':{'found':100,'saved':20}})
+    assert health.records_stored == 20
+    assert health.records_qualified == health.records_scored == 0
+    assert health.records_published == 0
+    assert health.last_successful_run is None and health.data_freshness is None
+    assert health.coverage_tier == 'tier_4'
+
+
+def test_unknown_legacy_found_count_is_not_persisted_inventory():
+    health = _registry_health({'county_id':'fixture','last_record_count':1000,'verification_status':'verified'})
+    assert health.records_stored == 0 and health.status != 'active'
+
+
+def test_expired_source_validation_and_changed_mapping_are_not_active():
+    from helpers import authorized_county
+    county = authorized_county({'county_id':'fixture','last_run_status':'ok','persisted_count':5})
+    assert _registry_health(county).ingestion_ready is True
+    for change in [{'last_validated_at':'2020-01-01T00:00:00Z'},{'field_mapping':{'apn':'OTHER'}}]:
+        health = _registry_health({**county,**change})
+        assert health.ingestion_ready is False
+        assert health.status == 'degraded'

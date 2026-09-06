@@ -9,6 +9,7 @@ type County = {
   tier: string | null
   tier_name: string | null
   status: string
+  source_stage: string
   records: number
   published: number
   last_run: string | null
@@ -23,6 +24,9 @@ type Summary = {
   total: number
   total_counties?: number
   active: number
+  live_validated: number
+  ingestion_ready: number
+  verified_opportunities: number
   degraded: number
   failed: number
   not_implemented: number
@@ -48,7 +52,7 @@ export default function CoveragePage() {
   const [stateFilter, setStateFilter] = useState('all')
 
   useEffect(() => {
-    fetch('/api/admin/coverage')
+    fetch('/api/admin/coverage',{cache:'no-store',signal:AbortSignal.timeout(12000)})
       .then((res) => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json() })
       .then(setData)
       .catch((err) => setError(String(err)))
@@ -77,17 +81,17 @@ export default function CoveragePage() {
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-700">Operations</p>
             <h1 className="mt-2 text-3xl font-black tracking-tight md:text-4xl">Coverage dashboard</h1>
-            <p className="mt-2 text-black/50">National source health, validation state, and verified ETL coverage.</p>
+            <p className="mt-2 text-black/50">Persisted source readiness and current inventory. County geography is not national live parcel coverage.</p>
           </div>
           <a href="/deals" className="rounded-full bg-[#13221c] px-5 py-2.5 text-sm font-semibold text-white transition hover:-translate-y-px">Open deal explorer →</a>
         </div>
 
         <div className="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {[
-            ['Total Counties', totalCounties, 'text-[#13221c]'],
-            ['Active', stats.active, 'text-emerald-700'],
-            ['Degraded', stats.degraded, 'text-amber-700'],
-            ['Failed', stats.failed, 'text-red-700'],
+            ['Registered counties', totalCounties, 'text-[#13221c]'],
+            ['Live validated', stats.live_validated, 'text-emerald-700'],
+            ['Ingestion ready', stats.ingestion_ready, 'text-emerald-700'],
+            ['Verified opportunities', stats.verified_opportunities, 'text-[#13221c]'],
           ].map(([label, value, tone]) => (
             <div key={String(label)} className="rounded-3xl border border-black/5 bg-white p-5 shadow-[0_15px_50px_rgba(0,0,0,0.04)]">
               <p className="text-sm text-black/45">{label}</p>
@@ -109,22 +113,23 @@ export default function CoveragePage() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-black/[0.025] text-left text-xs uppercase tracking-wider text-black/45">
-                <tr>{['Status', 'County', 'State', 'Coverage', 'Records', 'Published', 'Validation', 'Last Run'].map((h) => <th key={h} className="whitespace-nowrap px-5 py-4 font-bold">{h}</th>)}</tr>
+                <tr>{['Status', 'County', 'State', 'Coverage', 'Stored parcels', 'Published now', 'Source stage', 'Last run', 'Source freshness'].map((h) => <th key={h} className="whitespace-nowrap px-5 py-4 font-bold">{h}</th>)}</tr>
               </thead>
               <tbody>
                 {filteredCounties.map((c) => {
                   const status = statusMeta(c.status)
-                  const validation = c.validation_status === 'valid' ? 'Live validated' : c.verification_status === 'verified' ? 'ETL verified' : c.validation_status || c.verification_status || 'Pending'
+                  const validation = c.source_stage.replaceAll('_', ' ')
                   return (
                     <tr key={c.county_id} className="border-t border-black/5 transition hover:bg-black/[0.015]">
                       <td className="px-5 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${status.className}`}>{status.label}</span></td>
                       <td className="whitespace-nowrap px-5 py-4 font-semibold">{c.county_name}</td>
                       <td className="px-5 py-4">{c.state}</td>
-                      <td className="px-5 py-4"><span className="font-medium">{c.tier_name ?? c.tier ?? '—'}</span><span className="ml-2 text-xs text-black/35">{c.registry_coverage_status ?? ''}</span></td>
+                      <td className="px-5 py-4"><span className="font-medium">{c.tier_name ?? c.tier ?? '—'}</span></td>
                       <td className="px-5 py-4 tabular-nums">{c.records.toLocaleString()}</td>
                       <td className="px-5 py-4 tabular-nums">{c.published.toLocaleString()}</td>
                       <td className="px-5 py-4"><span className="rounded-full bg-black/[0.035] px-2.5 py-1 text-xs font-semibold text-black/55">{validation}</span></td>
                       <td className="whitespace-nowrap px-5 py-4 text-black/50">{c.last_run ? new Date(c.last_run).toLocaleString() : '—'}</td>
+                      <td className="whitespace-nowrap px-5 py-4 text-black/50">{c.data_freshness || 'Unknown'}</td>
                     </tr>
                   )
                 })}

@@ -33,3 +33,20 @@ def test_redis_rest_uses_token_and_encodes_keys(monkeypatch):
     calls.clear()
     assert publish.read_top() == {"generated_at": "now", "deals": []}
     assert calls[0][2]["headers"]["Authorization"] == "Bearer secret-token"
+
+
+def test_cache_export_cannot_publish_a_supplied_bundle(monkeypatch):
+    import publish,database
+    monkeypatch.setenv('ENABLE_CACHE_EXPORT','true')
+    monkeypatch.setattr(database,'get_top_deals',lambda **kw:[])
+    captured=[]
+    monkeypatch.setattr(publish,'_set_key',lambda key,payload:captured.append(payload) or True)
+    assert publish.publish_top({'deals':[{'apn':'untrusted','owner_name':'PRIVATE'}]})
+    assert 'PRIVATE' not in captured[0] and 'untrusted' not in captured[0]
+    assert '"deals":[]' in captured[0]
+
+
+def test_disabled_cache_export_is_not_a_successful_publication(monkeypatch):
+    import publish_live
+    monkeypatch.delenv('ENABLE_CACHE_EXPORT',raising=False)
+    assert publish_live.main()==1

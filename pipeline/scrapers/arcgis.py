@@ -10,6 +10,7 @@ config.counties.COUNTIES[c]['sources']['arcgis']['fields'].
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, Iterator, List, Optional
 
 from .base import fetch, post_json, probe, ProbeResult  # noqa: F401
@@ -77,14 +78,45 @@ def find_layer_via_hub(hub_root: str,
     return best
 
 
+def layer_metadata(layer_url: str, *, live: bool = False) -> Dict[str, Any]:
+    r = fetch(f"{layer_url.rstrip('/')}?f=json", ttl=0 if live else 3600, as_json=True, respect_robots=False)
+    if not r.ok or not isinstance(r.body, dict) or r.body.get('error'):
+        raise RuntimeError('ArcGIS layer metadata unavailable')
+    return r.body
+
+
 def layer_fields(layer_url: str) -> Optional[List[str]]:
-    """Return the layer's actual field names from its metadata endpoint."""
-    r = fetch(f"{layer_url}?f=json", ttl=24 * 3600, as_json=True,
-              respect_robots=False)
-    if not r.ok or not isinstance(r.body, dict):
+    try:
+        return [field['name'] for field in layer_metadata(layer_url).get('fields', []) if field.get('name')]
+    except RuntimeError:
         return None
-    return [f.get("name") for f in r.body.get("fields") or []
-            if f.get("name")]
+
+
+def object_id_field(metadata: dict) -> str:
+    fields=[field for field in metadata.get('fields',[]) if isinstance(field,dict) and isinstance(field.get('name'),str)]
+    declared=metadata.get('objectIdField')
+    if isinstance(declared,str) and declared:
+        matches=[field['name'] for field in fields if field['name'].casefold()==declared.casefold()]
+        return matches[0] if len(matches)==1 else ''
+    candidates=[field['name'] for field in fields if field.get('type')=='esriFieldTypeOID']
+    return candidates[0] if len(candidates)==1 else ''
+
+
+def _oid_number(value) -> int | None:
+    if type(value) is int: result=value
+    elif isinstance(value,str) and re.fullmatch(r'[0-9]+',value): result=int(value)
+    else: return None
+    return result if 0<=result<=2**63-1 else None
+
+
+def query_count(layer_url: str, where: str = '1=1') -> int:
+    response = post_json(layer_url.rstrip('/') + '/query', {'f': 'json', 'where': where, 'returnCountOnly': 'true'})
+    if not response.ok or not isinstance(response.body, dict) or response.body.get('error'):
+        raise RuntimeError('ArcGIS count query failed')
+    count = response.body.get('count')
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise RuntimeError('ArcGIS count query returned an invalid count')
+    return count
 
 
 def resolve_field_mapping(field_map: Dict[str, Any],
@@ -98,125 +130,108 @@ def resolve_field_mapping(field_map: Dict[str, Any],
     """
     if not source_fields:
         return dict(field_map)
-    actual = {str(name).strip().lower(): name for name in source_fields
+    actual = {str(name).strip().casefold(): name for name in source_fields
               if name not in (None, "")}
+
+    if len(actual)!=len([name for name in source_fields if name not in (None,'')]):
+        raise ValueError('Ambiguous source field casing')
 
     def resolve(value: Any) -> Any:
         if isinstance(value, (list, tuple)):
             return [resolve(part) for part in value]
-        if not isinstance(value, str) or not value or "." in value:
+        if not isinstance(value, str) or not value:
             return value
-        return actual.get(value.strip().lower(), value)
+        return actual.get(value.strip().casefold(), value)
 
     return {pipeline_field: resolve(src_field)
             for pipeline_field, src_field in field_map.items()}
 
 
 def query_layer(layer_url: str, where: str, out_fields: List[str],
-                max_records: int = 5000,
-                page_size: int = 1000) -> Iterator[Dict[str, Any]]:
-    """Query a layer with pagination and fail loudly on API/network errors."""
+                max_records: int = 5000, page_size: int = 1000,
+                *, metadata: Optional[dict] = None, diagnostics: Optional[dict] = None) -> Iterator[Dict[str, Any]]:
+    """Stable OID pagination shared by live validation and ETL.
+
+    Never mistake a service-imposed page cap for exhaustion, accept a repeated
+    page, or exceed a caller's bound. Unsupported pagination is quarantined.
+    """
+    if type(max_records) is not int or type(page_size) is not int or not 0<=max_records<=5000 or page_size<=0:
+        raise ValueError('Invalid ArcGIS record or page bound')
+    if max_records==0: return
+    meta = metadata if metadata is not None else layer_metadata(layer_url)
+    oid = object_id_field(meta)
+    capabilities = meta.get('advancedQueryCapabilities') or {}
+    if not oid or capabilities.get('supportsPagination') is not True or capabilities.get('supportsOrderBy') is not True:
+        raise RuntimeError('ArcGIS source does not support verified ordered pagination')
+    limit = meta.get('maxRecordCount')
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+        raise RuntimeError('ArcGIS source has no valid record limit')
+    size = min(page_size, limit, 1000)
+    fields = list(dict.fromkeys([*out_fields, oid]))
     offset = 0
-    fields = ",".join(out_fields) if out_fields else "*"
+    seen = set()
+    previous = None
+    if diagnostics is not None:
+        diagnostics.update(pages=0, record_limit=limit, object_id_field=oid)
     while offset < max_records:
-        payload = {
-            "where": where,
-            "outFields": fields,
-            "returnGeometry": "false",
-            "f": "json",
-            "resultOffset": offset,
-            "resultRecordCount": min(page_size, max_records - offset),
-        }
-        r = post_json(f"{layer_url}/query", payload)
-        if not r.ok:
-            raise RuntimeError(
-                f"ArcGIS query request failed: {r.error or 'unknown error'}"
-            )
-        if not isinstance(r.body, dict):
-            raise RuntimeError("ArcGIS query returned a non-object response")
-        if r.body.get("error"):
-            raise RuntimeError(f"ArcGIS query error: {r.body['error']}")
-        feats = r.body.get("features") or []
-        for f in feats:
-            attrs = f.get("attributes") or {}
-            if attrs:
-                yield attrs
-        got = len(feats)
-        if got == 0 or got < min(page_size, max_records - offset):
+        requested = min(size, max_records - offset)
+        payload = {'where': where, 'outFields': ','.join(fields) if out_fields else '*',
+                   'returnGeometry': 'false', 'f': 'json', 'orderByFields': f'{oid} ASC',
+                   'resultOffset': offset, 'resultRecordCount': requested}
+        response = post_json(layer_url.rstrip('/') + '/query', payload)
+        if not response.ok:
+            raise RuntimeError('ArcGIS query request failed')
+        body = response.body
+        if not isinstance(body, dict) or body.get('error'):
+            raise RuntimeError('ArcGIS query returned an API error or invalid response')
+        features = body.get('features')
+        if not isinstance(features, list):
+            raise RuntimeError('ArcGIS query did not return a features array')
+        if len(features) > requested:
+            raise RuntimeError('ArcGIS source ignored the requested record limit')
+        if diagnostics is not None:
+            diagnostics['pages'] += 1
+        if not features:
+            if body.get('exceededTransferLimit'):
+                raise RuntimeError('ArcGIS pagination made no progress')
             return
-        offset += got
+        for feature in features:
+            attrs = feature.get('attributes') if isinstance(feature, dict) else None
+            numeric_id=_oid_number(attrs.get(oid)) if isinstance(attrs,dict) else None
+            if numeric_id is None:
+                # Reject this one malformed source record in the adapter, while
+                # keeping valid siblings and the raw payload available for audit.
+                yield {'_malformed_feature': feature}
+                continue
+            identity = numeric_id
+            if identity in seen:
+                raise RuntimeError('ArcGIS pagination repeated an object ID')
+            if previous is not None and identity<=previous:
+                raise RuntimeError('ArcGIS source ignored ordered object-ID pagination')
+            seen.add(identity)
+            previous=identity
+            yield attrs
+        offset += len(features)
+        if body.get('exceededTransferLimit') is False:
+            return
+        if len(features) < requested and not body.get('exceededTransferLimit'):
+            return
 
 
 def map_attributes(attrs: Dict[str, Any], field_map: Dict[str, Any],
                    county_id: str, defaults: Dict[str, Any]) -> Dict[str, Any]:
-    """Map raw ArcGIS attributes to the pipeline Property dict shape."""
-    attr_index = {str(key).lower(): key for key in attrs}
-
-    def get(src_field: Any) -> Any:
-        if isinstance(src_field, (list, tuple)):
-            values = [get(part) for part in src_field]
-            values = [str(v).strip() for v in values if v not in (None, "") and str(v).strip()]
-            return ", ".join(values) if values else None
-        if not src_field:
-            return None
-        if "." in str(src_field):
-            cur: Any = attrs
-            for part in str(src_field).split("."):
-                if isinstance(cur, dict):
-                    key = attr_index.get(part.lower()) if cur is attrs else next(
-                        (k for k in cur if str(k).lower() == part.lower()), None)
-                    cur = cur.get(key) if key is not None else None
-                else:
-                    return None
-            return cur
-        actual_key = attr_index.get(str(src_field).lower())
-        return attrs.get(actual_key) if actual_key is not None else None
-
-    out = dict(defaults)
-    for pipeline_field, src_field in field_map.items():
-        out[pipeline_field] = get(src_field)
-    out["lot_size_acres"] = _to_float(out.get("lot_size_acres"))
-    out["assessed_value"] = _to_float(out.get("assessed_value"))
-    out["market_value"] = _to_float(out.get("market_value"))
-    out["tax_amount"] = _to_float(out.get("tax_amount"))
-    out["improvement_value"] = _to_float(out.get("improvement_value"))
-    out["tax_delinquent_years"] = _to_int(out.get("tax_delinquent_years"))
-    out["year_acquired"] = _to_int(out.get("year_acquired"))
-    out["latitude"] = _to_float(out.get("latitude"))
-    out["longitude"] = _to_float(out.get("longitude"))
-    out["county_id"] = county_id
-    return out
+    from normalization import normalize
+    return normalize(attrs, {'fields': field_map, 'county_id': county_id, 'defaults': defaults})
 
 
-VACANT_LAND_USE_CODES = {
-    "cochise_az": ["0011", "9700", "0012", "0013", "0014", "0001", "0002", "0003"],
-    "mohave_az": ["0011", "9700", "VAC", "VACANT", "0001", "0002", "0003"],
-    "el_paso_tx": ["0011", "9700", "VAC", "VACANT"],
-    "hudson_co": ["0011", "9700", "VAC", "VACANT"],
-    "socorro_nm": ["0011", "9700", "VAC", "VACANT"],
-}
+# Retained as a compatibility name; undocumented cross-county numeric codes
+# are not vacancy evidence. Reviewed codebooks belong in source configuration.
+VACANT_LAND_USE_CODES: Dict[str, List[str]] = {}
 
 
 def is_vacant_residential(prop: Dict[str, Any], county_id: str) -> bool:
-    """Return True only when the source provides a credible vacant-land signal."""
-    lu = str(prop.get("land_use") or "").strip().lower()
-    zoning = str(prop.get("zoning") or "").strip().lower()
-    code = str(prop.get("use_code") or prop.get("land_use") or "").strip().upper()
-    imp = prop.get("has_improvements")
-    improvement_value = prop.get("improvement_value")
-    has_imp = imp is True or imp in (1, "1", "Y", "YES", "Yes", "true", "True")
-    no_imp = imp is False or imp == 0 or imp in ("0", "N", "NO", "No", "NONE", "false", "False")
-    if has_imp:
-        return "vacant" in lu or "unimproved" in lu
-    if no_imp:
-        if "residential" in lu or "res" in zoning or "residential" in zoning:
-            return True
-        if "vacant" in lu or "unimproved" in lu:
-            return True
-        return code in {str(x).upper() for x in VACANT_LAND_USE_CODES.get(county_id, [])}
-    if "vacant" in lu or "unimproved" in lu or "vacant" in zoning:
-        return True
-    return code in {str(x).upper() for x in VACANT_LAND_USE_CODES.get(county_id, [])}
+    from validation.vacancy import vacancy_decision
+    return vacancy_decision(prop, county_id)[0]
 
 
 def export_snapshot(props: List[Dict[str, Any]], path: str) -> str:

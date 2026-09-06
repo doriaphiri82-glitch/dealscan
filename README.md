@@ -1,85 +1,92 @@
-# DealScan AI
+# DealScan
 
-**AI-Powered Vacant Land Deal Finder**
+Source-backed vacant-land research with a Next.js application, Python pipeline,
+and Supabase persistence. **Missing evidence stays missing.** An empty verified
+feed is an acceptable result; invented listings, comparable sales and profits are not.
 
-DealScan discovers authoritative county parcel sources, screens vacant-land records for investment signals, scores opportunities, and exposes only verified deals through the web application.
+## Current release status
 
-## Project Structure
+The ingestion, publication, API and database-security contracts have offline
+regression coverage. That is **not production verification**. No production
+migration, real Supabase ingestion or Vercel deployment has been proved in this
+engineering environment. Follow the [production runbook](docs/production-runbook.md).
 
-```
-dealscan/
-├── landing/          # Next.js application, auth, dashboard and public API
-├── pipeline/         # Python discovery, validation, ETL and scoring engine
-│   ├── config/       # National county registry + source configuration
-│   ├── scrapers/     # ArcGIS/public-record adapters
-│   ├── scoring/      # Deal scoring and valuation evidence
-│   ├── delivery/     # Optional email delivery
-│   └── main.py       # Pipeline orchestrator
-├── docs/             # Architecture and pipeline documentation
-└── .github/workflows # CI, production ingestion and smoke validation
-```
+Three pilots are configured: `cochise_az`, `mohave_az`, and `el_paso_tx`.
+A Census county universe/discovery implementation exists, but county geography
+is not national live parcel coverage. The official 2025 county ZIP and executable
+live source validation still require a working network environment. Technical
+metadata research alone does not authorize ingestion.
 
-## Production Architecture
+## Architecture and integrity
 
-- **Supabase/Postgres:** durable source of truth for counties, properties, deals, comparables and ingestion audit history.
-- **GitHub Actions:** production ingestion every 15 minutes with bounded discovery/validation/ETL batches.
-- **Next.js/Vercel:** public site, authentication, dashboard and server-side API routes.
-- **Redis/Vercel KV:** optional low-latency cache; DealScan does not require it for primary deal reads.
-- **SQLite:** local development fallback only.
+- **Supabase/Postgres:** authoritative production properties, private assessments,
+  comparables, county state and durable ingestion evidence.
+- **Python:** discover → live validate → explicitly authorize → bounded ingest.
+  Ingestion does not publish opportunities. Separate verification replays source
+  evidence, vacancy, qualified sales and the documented financial model.
+- **PostgreSQL:** independent raw JSON/hash, mapping, evidence and arithmetic gates;
+  changes revoke publication transactionally. RLS excludes unverified/expired rows.
+- **Next.js/Vercel:** verified-only, allowlisted APIs and authenticated workspaces.
+  Public reads never fall back to Redis, a committed bundle or demonstration data.
+- **Waitlist:** private atomic Supabase writes, explicit consent, durable rate limits,
+  a configured operator contact and no temporary-file success fallback.
+- **SQLite:** explicit local development only; rejected as a production backend.
 
-Every production candidate retains source provenance. The pipeline records ETL runs in `ingestion_runs` and persisted source records in `ingestion_records`. Public deal endpoints filter for `verification_status=verified` and never fall back to hard-coded demo opportunities.
+See [ingestion integrity](docs/ingestion-integrity.md) and
+[data-pipeline scope](docs/DATA_PIPELINE_SCOPE.md) for limits and evidence requirements.
 
-## Quick Start
+## Reproducible local checks
 
-### Landing page
+Python **3.11**, Node **22**:
 
 ```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r pipeline/requirements.lock.txt
+.venv/bin/python -m pytest -q
+.venv/bin/python -m compileall -q pipeline
+
 cd landing
-npm install
-npm run dev
+npm ci
+npm test
+npm run typecheck
+npm run build
+npm audit --audit-level=high
+npm run dev -- --hostname 0.0.0.0
 ```
 
-### Local pipeline
+Tests use isolated fixtures and blocked external network access. They must never
+point at a production project. See `.env.example`, `pipeline/.env.example`, and
+`landing/.env.example`; keep real secrets out of Git and chat.
 
-```bash
-cd pipeline
-python3 main.py --setup-db
-python3 main.py --validate
-python3 main.py --run-national 1 --max-records 250
-```
+## Deployment and operation
 
-For production Supabase mode, configure `DEALSCAN_DB_BACKEND=supabase`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY`. Never expose the service-role key to browser code.
+1. Back up and inspect the actual database, then apply **all ordered migrations**
+   in `supabase/migrations/`. They preserve history but revoke legacy publication.
+2. Configure Vercel with root **`landing`**, Node 22, matching public Supabase
+   URL/key and Supabase Auth callback URLs. Private admin/waitlist features use
+   separate server-only credentials. Configure a real `WAITLIST_CONTACT_EMAIL`.
+3. Configure the protected GitHub **production** environment with Supabase service
+   and public keys. Do not expose the service key through `NEXT_PUBLIC_*`.
+4. Dispatch the explicit production smoke for one reviewed county, initially
+   **`el_paso_tx`, 250 real records**, and the actual deployed HTTPS app origin.
+   Prove the current run's database/audit chain and the matching deployed API.
+5. Review any actual financial candidates separately. Zero public opportunities
+   is acceptable when asking prices, costs or suitable sales are missing.
+6. Enable scheduled ingestion only after that proof with
+   `ENABLE_PRODUCTION_INGESTION=true`. Cron is otherwise disabled.
 
-## Production validation
+No workflow commits runtime source rows or publishes a fallback data bundle.
+The production workflow is intentionally separate from source-discovery research.
 
-The normal CI workflow verifies Python compilation/tests and the Next.js production build. The explicit production smoke workflow validates real Supabase credentials, live source validation, one bounded production ingestion, persisted deals, and the ingestion audit trail.
+## Product boundaries
 
-## Data-quality policy
+Saved parcels and recent research are browser-profile local, not account-synced.
+Same-APN parcels remain county-scoped; legacy unscoped references are not guessed.
+Paid checkout, automated email alerts and premium-service promises are not active.
+Optional email/cache utilities fail closed by default and are not publication paths.
 
-DealScan is deliberately conservative. Missing, stale, malformed, or insufficiently verifiable county data is rejected rather than fabricated. A candidate must pass source, normalization, vacant-land and financial-evidence checks before it can become a public verified deal.
 
-## Pricing Model
-
-| Tier | Price | Features |
-|------|-------|----------|
-| Free | $0/mo | Limited verified opportunities |
-| Pro | $297/mo | Full deal analysis and expanded opportunities |
-| Elite | $697/mo | Everything + premium support/coaching |
-
-Pricing is product configuration and can be changed independently of the ingestion engine.
-
-## Status
-
-- [x] Next.js application and responsive UI
-- [x] Supabase authentication integration
-- [x] Protected dashboard routes
-- [x] Public verified-deals API
-- [x] National county discovery/validation pipeline
-- [x] Supabase production persistence adapter
-- [x] Ingestion provenance/audit trail
-- [x] Automated CI for Python + web build
-- [x] Scheduled production ingestion workflow
-- [x] Explicit production smoke test
-- [ ] Configure GitHub production Supabase secrets
-- [ ] Run first successful production national ingestion
-- [ ] Verify Vercel production environment variables/domain
+Browser research cancels superseded requests and never switches a same-APN parcel
+into the wrong county after navigation or a late response. Saved references are
+validated without silently truncating or reinterpreting corrupt data. Currency
+formatting preserves source cents rather than rounding a small price to zero.

@@ -1,78 +1,72 @@
+import { createHmac } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
-import { promises as fs } from 'fs'
-import path from 'path'
+import { privateRpc, privateSupabaseConfig } from '@/lib/supabase-private'
+import { supportContact } from '@/lib/support'
+import { readJsonBody, RequestBodyError } from '@/lib/request-body'
 
-interface WaitlistEntry { email: string; source: string; timestamp: string }
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+export const maxDuration = 15
+const headers = { 'Cache-Control': 'no-store' }
+const MAX_BODY = 2048
+const emailPattern = /^[^\s@<>"\\]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i
 
-const KV_URL = process.env.KV_REST_API_URL || ''
-const KV_TOKEN = process.env.KV_REST_API_TOKEN || ''
-const REDIS_URL = process.env.REDIS_URL || ''
-const KV_KEY = 'dealscan:waitlist'
-const LOCAL_FILE = path.join(process.cwd(), 'data', 'waitlist.json')
-const TMP_FILE = '/tmp/dealscan-waitlist.json'
-const isRedisProtocol = /^rediss?:\/\//.test(REDIS_URL)
-const isRedisRest = /^https:\/\//.test(REDIS_URL)
-
-const globalForRedis = globalThis as unknown as { __dealscanRedis?: { client: RedisLike | null } }
-type RedisLike = { get: (k: string) => Promise<string | null>; set: (k: string, v: string) => Promise<unknown> }
-
-async function getRedisClient(): Promise<RedisLike | null> {
-  if (!isRedisProtocol) return null
-  if (globalForRedis.__dealscanRedis?.client) return globalForRedis.__dealscanRedis.client
+function sameOrigin(request:NextRequest):boolean {
   try {
-    const mod = await import('redis')
-    const client = mod.createClient({ url: REDIS_URL })
-    await client.connect()
-    globalForRedis.__dealscanRedis = { client }
-    return client
-  } catch { return null }
-}
-
-async function redisProtoRead(): Promise<WaitlistEntry[] | null> {
-  const client = await getRedisClient(); if (!client) return null
-  try { const raw = await client.get(KV_KEY); if (raw == null) return []; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : [] } catch { return null }
-}
-async function redisProtoWrite(entries: WaitlistEntry[]) { const client = await getRedisClient(); if (!client) return false; try { await client.set(KV_KEY, JSON.stringify(entries)); return true } catch { return false } }
-async function kvRead(): Promise<WaitlistEntry[] | null> { if (!KV_URL || !KV_TOKEN) return null; try { const res = await fetch(`${KV_URL}/get/${KV_KEY}`, { headers: { Authorization: `Bearer ${KV_TOKEN}` } }); if (!res.ok) return null; const json = await res.json() as { result?: string | null }; if (json.result == null) return []; const parsed = JSON.parse(json.result); return Array.isArray(parsed) ? parsed : [] } catch { return null } }
-async function kvWrite(entries: WaitlistEntry[]) { if (!KV_URL || !KV_TOKEN) return false; try { const res = await fetch(`${KV_URL}/set/${KV_KEY}`, { method: 'POST', headers: { Authorization: `Bearer ${KV_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify(entries) }); return res.ok } catch { return false } }
-async function redisRestRead(): Promise<WaitlistEntry[] | null> { if (!isRedisRest) return null; try { const res = await fetch(`${REDIS_URL}/get/${KV_KEY}`); if (!res.ok) return null; const json = await res.json() as { result?: string | null }; if (json.result == null) return []; const parsed = JSON.parse(json.result); return Array.isArray(parsed) ? parsed : [] } catch { return null } }
-async function redisRestWrite(entries: WaitlistEntry[]) { if (!isRedisRest) return false; try { const res = await fetch(`${REDIS_URL}/set/${KV_KEY}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(entries) }); return res.ok } catch { return false } }
-async function fsRead(file: string): Promise<WaitlistEntry[] | null> { try { const parsed = JSON.parse(await fs.readFile(file, 'utf-8')); return Array.isArray(parsed) ? parsed : [] } catch { return null } }
-async function fsWrite(file: string, entries: WaitlistEntry[]) { try { const dir = path.dirname(file); if (dir !== path.dirname(TMP_FILE)) await fs.mkdir(dir, { recursive: true }); await fs.writeFile(file, JSON.stringify(entries, null, 2)); return true } catch { return false } }
-
-type StorageSource = 'kv-rest' | 'redis-rest' | 'redis-proto' | 'local' | 'tmp' | 'none'
-async function readEntries(): Promise<{ entries: WaitlistEntry[]; source: StorageSource }> {
-  if (KV_URL && KV_TOKEN) { const value = await kvRead(); if (value) return { entries: value, source: 'kv-rest' } }
-  if (isRedisRest) { const value = await redisRestRead(); if (value) return { entries: value, source: 'redis-rest' } }
-  if (isRedisProtocol) { const value = await redisProtoRead(); if (value) return { entries: value, source: 'redis-proto' } }
-  const local = await fsRead(LOCAL_FILE); if (local) return { entries: local, source: 'local' }
-  const tmp = await fsRead(TMP_FILE); if (tmp) return { entries: tmp, source: 'tmp' }
-  return { entries: [], source: 'none' }
-}
-async function writeEntries(entries: WaitlistEntry[], source: StorageSource) {
-  if (source === 'kv-rest' && await kvWrite(entries)) return true
-  if (source === 'redis-rest' && await redisRestWrite(entries)) return true
-  if (source === 'redis-proto' && await redisProtoWrite(entries)) return true
-  if (source === 'none') {
-    if (KV_URL && KV_TOKEN && await kvWrite(entries)) return true
-    if (isRedisRest && await redisRestWrite(entries)) return true
-    if (isRedisProtocol && await redisProtoWrite(entries)) return true
-  }
-  return (await fsWrite(LOCAL_FILE, entries)) || (await fsWrite(TMP_FILE, entries))
+    const header=request.headers.get('origin')||''
+    const origin=new URL(header)
+    const incoming=new URL(request.url)
+    const host=request.headers.get('host')||incoming.host
+    const previewHost=new URL('https://'+host).hostname.toLowerCase()
+    // Known deployment proxies terminate TLS before forwarding to Next. Do not
+    // trust a caller-supplied forwarded-protocol header as an origin override.
+    const protocol=process.env.VERCEL==='1'||previewHost.endsWith('.e2b.app')?'https:':incoming.protocol
+    const expected=new URL(protocol+'//'+host)
+    return ['https:','http:'].includes(origin.protocol) && header===origin.origin
+      && !expected.username && !expected.password && !expected.search && !expected.hash && expected.pathname==='/' && origin.origin===expected.origin
+  } catch {return false}
 }
 
 export async function POST(request: NextRequest) {
-  let body: { email?: unknown; source?: unknown }
-  try { body = await request.json() } catch { return NextResponse.json({ message: 'Invalid request body.' }, { status: 400 }) }
-  const { email, source } = body
-  if (!email || typeof email !== 'string') return NextResponse.json({ message: 'Email is required.' }, { status: 400 })
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return NextResponse.json({ message: 'Please enter a valid email address.' }, { status: 400 })
-  const cleanEmail = email.trim().toLowerCase()
-  const { entries, source: storageSource } = await readEntries()
-  if (entries.some((entry) => entry.email === cleanEmail)) return NextResponse.json({ message: 'You’re already signed up for DealScan updates.', alreadyJoined: true }, { status: 200 })
-  entries.push({ email: cleanEmail, source: typeof source === 'string' ? source : 'unknown', timestamp: new Date().toISOString() })
-  if (!(await writeEntries(entries, storageSource))) return NextResponse.json({ message: 'Updates sign-up is not available right now. Please try again later.' }, { status: 503 })
-  return NextResponse.json({ message: 'You’re signed up for DealScan updates.', position: entries.length, total: entries.length }, { status: 201 })
+  // JSON + same-origin browser requests; never accept a cross-site HTML form.
+  if(!sameOrigin(request))return NextResponse.json({error:'Same-origin request required'},{status:403,headers})
+  if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
+    return NextResponse.json({ error: 'JSON request required' }, { status: 415, headers })
+  }
+  let input: Record<string, unknown>
+  try {
+    const value = await readJsonBody(request,MAX_BODY,5000)
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error()
+    input = value as Record<string, unknown>
+  } catch(error) { return NextResponse.json({ error: error instanceof RequestBodyError?error.message:'Invalid request' }, { status: error instanceof RequestBodyError?error.status:400, headers }) }
+  const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : ''
+  if (!email || email.length > 254 || !emailPattern.test(email) || email.split('@')[0].length > 64) {
+    return NextResponse.json({ error: 'Please enter a valid email address.' }, { status: 400, headers })
+  }
+  if (input.consent !== true) {
+    return NextResponse.json({ error: 'Please consent to product updates before signing up.' }, { status: 400, headers })
+  }
+  try {
+    // Trust proxy-provided client IPs only on the target Vercel deployment.
+    // Other hosts share a conservative rate bucket; no raw IP is persisted.
+    if (!supportContact()) throw new Error('Operator contact not configured')
+    const ip = process.env.VERCEL === '1'
+      ? (request.headers.get('x-vercel-forwarded-for') || request.headers.get('x-forwarded-for'))?.split(',')[0].trim() || 'unknown'
+      : 'unknown'
+    const requestKey = createHmac('sha256', privateSupabaseConfig().key).update(ip.slice(0,128)).digest('hex')
+    const accepted = await privateRpc('join_waitlist', {
+      p_email: email, p_source: input.source === 'final_cta' ? 'final_cta' : 'website', p_request_key: requestKey,
+    })
+    if (accepted === false) return NextResponse.json({ error: 'Too many requests. Please try again later.' }, { status: 429, headers: { ...headers, 'Retry-After': '3600' } })
+    if (accepted !== true) throw new Error()
+    // Identical response for existing and new addresses; no membership/count leak.
+    return NextResponse.json({ ok: true, message: 'Your request for product updates is saved.' }, { status: 202, headers })
+  } catch {
+    // No Redis, filesystem or /tmp fallback can pretend a signup was durable.
+    return NextResponse.json({ error: 'Signups are temporarily unavailable. Please try again later.' }, { status: 503, headers })
+  }
 }
 
-export async function GET() { const { entries } = await readEntries(); return NextResponse.json({ total: entries.length }) }
+export async function GET() {
+  return NextResponse.json({ error: 'Method not allowed' }, { status: 405, headers: { ...headers, Allow: 'POST' } })
+}

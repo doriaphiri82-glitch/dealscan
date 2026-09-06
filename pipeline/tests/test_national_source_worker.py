@@ -1,3 +1,4 @@
+from helpers import authorized_county
 from discovery import national_source_worker as worker
 
 
@@ -80,6 +81,7 @@ def test_run_statewide_batch_etls_already_valid_counties(monkeypatch):
         {"county_id": "nc_valid", "state": "North Carolina", "state_fips": "37", "county_fips": "001", "validation_status": "valid", "arcgis_layer_url": "https://example.test/valid"},
         {"county_id": "nc_new", "state": "North Carolina", "state_fips": "37", "county_fips": "003", "validation_status": "pending", "arcgis_layer_url": "https://example.test/new"},
     ]
+    registry = [authorized_county(c) if c.get("validation_status") == "valid" else c for c in registry]
     calls=[]
     monkeypatch.setattr(worker, "ensure_national_counties", lambda: None)
     monkeypatch.setattr(worker, "_statewide_snapshot", lambda states=None: {"census": {}, "reconciled": [], "queue": queue, "coverage": {}})

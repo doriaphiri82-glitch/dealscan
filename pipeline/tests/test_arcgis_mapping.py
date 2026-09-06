@@ -28,3 +28,14 @@ def test_map_attributes_supports_case_insensitive_nested_paths():
     attrs = {"Owner": {"Name": "Owner One"}}
     result = map_attributes(attrs, {"owner_name": "owner.name"}, "test_aa", {})
     assert result["owner_name"] == "Owner One"
+
+
+
+def test_qualified_join_fields_resolve_to_actual_source_spelling():
+    assert resolve_field_mapping({'apn':'parcels.apn'},['PARCELS.APN'])=={'apn':'PARCELS.APN'}
+
+
+def test_ambiguous_field_casing_does_not_silently_pick_a_column():
+    import pytest
+    with pytest.raises(ValueError,match='Ambiguous'):
+        resolve_field_mapping({'apn':'apn'},['APN','apn'])

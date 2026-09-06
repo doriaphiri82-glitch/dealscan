@@ -1,15 +1,10 @@
-import { cookies } from 'next/headers'
-import { createServerClient } from '@supabase/ssr'
+import { currentUser } from '@/lib/supabase-server'
 import InvestorDashboard from './InvestorDashboard'
 
+export const dynamic = 'force-dynamic'
+
 export default async function DashboardPage() {
-  const cookieStore = cookies()
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { cookies: { getAll: () => cookieStore.getAll(), setAll: () => {} } },
-  )
-  const { data: { user } } = await supabase.auth.getUser()
+  const user = await currentUser()
 
   if (!user) {
     return (
