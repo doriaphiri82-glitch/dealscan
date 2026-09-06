@@ -52,20 +52,41 @@ jobs:
           set -euo pipefail
           mkdir -p data
           if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "skipped_no_secret" > data/supabase-backup-status.txt
             echo "::warning::SUPABASE_DB_URL not configured; physical backup skipped (logical snapshot still recorded)"
           else
             # Schema-only: never export row content into an artifact. Counts only.
-            pg_dump "$SUPABASE_DB_URL" --schema-only --no-owner --no-privileges \
+            # stderr is credential-redacted and never printed to the console —
+            # only a short excerpt lands in the artifact for operator diagnosis.
+            if pg_dump "$SUPABASE_DB_URL" --schema-only --no-owner --no-privileges \
               --schema=public --schema=supabase_migrations \
-              -f data/supabase-schema-backup.sql
-            TABLES="counties properties deals comps subscribers deliveries waitlist ingestion_runs ingestion_records waitlist_request_limits"
-            : > data/supabase-counts-backup.txt
-            for t in $TABLES; do
-              c=$(psql "$SUPABASE_DB_URL" -Atc "select count(*) from public.$t" || echo unavailable)
-              echo "$t=$c" >> data/supabase-counts-backup.txt
-            done
-            wc -l data/supabase-schema-backup.sql
-            cat data/supabase-counts-backup.txt
+              -f data/supabase-schema-backup.sql \
+              2> >(sed -E 's|://[^/@:]+(:[^/@]*)?@|://REDACTED@|g' | head -c 400 > data/supabase-backup-error.txt); then
+              code_dump=0
+            else
+              code_dump=$?
+            fi
+            if [ "$code_dump" -eq 0 ]; then
+              TABLES="counties properties deals comps subscribers deliveries waitlist ingestion_runs ingestion_records waitlist_request_limits"
+              : > data/supabase-counts-backup.txt
+              ok=1
+              for t in $TABLES; do
+                if c=$(psql "$SUPABASE_DB_URL" -Atc "select count(*) from public.$t" 2>/dev/null); then
+                  echo "$t=$c" >> data/supabase-counts-backup.txt
+                else
+                  echo "$t=unavailable" >> data/supabase-counts-backup.txt; ok=0
+                fi
+              done
+              wc -l data/supabase-schema-backup.sql
+              cat data/supabase-counts-backup.txt
+              if [ "$ok" -eq 1 ]; then echo "ok" > data/supabase-backup-status.txt; else
+                echo "counts_partial" > data/supabase-backup-status.txt
+                echo "::warning::pg_dump schema backup succeeded but some table counts were unavailable."
+              fi
+            else
+              echo "failed_exit_$code_dump" > data/supabase-backup-status.txt
+              echo "::warning::Physical pg_dump backup failed (exit $code_dump). Full diagnosis is in the redacted error excerpt inside the run artifact; the logical schema/count snapshot remains the verified surrogate."
+            fi
           fi
       - name: Inspect, snapshot, apply reviewed ordered migrations, verify Auth
         env:
@@ -90,5 +111,7 @@ jobs:
             pipeline/data/supabase-handoff.json
             data/supabase-schema-backup.sql
             data/supabase-counts-backup.txt
+            data/supabase-backup-status.txt
+            data/supabase-backup-error.txt
           if-no-files-found: warn
           retention-days: 7
