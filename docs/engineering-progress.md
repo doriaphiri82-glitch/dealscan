@@ -189,15 +189,40 @@ No production-ready claim is made or implied by these changes.
 - Full local sweep re-verified: 461 Python tests, 208 web tests, typecheck,
   production build; final diff scanned — no secrets, no credentials, no debug
   code (the four print()s are the handoff CLIs' sanitized report emitters).
-- **IPv4 Session Pooler derivation (2026-09-07).** The previously recorded
-  OPERATOR ACTION "replace the SUPABASE_DB_URL secret with the Supavisor pooler
-  connection string" is **obsolete** — no manual secret swap is needed. The new
-  `pipeline/validation/supabase_pooler_url.py` derives the session-pooler DSN
-  (`aws-0-eu-west-1.pooler.supabase.com:5432`, user `postgres.<ref>`, password
-  spliced verbatim, path/query preserved) from the stored direct URL, and
-  `dealscan-supabase-handoff` masks it with `::add-mask::` before capturing it
-  into `GITHUB_ENV` for `pg_dump`/`psql`. Session mode is mandatory: transaction
-  mode (6543) cannot serve `pg_dump`, so 6543 is never emitted. Already-pooled
-  DSNs pass through; unknown hosts raise instead of hiding a bad secret. 6 new
-  offline contracts (467 Python tests total). See the runbook section
-  "PostgreSQL connectivity: IPv4 Session Pooler".
+- **IPv4 Session Pooler derivation (2026-09-07).** The earlier OPERATOR ACTION
+  "replace the SUPABASE_DB_URL secret with the Supavisor pooler connection
+  string" is **obsolete** — no host swap is needed. `pipeline/validation/supabase_pooler_url.py`
+  adapts the stored secret per run: a direct `db.<ref>.supabase.co` host moves to
+  `aws-<shard>-<region>.pooler.supabase.com:5432` with user `postgres.<ref>`, and
+  an already-pooled host keeps its host but gets a tenant-qualified username and
+  session-mode port. The password is spliced verbatim (never decoded/re-encoded,
+  never logged), parsing is libpq-style by hand so an unencoded `[`/`]` cannot
+  abort it, and the workflow masks the DSN with `::add-mask::` before capturing
+  it into `GITHUB_ENV`. Transaction mode (6543) is never emitted: it cannot serve
+  `pg_dump`.
+- **Live evidence, run 34158289491 (2026-09-07 20:09:53Z, commit c3b57a2).**
+  `dealscan-supabase-handoff` returned **supabase_verified** again with the
+  restored token: query endpoint passed, pending/inconsistent both empty, schema
+  contract passed, Auth passed (site URL + callback, no localhost), all 10 app
+  tables present with counts 0, catalog cross-check 15 triggers / 4 policies /
+  30 functions, project ACTIVE_HEALTHY in eu-west-1. `dealscan-vercel-handoff`
+  stayed **handoff_verified** (production deployment on main 1b8c5fb, `/`,
+  `/privacy`, `/api/health` all 200). `dealscan-production-smoke` reported
+  **ready_for_bounded_smoke** (El Paso probe 138,863 records, counts all 0,
+  `ingestion_authorized=false`, no production writes).
+- **The physical pg_dump backup is still blocked, and now precisely diagnosed.**
+  The same run reported `pg_dump: error: connection to server at
+  "aws-1-eu-west-1.pooler.supabase.com" (54.229.189.117), port 5432 failed:
+  FATAL: password authentication failed for user "postgres"`. Two facts follow:
+  (a) the stored `SUPABASE_DB_URL` already uses the pooler host on the **aws-1**
+  shard, so IPv6 is no longer the blocker; (b) the username is the plain
+  `postgres`, which Supavisor cannot route — it must be `postgres.<ref>`. The
+  first derivation attempt also aborted with "SUPABASE_DB_URL is not a parseable
+  URL", i.e. `urlsplit()` hit an unencoded `[`/`]` in the password field — the
+  signature of an unreplaced `[YOUR-PASSWORD]` placeholder. Both are handled
+  now: the username is tenant-qualified from `SUPABASE_URL`, parsing no longer
+  crashes, and `--diagnose` emits a credential-free shape report
+  (`data/supabase-dsn-diagnosis.json`) naming the exact blocker. If the password
+  really is the placeholder, no code can invent it: OPERATOR ACTION is to store
+  the real, percent-encoded database password in `SUPABASE_DB_URL`. The logical
+  schema/count snapshot remains the verified surrogate meanwhile.

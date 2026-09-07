@@ -203,42 +203,67 @@ the schema/count snapshot is the verified surrogate.
 
 GitHub-hosted runners are **IPv4-only**, and the direct database host
 `db.<ref>.supabase.co` publishes an **IPv6-only** address unless the project
-buys the IPv4 add-on. A `SUPABASE_DB_URL` secret that works from a laptop
-therefore fails on the runner with `connection to server ... port 5432 failed:
-Network is unreachable`, which is what the first `pg_dump` attempt reported.
+buys the IPv4 add-on. A `SUPABASE_DB_URL` that works from a laptop therefore
+failed on the runner with `connection to server ... Network is unreachable`.
+Supabase's Supavisor pooler is dual-stack, so `pipeline/validation/supabase_pooler_url.py`
+adapts the stored secret per run instead of asking for a manual secret swap.
 
-`pipeline/validation/supabase_pooler_url.py` removes the manual secret swap.
-Before the backup step, `dealscan-supabase-handoff` derives a Supavisor
-**session pooler** DSN from the stored secret:
+| element    | direct                 | required for the runner                                  |
+|------------|------------------------|----------------------------------------------------------|
+| host       | `db.<ref>.supabase.co` | `aws-<shard>-<region>.pooler.supabase.com` (dual-stack)   |
+| port       | 5432                   | **5432 — session mode**                                   |
+| user       | `postgres`             | **`postgres.<ref>`** — Supavisor routes on the tenant suffix |
+| password   | percent-encoded        | copied verbatim, never decoded, never logged              |
+| path/query | —                      | preserved byte for byte                                   |
 
-| element  | direct                       | derived                                     |
-|----------|------------------------------|---------------------------------------------|
-| host     | `db.<ref>.supabase.co`       | `aws-0-<region>.pooler.supabase.com` (dual-stack) |
-| port     | 5432                         | **5432 — session mode**                      |
-| user     | `postgres`                   | `postgres.<ref>`                             |
-| password | —                            | spliced verbatim, never decoded or logged    |
-| path/query | preserved                  | preserved                                    |
+Two rewrites, both learned from live runs:
 
-Port **6543** is Supavisor's transaction mode: it multiplexes statements and
-cannot serve `pg_dump`, so the derivation never emits it even when the stored
-secret does. The region comes from `DEALSCAN_SUPABASE_REGION` (pinned to
-`eu-west-1` in the workflow, validated against `^[a-z]+-[a-z]+-[0-9]+$`).
-A DSN whose host is already `*.pooler.supabase.com` passes through unchanged;
-any other host raises rather than silently masking a misconfigured secret.
+1. A direct `db.<ref>.supabase.co` host is moved onto the session pooler.
+2. A host that is **already** a pooler endpoint keeps its host (this project
+   answers on the **`aws-1`** shard, not `aws-0`) but has its username
+   tenant-qualified and its port forced to 5432. Run 34158289491 proved why:
+   the stored secret pointed at `aws-1-eu-west-1.pooler.supabase.com:5432`
+   with the plain user `postgres`, and Supavisor answered
+   `FATAL: password authentication failed for user "postgres"`. The project ref
+   comes from `DEALSCAN_SUPABASE_PROJECT_REF` or the `SUPABASE_URL` secret; when
+   it is unknown the DSN is passed through rather than guessed.
 
-Secret handling: `urlsplit().password` returns the still-percent-encoded
-substring, so it is copied byte for byte — decoding and re-encoding would
-corrupt passwords containing `%`, `@` or `:`. The workflow calls
-`--emit-mask` first, so the derived DSN is registered with `::add-mask::`
-before the `--dsn` capture into `GITHUB_ENV`; failures print a
-credential-free `::warning::` to stderr and exit 1 with empty stdout, so the
-capture cannot pick up junk. The backup step uses
-`DB_DSN="${SUPABASE_DB_POOLER_DSN:-$SUPABASE_DB_URL}"`, records the endpoint
-mode (host only) in `data/supabase-backup-endpoint.txt`, and stays
-non-failing by design: if the physical dump cannot run, the logical
-schema/count snapshot remains the verified surrogate.
+Port **6543** is transaction mode: it multiplexes statements and cannot serve
+`pg_dump`, so the derivation never emits it. Region and shard are pinned in the
+workflow (`DEALSCAN_SUPABASE_REGION=eu-west-1`, `DEALSCAN_SUPABASE_POOLER_SHARD=aws-1`)
+and validated (`^[a-z]+-[a-z]+-[0-9]+$`, `^aws-[0-9]+$`). Any host that is
+neither form raises rather than hiding a misconfigured secret.
 
-Operator note: no secret rotation is required for this. Keep `SUPABASE_DB_URL`
-as the direct connection string from the Supabase Connect panel; the workflow
-adapts it per run. Only a project region change requires editing the pinned
-`DEALSCAN_SUPABASE_REGION`.
+Parsing is done by hand, libpq-style (authority ends at the first `/`, `?` or
+`#`; userinfo ends at the first `@`), because `urlsplit()` raises
+`Invalid IPv6 URL` on an unencoded `[`/`]` in the password — which is exactly
+what an unreplaced `[YOUR-PASSWORD]` placeholder looks like, and aborting there
+would hide the real problem.
+
+Secret handling: the workflow calls `--emit-mask` first so the derived DSN is
+registered with `::add-mask::` before the `--dsn` capture into `GITHUB_ENV`;
+failures print a credential-free `::warning::` to stderr and exit 1 with empty
+stdout, so the capture cannot pick up junk. The backup step uses
+`DB_DSN="${SUPABASE_DB_POOLER_DSN:-$SUPABASE_DB_URL}"` and stays non-failing by
+design: if the physical dump cannot run, the logical schema/count snapshot
+remains the verified surrogate.
+
+### Diagnosing an authentication failure without seeing the secret
+
+`--diagnose` writes `data/supabase-dsn-diagnosis.json` into the 7-day artifact
+and echoes it as a `::notice::`. It reports **shape only** — `host_class`
+(`session_pooler` / `transaction_pooler` / `direct_ipv6_only` / `unknown`),
+`port`, `username_tenant_qualified`, `password_present`, `password_uri_safe`,
+`placeholder_suspect`, `project_ref_available` — plus a `blockers` list. No
+credential value, and never which character is wrong.
+
+| blocker | operator fix |
+|---------|--------------|
+| `password_is_the_dashboard_placeholder` | The literal `[YOUR-PASSWORD]` was never replaced. Re-copy the Session Pooler URI from Supabase → Connect and substitute the real database password. |
+| `password_not_percent_encoded` | Percent-encode special characters (`@`→`%40`, `:`→`%3A`, `%`→`%25`, `[`→`%5B`). |
+| `pooler_username_not_tenant_qualified_and_ref_unknown` | Store `SUPABASE_URL` (or `DEALSCAN_SUPABASE_PROJECT_REF`) so `postgres` can become `postgres.<ref>`. |
+| `unrecognised_host` | The secret is neither the direct host nor a pooler host. |
+
+Operator note: no rotation is required for the *host*; the workflow adapts it.
+Only the database **password** itself must be correct and percent-encoded in
+`SUPABASE_DB_URL`.

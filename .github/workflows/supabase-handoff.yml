@@ -47,20 +47,31 @@ jobs:
       - name: Derive the IPv4 Session Pooler DSN for PostgreSQL access
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-          # Pinned: this project lives in eu-west-1. GitHub-hosted runners are
+          # The project ref lets a plain "postgres" username be tenant-qualified
+          # to postgres.<ref>, which Supavisor requires for routing.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # Pinned: this project lives in eu-west-1 and its Supavisor endpoint
+          # is the aws-1 shard (observed live in run 34158289491). Runners are
           # IPv4-only while db.<ref>.supabase.co is IPv6-only without the paid
-          # IPv4 add-on, so pg_dump/psql must go through Supavisor's SESSION
-          # pooler (port 5432 — transaction mode 6543 cannot serve pg_dump).
+          # IPv4 add-on, so pg_dump/psql must go through the SESSION pooler
+          # (port 5432 — transaction mode 6543 cannot serve pg_dump).
           DEALSCAN_SUPABASE_REGION: eu-west-1
+          DEALSCAN_SUPABASE_POOLER_SHARD: aws-1
         run: |
           set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/data"
           if [ -z "${SUPABASE_DB_URL:-}" ]; then
             echo "::warning::SUPABASE_DB_URL not configured; no pooler DSN derived"
             exit 0
           fi
-          # Mask first: the derived DSN is redacted in the log before the
+          # --diagnose writes a credential-free shape report (host class, port,
+          # whether the username is tenant-qualified, whether the password is
+          # percent-encoded or still the dashboard placeholder) so an auth
+          # failure is attributable without ever printing a value.
+          # --emit-mask registers the derived DSN with ::add-mask:: before the
           # capture below can put it anywhere near stdout.
-          if ! python -m validation.supabase_pooler_url --emit-mask; then
+          if ! python -m validation.supabase_pooler_url --emit-mask \
+              --diagnose "$GITHUB_WORKSPACE/data/supabase-dsn-diagnosis.json"; then
             echo "::warning::Session Pooler DSN not derived; the backup step falls back to SUPABASE_DB_URL as stored"
             exit 0
           fi
@@ -81,7 +92,7 @@ jobs:
             # recorded so a failure is attributable.
             DB_DSN="${SUPABASE_DB_POOLER_DSN:-$SUPABASE_DB_URL}"
             if [ -n "${SUPABASE_DB_POOLER_DSN:-}" ]; then
-              echo "session_pooler aws-0-eu-west-1.pooler.supabase.com:5432" > data/supabase-backup-endpoint.txt
+              echo "derived_session_pooler_dsn" > data/supabase-backup-endpoint.txt
             else
               echo "supabase_db_url_as_stored" > data/supabase-backup-endpoint.txt
             fi
@@ -145,6 +156,7 @@ jobs:
             data/supabase-counts-backup.txt
             data/supabase-backup-status.txt
             data/supabase-backup-endpoint.txt
+            data/supabase-dsn-diagnosis.json
             data/supabase-backup-error.txt
           if-no-files-found: warn
           retention-days: 7
