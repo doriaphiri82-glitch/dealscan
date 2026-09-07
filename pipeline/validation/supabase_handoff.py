@@ -777,6 +777,14 @@ def annotation_summary(report: dict) -> dict:
                                                     'localhost_urls_present', 'fix_applied', 'reason')
                      if auth.get(key) is not None},
             'tables_present': sorted((before.get('tables') or {}).keys()),
+            # Names only, for the two tables that carry ingestion lineage. A
+            # check or foreign key these migrations never declared, or a trigger
+            # raising P0001, rejects audit writes long after the schema and
+            # write contracts both pass. The artifact is unreadable in CI, so
+            # this evidence has to travel in the annotation.
+            'audit_constraints': {table: sorted((before.get('constraints') or {}).get(table, []))
+                                  for table in ('ingestion_records', 'ingestion_runs')},
+            'triggers': sorted(before.get('triggers') or []),
             'counts': before.get('counts'), 'ledger_present': before.get('ledger_present'),
             'legacy_objects_note': 'Schema had pre-existing legacy objects; application was additive, ordered, main-sourced.'}
 
