@@ -7,7 +7,7 @@ on:
   # the run stops at the first failure/inconsistency with a before/after
   # logical snapshot, and no existing object is dropped or recreated.
   push:
-    branches: ['arena/01a0759b-dealscan']
+    branches: ['arena/01a07d76-dealscan']
   workflow_dispatch:
 
 permissions:
@@ -44,6 +44,27 @@ jobs:
           done
           ls -1 "$RUNNER_TEMP/main-migrations"
           echo "DEALSCAN_MIGRATIONS_DIR=$RUNNER_TEMP/main-migrations" >> "$GITHUB_ENV"
+      - name: Derive the IPv4 Session Pooler DSN for PostgreSQL access
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          # Pinned: this project lives in eu-west-1. GitHub-hosted runners are
+          # IPv4-only while db.<ref>.supabase.co is IPv6-only without the paid
+          # IPv4 add-on, so pg_dump/psql must go through Supavisor's SESSION
+          # pooler (port 5432 — transaction mode 6543 cannot serve pg_dump).
+          DEALSCAN_SUPABASE_REGION: eu-west-1
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "::warning::SUPABASE_DB_URL not configured; no pooler DSN derived"
+            exit 0
+          fi
+          # Mask first: the derived DSN is redacted in the log before the
+          # capture below can put it anywhere near stdout.
+          if ! python -m validation.supabase_pooler_url --emit-mask; then
+            echo "::warning::Session Pooler DSN not derived; the backup step falls back to SUPABASE_DB_URL as stored"
+            exit 0
+          fi
+          echo "SUPABASE_DB_POOLER_DSN=$(python -m validation.supabase_pooler_url --dsn)" >> "$GITHUB_ENV"
       - name: Physical schema backup before any application (pg_dump, schema-only + counts)
         working-directory: .
         env:
@@ -55,10 +76,20 @@ jobs:
             echo "skipped_no_secret" > data/supabase-backup-status.txt
             echo "::warning::SUPABASE_DB_URL not configured; physical backup skipped (logical snapshot still recorded)"
           else
+            # IPv4 Session Pooler when it could be derived, otherwise the secret
+            # exactly as stored. Endpoint mode (host only, never credentials) is
+            # recorded so a failure is attributable.
+            DB_DSN="${SUPABASE_DB_POOLER_DSN:-$SUPABASE_DB_URL}"
+            if [ -n "${SUPABASE_DB_POOLER_DSN:-}" ]; then
+              echo "session_pooler aws-0-eu-west-1.pooler.supabase.com:5432" > data/supabase-backup-endpoint.txt
+            else
+              echo "supabase_db_url_as_stored" > data/supabase-backup-endpoint.txt
+            fi
+            cat data/supabase-backup-endpoint.txt
             # Schema-only: never export row content into an artifact. Counts only.
             # stderr is credential-redacted and never printed to the console —
             # only a short excerpt lands in the artifact for operator diagnosis.
-            if pg_dump "$SUPABASE_DB_URL" --schema-only --no-owner --no-privileges \
+            if pg_dump "$DB_DSN" --schema-only --no-owner --no-privileges \
               --schema=public --schema=supabase_migrations \
               -f data/supabase-schema-backup.sql \
               2> >(sed -E 's|://[^/@:]+(:[^/@]*)?@|://REDACTED@|g' | head -c 400 > data/supabase-backup-error.txt); then
@@ -71,7 +102,7 @@ jobs:
               : > data/supabase-counts-backup.txt
               ok=1
               for t in $TABLES; do
-                if c=$(psql "$SUPABASE_DB_URL" -Atc "select count(*) from public.$t" 2>/dev/null); then
+                if c=$(psql "$DB_DSN" -Atc "select count(*) from public.$t" 2>/dev/null); then
                   echo "$t=$c" >> data/supabase-counts-backup.txt
                 else
                   echo "$t=unavailable" >> data/supabase-counts-backup.txt; ok=0
@@ -113,6 +144,7 @@ jobs:
             data/supabase-schema-backup.sql
             data/supabase-counts-backup.txt
             data/supabase-backup-status.txt
+            data/supabase-backup-endpoint.txt
             data/supabase-backup-error.txt
           if-no-files-found: warn
           retention-days: 7

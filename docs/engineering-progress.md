@@ -189,3 +189,15 @@ No production-ready claim is made or implied by these changes.
 - Full local sweep re-verified: 461 Python tests, 208 web tests, typecheck,
   production build; final diff scanned — no secrets, no credentials, no debug
   code (the four print()s are the handoff CLIs' sanitized report emitters).
+- **IPv4 Session Pooler derivation (2026-09-07).** The previously recorded
+  OPERATOR ACTION "replace the SUPABASE_DB_URL secret with the Supavisor pooler
+  connection string" is **obsolete** — no manual secret swap is needed. The new
+  `pipeline/validation/supabase_pooler_url.py` derives the session-pooler DSN
+  (`aws-0-eu-west-1.pooler.supabase.com:5432`, user `postgres.<ref>`, password
+  spliced verbatim, path/query preserved) from the stored direct URL, and
+  `dealscan-supabase-handoff` masks it with `::add-mask::` before capturing it
+  into `GITHUB_ENV` for `pg_dump`/`psql`. Session mode is mandatory: transaction
+  mode (6543) cannot serve `pg_dump`, so 6543 is never emitted. Already-pooled
+  DSNs pass through; unknown hosts raise instead of hiding a bad secret. 6 new
+  offline contracts (467 Python tests total). See the runbook section
+  "PostgreSQL connectivity: IPv4 Session Pooler".
