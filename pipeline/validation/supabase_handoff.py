@@ -109,18 +109,68 @@ MIGRATION_MARKERS: dict[str, dict] = {
 }
 
 
+class _CaptureStop(Exception):
+    """Raised to abandon a captured write before any network call happens."""
+
+
+class _StubResponse:
+    status_code = 200
+    def json(self):
+        return []
+
+
+def _sent_columns(table: str, call) -> set:
+    """Column names one writer method actually sends for `table`.
+
+    The real method runs against a transport that returns empty results and
+    stops at the first write to `table`, so the contract observes the payload
+    the ETL builds rather than a second-hand copy of it. Fixture inputs are
+    key-shaped only and never leave this process.
+    """
+    from database_supabase import SupabaseDatabase
+    body: dict = {}
+
+    class _Capture(SupabaseDatabase):
+        headers: dict = {}
+        def __init__(self):
+            self._counties, self._active, self._active_checked_at = {}, None, 0.0
+        def _request(self, method, path, **kwargs):
+            payload = kwargs.get('json')
+            if str(path).split('?')[0] != table or method not in {'POST', 'PATCH'}:
+                return _StubResponse()
+            for row in (payload if isinstance(payload, list) else [payload]):
+                if isinstance(row, dict):
+                    body.update(row)
+            raise _CaptureStop
+
+    try:
+        call(_Capture())
+    except _CaptureStop:
+        pass
+    if not body:
+        raise RuntimeError(f'write contract observed no {table} write')
+    return set(body)
+
+
 def write_columns() -> dict:
     """Columns the ETL can actually send, taken from the writers themselves.
 
-    Derived by calling the real payload builders with minimal fixture inputs, so
-    the contract cannot drift from the code that performs the writes. No fixture
-    value is ever sent anywhere: only the resulting key names are used.
+    Every set is captured from the writer method, not rebuilt here, because the
+    transport layer adds columns of its own (`ingestion_runs.run_key` is created
+    inside `record_ingestion_run`, not by `run_payload`). A contract that models
+    only the payload builders reports columns the ETL does send as missing.
     """
-    from persistence import audit_record, deal_payload, property_payload, run_payload
-    return {'properties': set(property_payload({'apn': 'contract', 'county_id': 'contract'})),
-            'deals': set(deal_payload({'property_id': 1})),
-            'ingestion_runs': set(run_payload('contract', 'running', {})),
-            'ingestion_records': set(audit_record(1, 'contract', {}))}
+    return {
+        'counties': _sent_columns('counties', lambda db: db.upsert_counties(
+            [{'county_id': 'contract', 'county_name': 'contract'}])),
+        'properties': _sent_columns('properties', lambda db: db.save_property(
+            {'apn': 'contract', 'county_id': 'contract'})),
+        'deals': _sent_columns('deals', lambda db: db.save_deal({'property_id': 1})),
+        'ingestion_runs': _sent_columns('ingestion_runs', lambda db: db.record_ingestion_run(
+            'contract', 'running', {})),
+        'ingestion_records': _sent_columns('ingestion_records', lambda db: db.record_ingestion_records(
+            1, 'contract', [{}])),
+    }
 
 
 # Every PostgREST on_conflict= target used by database_supabase.py. Each needs a

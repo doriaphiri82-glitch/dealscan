@@ -342,6 +342,19 @@ Two read-only checks were added for what a column list cannot see:
   only, no definitions: enough to recognise an object these migrations never
   declared, which is how legacy drift rejects writes with 23514 or 23503.
 
-If both come back clean, the remaining explanations are a trigger raising
-P0001 or the batch itself being rejected, and the error code now carried into
-the run summary will name it on the next chain run.
+The first live answer was `unwritable_required_columns: {ingestion_runs:
+[run_key]}` — and it was the contract that was wrong, not the database.
+`run_key` is generated inside `record_ingestion_run`, after `run_payload`
+returns, so a contract modelled on the payload builders alone reported a
+column the ETL does send. The check found a real class of defect on its first
+outing; it just found it in itself.
+
+`write_columns` now captures each column set from the writer method by running
+it against a transport that returns empty results and stops at the first write
+to the table in question, so anything the transport layer adds is observed.
+`counties` joined the contract at the same time. A regression contract asserts
+that every `on_conflict` target is a column its own writer can fill.
+
+If the re-run comes back clean, the remaining explanations are a trigger
+raising P0001 or the batch request itself being rejected, and the error code
+now carried into the run summary will name it on the next chain run.

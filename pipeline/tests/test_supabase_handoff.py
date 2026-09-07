@@ -547,3 +547,17 @@ def test_a_legacy_not_null_column_the_etl_never_sends_is_a_blocker():
     # 'id' is assigned by the database and must never be reported.
     assert contract['unwritable_required_columns'] == {'ingestion_records': ['legacy_payload']}
     assert contract['missing_columns'] == {} and contract['missing_upsert_indexes'] == []
+
+
+def test_write_columns_include_columns_the_transport_adds_after_the_builder():
+    """run_key is created inside record_ingestion_run, not by run_payload.
+
+    Modelling only the payload builders reported a column the ETL does send as
+    an unwritable NOT NULL column against the live database.
+    """
+    columns = sh.write_columns()
+    assert {'run_key', 'run_type', 'source_url'} <= columns['ingestion_runs']
+    assert 'counties' in columns and 'county_id' in columns['counties']
+    for table, target in sh.UPSERT_TARGETS.items():
+        if table in columns:
+            assert set(target) <= columns[table], f'{table} cannot fill its own on_conflict target'
