@@ -392,3 +392,33 @@ verified by observing the constraint rather than by trusting HTTP success.
 The 248 properties, 3 counties and 1 run stay where they are. Re-running the
 chain after the migration lands re-upserts the same rows on their natural keys
 and writes the lineage that should have accompanied them.
+
+## The chain confirmed 23514 from the other side
+
+An operator dispatch of the bounded chain on `4cf89a9` (run 34167915227)
+failed at the ingest stage and, for the first time, said why:
+
+    audit_unavailable: source provenance or run finalization requires
+    reconciliation [record_sources: Supabase POST ingestion_records failed
+    (HTTP 400 code 23514)]
+
+That is the same verdict the write contract reached by inspecting the schema,
+arrived at independently through the transport layer. An exception type alone
+would have said `RuntimeError` again. The diagnosability rule paid for itself:
+no dispatch was needed to find the fault, and the dispatch that happened
+confirmed it rather than starting a new search.
+
+Production still carries the legacy constraint because the handoff applies
+migrations only from `main` and the branch is unmerged, so the repair is
+pending a merge, not pending a diagnosis.
+
+### The next honest blocker is the source, not the code
+
+The same run reported `discovered 250, stored 248, scored 246, qualified 0`
+with `hold_reasons: {missing_source_asking_price: 246, duplicate_county_apn: 2}`.
+Every parcel was held because the El Paso CAD parcel layer publishes assessed
+and market values but no asking price, and a deal is not published without a
+source-backed price. Repairing the audit vocabulary will produce complete
+lineage for those 248 rows; it will not produce deals. Publishing any would
+require a listing source that states a price, and inventing one is not an
+option this project takes.
