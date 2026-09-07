@@ -38,6 +38,33 @@ def safe_report(value):
     return value
 
 
+def compact_report(value, depth=0):
+    """Shrink a sanitized report for a Check annotation.
+
+    Blob-backed logs and artifacts are not always reachable (a failed run can be
+    unreadable exactly when it matters), so the outcome must also survive as an
+    annotation. Lists are reduced to a count plus scalar samples — never the
+    dicts inside them — so no source record, parcel payload or owner field can
+    ride along, and long strings are cut.
+    """
+    if isinstance(value,dict):
+        if depth>=4: return {'keys':sorted(value)[:10]}
+        return {key:compact_report(item,depth+1) for key,item in list(value.items())[:24]}
+    if isinstance(value,list):
+        if all(item is None or isinstance(item,(str,int,float,bool)) for item in value):
+            return {'count':len(value),'items':[compact_report(item,depth+1) for item in value[:5]]}
+        return {'count':len(value),
+                'statuses':[item.get('status') if isinstance(item,dict) else type(item).__name__ for item in value[:5]]}
+    if isinstance(value,str) and len(value)>240: return value[:240]+'...'
+    return value
+
+
+def annotation_message(report, limit=3500):
+    text=json.dumps(compact_report(report),separators=(',',':'),allow_nan=False)
+    if len(text)>limit: text=text[:limit]+'...[truncated; full report in the artifact]'
+    return text.replace('%','%25').replace('\r','%0D').replace('\n','%0A')
+
+
 def coverage():
     counties=list_counties(); meta=_load_registry().get('meta',{})
     configs={county['county_id']:county_config(county['county_id'],county) for county in counties}
@@ -198,6 +225,12 @@ def main(argv=None):
     if args.report_file:
         path=Path(args.report_file); path.parent.mkdir(parents=True,exist_ok=True)
         path.write_text(json.dumps(report,indent=2,allow_nan=False)+'\n',encoding='utf-8')
+    if os.getenv('GITHUB_ACTIONS')=='true' and args.report_file:
+        # Minimized evidence through the Checks API: a failing chain must be
+        # attributable even when logs and artifacts cannot be downloaded.
+        scope=args.production_smoke or args.county or 'cli'
+        level='notice' if code==0 else 'error'
+        print(f'::{level} title=DealScan CLI report ({scope})::{annotation_message(report)}')
     return code
 
 

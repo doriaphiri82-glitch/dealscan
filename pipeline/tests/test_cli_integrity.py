@@ -149,3 +149,34 @@ def test_production_readiness_runs_before_any_ingestion_and_defaults_to_read_onl
     assert pins==["'arena/01a07d76-dealscan'"]
     install=text[text.index('- name: Install dependencies'):text.index('- name: Read-only production readiness')]
     assert 'SUPABASE_SERVICE_ROLE_KEY' not in install
+
+
+def test_cli_emits_minimized_annotation_evidence_without_records(monkeypatch,capsys,tmp_path):
+    """A failing chain must be attributable from annotations alone."""
+    monkeypatch.setenv('GITHUB_ACTIONS','true')
+    monkeypatch.setattr(main,'pull_registry',lambda:None)
+    monkeypatch.setattr(main,'push_registry',lambda:None)
+    monkeypatch.setattr(main,'ensure_pilot_counties',lambda:None)
+    monkeypatch.setattr(main,'production_smoke',lambda *a,**k:{
+        'status':'error','stage':'ingest',
+        'ingestion':{'status':'error','audit_run_id':7,
+                     'results':[{'status':'error','owner_name':'redacted-by-safe-report','apn':'X-1'}]}})
+    report_file=tmp_path/'smoke.json'
+    assert main.main(['--production-smoke','el_paso_tx','--report-file',str(report_file)])==1
+    out=capsys.readouterr().out
+    annotation=[line for line in out.splitlines() if line.startswith('::error title=DealScan CLI report')]
+    assert len(annotation)==1
+    message=annotation[0].split('::',2)[2]
+    assert len(message)<4000 and '\n' not in message
+    assert '"stage":"ingest"' in message and '"audit_run_id":7' in message
+    # Lists collapse to a count plus statuses: no record dict can ride along.
+    assert '"count":1' in message and 'apn' not in message and 'owner' not in message
+    assert json.loads(report_file.read_text())['stage']=='ingest'
+
+
+def test_compact_report_truncates_strings_and_deep_structures():
+    compacted=main.compact_report({'note':'x'*500,'deep':{'a':{'b':{'c':{'d':{'e':1}}}}},
+                                   'ids':[1,2,3,4,5,6,7]})
+    assert compacted['note'].endswith('...') and len(compacted['note'])==243
+    assert compacted['ids']=={'count':7,'items':[1,2,3,4,5]}
+    assert compacted['deep']['a']['b']['c']=={'keys':['d']}
