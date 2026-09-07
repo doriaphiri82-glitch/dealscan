@@ -358,3 +358,37 @@ that every `on_conflict` target is a column its own writer can fill.
 If the re-run comes back clean, the remaining explanations are a trigger
 raising P0001 or the batch request itself being rejected, and the error code
 now carried into the run summary will name it on the next chain run.
+
+## Root cause of the empty audit: a legacy status vocabulary
+
+Carrying check-constraint definitions into the annotation named the fault on
+the first read. Production carries a legacy constraint the repository never
+declared:
+
+    ingestion_records_status_check
+      CHECK (status = ANY (ARRAY['received','normalized','persisted',
+                                 'rejected','duplicate','error']))
+
+`pipeline/persistence.py` writes `candidate`, `held`, `skipped` and `failed`
+as well. `record_ingestion_records` sends the run's rows as one batched insert,
+so a single row with a status the constraint predates rejects all 248 with
+SQLSTATE 23514. Properties upserted normally; only the lineage batch died.
+Every earlier check passed honestly: the columns exist, the unique indexes
+exist, nothing is null that must not be. The vocabulary was the gap.
+
+`20260907230000_audit_status_vocabulary.sql` replaces the legacy check with
+the union of the ETL's vocabulary and the legacy values, so rows written by
+earlier deployments stay valid and nothing is deleted or rewritten. The
+handoff sources migrations from `main`, so production is repaired when this
+branch merges, not before.
+
+The contract now covers the class, not just the instance. `write_vocabulary()`
+reads `AUDIT_STATUSES`, `STATUS_MAP` and `RUN_TYPES` from the writers, and
+`write_contract` parses every `col = ANY (ARRAY[...])` check on a write table
+and reports any value the ETL can produce that the database would refuse. A
+migration marker was added for the new constraint, so its application is
+verified by observing the constraint rather than by trusting HTTP success.
+
+The 248 properties, 3 counties and 1 run stay where they are. Re-running the
+chain after the migration lands re-upserts the same rows on their natural keys
+and writes the lineage that should have accompanied them.

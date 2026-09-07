@@ -26,6 +26,9 @@ def error_code(response) -> str:
     return f' code {code}' if isinstance(code, str) and re.fullmatch(r'[A-Za-z0-9_]{3,12}', code) else ''
 
 
+RUN_TYPES = ('manual', 'scheduled')
+
+
 class SupabaseDatabase:
     def __init__(self, url: str | None = None, key: str | None = None) -> None:
         self.url = (url or os.getenv('SUPABASE_URL', '')).rstrip('/')
@@ -144,7 +147,7 @@ class SupabaseDatabase:
                              source_url: str | None = None, metadata: dict | None = None, run_key: str | None = None) -> int:
         payload = run_payload(county_id, status, counts, error, metadata)
         payload.update(run_key=run_key or str(uuid.uuid4()), source_url=source_url,
-                       run_type='scheduled' if os.getenv('GITHUB_ACTIONS') else 'manual')
+                       run_type=RUN_TYPES[1] if os.getenv('GITHUB_ACTIONS') else RUN_TYPES[0])
         rows = self._request('POST', 'ingestion_runs', params={'on_conflict': 'run_key'},
                 headers={**self.headers, 'Prefer': 'resolution=ignore-duplicates,return=representation'}, json=payload).json()
         if not rows:

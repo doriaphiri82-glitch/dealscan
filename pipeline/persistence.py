@@ -27,6 +27,10 @@ COMP_FIELDS = ('address', 'sale_price', 'sale_date', 'distance_miles', 'lot_size
                'vacant_at_sale', 'ingestion_record_id')
 PUBLIC_COMP_FIELDS = tuple(field for field in COMP_FIELDS if field != 'ingestion_record_id')
 PUBLIC_PROPERTY_FIELDS = ('apn', 'county_id', 'address', 'lot_size_acres', 'zoning', 'latitude', 'longitude', 'source_record_id')
+# The audit vocabulary the writers use. The database must permit every value:
+# a check constraint that omits one rejects an entire batched insert (23514).
+AUDIT_STATUSES = frozenset({'normalized','persisted','candidate','held','rejected','skipped','failed'})
+
 STATUS_MAP = {'running': 'running', 'ok': 'completed', 'completed': 'completed', 'degraded': 'partial',
               'partial': 'partial', 'error': 'failed', 'failed': 'failed', 'skipped': 'skipped'}
 
@@ -98,7 +102,7 @@ def record_key(source_url: str | None, source_id, raw) -> str:
 
 
 def audit_record(run_id: int, county_id: str, item: dict) -> dict:
-    if item.get('status', 'normalized') not in {'normalized','persisted','candidate','held','rejected','skipped','failed'}:
+    if item.get('status', 'normalized') not in AUDIT_STATUSES:
         raise ValueError('Invalid ingestion record status')
     normalized = item.get('normalized_payload') or {}
     normalized = normalized if isinstance(normalized, dict) else {}

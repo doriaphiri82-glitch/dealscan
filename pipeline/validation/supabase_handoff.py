@@ -106,6 +106,8 @@ MIGRATION_MARKERS: dict[str, dict] = {
     '20260906020000_typed_validation_evidence.sql': {
         'functions': ['current_validation_proof', 'require_typed_source_validation', 'revoke_changed_validation_proof'],
         'triggers': ['deals_require_a_typed_validation', 'counties_revoke_validation_proof']},
+    '20260907230000_audit_status_vocabulary.sql': {
+        'constraints': {'ingestion_records': ['ingestion_records_status_v2']}},
 }
 
 
@@ -173,6 +175,33 @@ def write_columns() -> dict:
     }
 
 
+def write_vocabulary() -> dict:
+    """Column values the ETL writes, taken from the writers' own constants.
+
+    A check constraint narrower than one of these sets rejects an entire batched
+    insert (23514) for a single offending row, which reads as a silent audit gap
+    rather than a failure of the column it constrains.
+    """
+    from persistence import AUDIT_STATUSES, STATUS_MAP
+    from database_supabase import RUN_TYPES
+    return {('ingestion_records', 'status'): set(AUDIT_STATUSES),
+            ('ingestion_runs', 'status'): set(STATUS_MAP.values()),
+            ('ingestion_runs', 'run_type'): set(RUN_TYPES)}
+
+
+ALLOWED_VALUES = re.compile(
+    r"\(?([a-z_][a-z0-9_]*)\)?(?:::text)?\s*=\s*ANY\s*\(\(?ARRAY\[(.+?)\]", re.S)
+
+
+def permitted_values(definition: str) -> tuple:
+    """Column and value list of a `col = ANY (ARRAY[...])` check, else (None, set())."""
+    match = ALLOWED_VALUES.search(definition or '')
+    if not match:
+        return None, set()
+    return match.group(1), {literal.strip().strip("'") for literal in
+                            re.findall(r"'((?:[^']|'')*)'", match.group(2))}
+
+
 # Every PostgREST on_conflict= target used by database_supabase.py. Each needs a
 # non-partial unique index on exactly those columns or the upsert fails 42P10.
 UPSERT_TARGETS = {'counties': ('county_id',), 'ingestion_runs': ('run_key',),
@@ -200,6 +229,17 @@ def write_contract(snapshot: dict) -> dict:
         absent = sorted(required - columns)
         if absent:
             unwritable[table] = absent
+    # A value vocabulary narrower than the writer's rejects whole batches.
+    rejected_values = {}
+    for table, defs in sorted((snapshot.get('constraints') or {}).items()):
+        for name, definition in sorted(dict(defs).items()):
+            column, allowed = permitted_values(definition if isinstance(definition, str) else '')
+            if not column:
+                continue
+            written = write_vocabulary().get((table, column))
+            unsupported = sorted(written - allowed) if written else []
+            if unsupported:
+                rejected_values[f'{table}.{column}'] = {'constraint': name, 'unsupported': unsupported}
     unique_indexes = snapshot.get('unique_indexes') or {}
     missing_upserts = []
     for table, target in sorted(UPSERT_TARGETS.items()):
@@ -207,13 +247,16 @@ def write_contract(snapshot: dict) -> dict:
             continue  # a missing table is already reported by the schema contract
         if tuple(sorted(target)) not in {tuple(sorted(columns)) for columns in unique_indexes.get(table, [])}:
             missing_upserts.append(f'{table}({",".join(target)})')
-    status = 'passed' if not missing_columns and not missing_upserts and not unwritable else 'failed'
+    status = ('passed' if not missing_columns and not missing_upserts and not unwritable
+              and not rejected_values else 'failed')
     return {'status': status, 'missing_columns': missing_columns,
             'missing_upsert_indexes': missing_upserts,
             'unwritable_required_columns': unwritable,
+            'rejected_values': rejected_values,
             'note': 'Columns the ETL writes must exist and every on_conflict target needs a '
                     'non-partial unique index; a NOT NULL column with no default that the ETL never '
-                    'sends rejects every row. All three fail only at write time.'}
+                    'sends rejects every row, and a check constraint narrower than the writer\'s '
+                    'vocabulary rejects the whole batch. All of these fail only at write time.'}
 
 
 def marker_missing(snapshot: dict, filename: str) -> list[str]:
@@ -241,6 +284,10 @@ def marker_missing(snapshot: dict, filename: str) -> list[str]:
         for column in columns:
             if column not in snapshot['tables'].get(table, set()):
                 missing.append(f'column:{table}.{column}')
+    for table, constraints in (markers.get('constraints') or {}).items():
+        for constraint in constraints:
+            if constraint not in ((snapshot.get('constraints') or {}).get(table) or {}):
+                missing.append(f'constraint:{table}.{constraint}')
     for flag in markers.get('function_flags', []):
         if flag not in snapshot['function_flags']:
             missing.append('flag:' + flag)

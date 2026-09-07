@@ -1,7 +1,12 @@
 """Offline Supabase management handoff contracts. No network; fixture shapes only."""
 from __future__ import annotations
+import re
+from pathlib import Path
+
 import pytest
 from validation import supabase_handoff as sh
+
+ROOT = Path(__file__).resolve().parents[2]
 
 ORIGIN = 'https://dealscan-omega.vercel.app'
 ALL_COLUMNS = {'counties': {'county_id', 'county_name', 'extra'},
@@ -14,6 +19,11 @@ ALL_COLUMNS = {'counties': {'county_id', 'county_name', 'extra'},
                'ingestion_runs': {'id', 'run_key', 'heartbeat_at', 'finished_at', 'status'},
                'ingestion_records': {'id', 'record_key', 'field_mapping', 'raw_payload_canonical'},
                'waitlist_request_limits': {'id', 'window_started_at'}}
+
+
+REPAIRED_STATUS_CHECK = ("CHECK ((status = ANY (ARRAY['received'::text, 'normalized'::text, "
+                         "'persisted'::text, 'candidate'::text, 'held'::text, 'rejected'::text, "
+                         "'skipped'::text, 'duplicate'::text, 'error'::text, 'failed'::text])))")
 
 
 def full_snapshot():
@@ -39,6 +49,7 @@ def full_snapshot():
             'mandatory_columns': {},
             'ledger_present': False,
             'counts': {t: 0 for t in sh.APP_TABLES}, 'function_flags': {'set_updated_at_search_path'},
+            'constraints': {'ingestion_records': {'ingestion_records_status_v2': REPAIRED_STATUS_CHECK}},
             'rls_enabled': set(sh.APP_TABLES[:7])}
 
 
@@ -61,7 +72,7 @@ def test_inspection_sql_is_provably_read_only():
 
 def test_every_repository_migration_has_registered_markers():
     files = sh.migration_files()
-    assert len(files) == 11
+    assert len(files) == 12
     assert {f.name for f in files} == set(sh.MIGRATION_MARKERS)
 
 
@@ -144,6 +155,7 @@ def merged_snapshot(base, after, applied):
             'policies': set(base['policies']), 'indexes': set(base['indexes']),
             'unique_indexes': {t: list(v) for t, v in (base.get('unique_indexes') or {}).items()},
             'mandatory_columns': {t: set(v) for t, v in (base.get('mandatory_columns') or {}).items()},
+            'constraints': {t: dict(v) for t, v in (base.get('constraints') or {}).items()},
             'function_flags': set(base['function_flags']),
             'counts': dict(base['counts']), 'rls_enabled': set(base['rls_enabled']),
             'ledger_present': base['ledger_present']}
@@ -156,6 +168,10 @@ def merged_snapshot(base, after, applied):
             # a real table always has columns; an empty column set would emit zero
             # catalog rows in rows_from_snapshot and shadow the table entirely
             snap['tables'][table] = columns or {'id'}
+        for table, constraints in (markers.get('constraints') or {}).items():
+            for constraint in constraints:
+                snap['constraints'].setdefault(table, {})[constraint] = (
+                    (after.get('constraints') or {}).get(table, {}).get(constraint, 'foreign key'))
         for table, columns in (markers.get('columns') or {}).items():
             snap['tables'].setdefault(table, set())
             snap['tables'][table] |= set(cols for cols in after['tables'].get(table, set()) if cols in set(columns))
@@ -313,7 +329,7 @@ def test_handoff_applies_pending_migrations_in_order_and_fixes_auth():
     report = sh.run_handoff(client, 'ref111', apply=True)
     assert report['migrations_applied_this_run'] == list(sh.MIGRATION_MARKERS)
     assert client.applied == list(sh.MIGRATION_MARKERS)  # exact timestamp order, no skips
-    assert len(client.ledger_inserts) == 11
+    assert len(client.ledger_inserts) == 12
     assert client.patches and client.patches[0][2]['SITE_URL'] == ORIGIN
     assert report['checks']['auth']['status'] == 'passed' and report['checks']['auth']['fix_applied'] is True
     assert report['status'] == 'supabase_verified'
@@ -562,3 +578,43 @@ def test_write_columns_include_columns_the_transport_adds_after_the_builder():
     for table, target in sh.UPSERT_TARGETS.items():
         if table in columns:
             assert set(target) <= columns[table], f'{table} cannot fill its own on_conflict target'
+
+
+LEGACY_STATUS_CHECK = ("CHECK ((status = ANY (ARRAY['received'::text, 'normalized'::text, "
+                       "'persisted'::text, 'rejected'::text, 'duplicate'::text, 'error'::text])))")
+
+
+def test_a_check_narrower_than_the_writer_vocabulary_is_a_blocker():
+    """The production defect: one disallowed status rejects the whole batch.
+
+    Every column and index checked out while 248 properties stored with zero
+    lineage rows, because the legacy check predates candidate/held/skipped/failed.
+    """
+    snap = full_snapshot()
+    snap['constraints'] = {'ingestion_records': {
+        'ingestion_records_status_check': LEGACY_STATUS_CHECK,
+        # A non-vocabulary check must not be misread as a value list.
+        'ingestion_runs_terminal_v2': "CHECK (((status = 'running'::text) = (finished_at IS NULL)))"}}
+    contract = sh.write_contract(snap)
+    assert contract['status'] == 'failed'
+    assert contract['rejected_values'] == {'ingestion_records.status': {
+        'constraint': 'ingestion_records_status_check',
+        'unsupported': ['candidate', 'failed', 'held', 'skipped']}}
+
+
+def test_the_shipped_migration_permits_every_status_the_etl_writes():
+    """The repair must widen the vocabulary without invalidating legacy rows."""
+    from persistence import AUDIT_STATUSES
+    path = ROOT / 'supabase' / 'migrations' / '20260907230000_audit_status_vocabulary.sql'
+    body = path.read_text()
+    values = set(re.findall(r"'([a-z]+)'", body.split('check (status in (')[1].split('))')[0]))
+    assert AUDIT_STATUSES <= values
+    assert {'received', 'duplicate', 'error'} <= values, 'legacy rows must stay valid'
+    _, permitted = sh.permitted_values(LEGACY_STATUS_CHECK)
+    assert permitted <= values
+
+
+def test_every_writer_vocabulary_names_a_column_the_writer_sends():
+    for (table, column), values in sh.write_vocabulary().items():
+        assert column in sh.write_columns()[table]
+        assert values, f'{table}.{column} vocabulary is empty'
