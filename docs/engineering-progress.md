@@ -320,3 +320,28 @@ No production-ready claim is made or implied by these changes.
   their audit rows rather than duplicating them. Deleting production rows is an
   operator decision, not an autonomous one.
 
+
+## Write contract passed, so the audit failure is not shape drift
+
+The `write_contract` verdict on the production database came back `passed`:
+every column the ETL writes exists and every `on_conflict` target is backed by
+a non-partial unique index. That eliminates the two leading hypotheses (42P10
+and PGRST204) without another dispatch.
+
+Reading `runners.run_county` again narrowed the fault further. Properties are
+saved with `_defer_audit`, and all audit rows are written by a single batched
+`record_ingestion_records` call. One failed request, not 248, explains 248
+properties with zero lineage rows.
+
+Two read-only checks were added for what a column list cannot see:
+
+* `mandatory_columns` — NOT NULL, no default, not identity or generated. Such
+  a column that the ETL never sends rejects every insert with 23502 while the
+  schema contract still passes. `id` is excluded; the database assigns it.
+* `constraints` — check and foreign-key names on the six write tables. Names
+  only, no definitions: enough to recognise an object these migrations never
+  declared, which is how legacy drift rejects writes with 23514 or 23503.
+
+If both come back clean, the remaining explanations are a trigger raising
+P0001 or the batch itself being rejected, and the error code now carried into
+the run summary will name it on the next chain run.

@@ -36,6 +36,7 @@ def full_snapshot():
                          'public read comps for published deals'},
             'indexes': {'idx_deals_verified_score'},
             'unique_indexes': {table: [tuple(sorted(columns))] for table, columns in sh.UPSERT_TARGETS.items()},
+            'mandatory_columns': {},
             'ledger_present': False,
             'counts': {t: 0 for t in sh.APP_TABLES}, 'function_flags': {'set_updated_at_search_path'},
             'rls_enabled': set(sh.APP_TABLES[:7])}
@@ -67,7 +68,7 @@ def test_every_repository_migration_has_registered_markers():
 def test_reconcile_pending_vs_applied_vs_inconsistent():
     files = [f.name for f in sh.migration_files()]
     empty = {'tables': {}, 'functions': set(), 'triggers': set(), 'policies': set(),
-             'indexes': set(), 'function_flags': set(), 'unique_indexes': {}}
+             'indexes': set(), 'function_flags': set(), 'unique_indexes': {}, 'mandatory_columns': {}}
     recon = sh.reconcile(files, [], empty)
     assert recon['pending'] == files and recon['applicable'] == files
     recon = sh.reconcile(files, [], full_snapshot())
@@ -113,7 +114,11 @@ def test_required_columns_contract():
 
 
 def rows_from_snapshot(snap):
-    columns = [{'table_name': t, 'column_name': c} for t, cols in sorted(snap['tables'].items()) for c in sorted(cols)]
+    mandatory = snap.get('mandatory_columns') or {}
+    columns = [{'table_name': t, 'column_name': c,
+                'is_nullable': 'NO' if c in mandatory.get(t, set()) else 'YES',
+                'column_default': None, 'is_identity': 'NO', 'is_generated': 'NEVER'}
+               for t, cols in sorted(snap['tables'].items()) for c in sorted(cols)]
     return [columns,
             [{'name': n} for n in sorted(snap['functions'])],
             [{'name': n} for n in sorted(snap['triggers'])],
@@ -124,7 +129,9 @@ def rows_from_snapshot(snap):
             [{'hardened': 'set_updated_at_search_path' in snap['function_flags']}],
             [{'name': n, 'enabled': n in snap['rls_enabled']} for n in sorted(sh.APP_TABLES)],
             [{'table_name': table, 'definition': f'CREATE UNIQUE INDEX u ON public.{table} USING btree ({", ".join(columns)})'}
-             for table, defs in sorted((snap.get('unique_indexes') or {}).items()) for columns in defs]]
+             for table, defs in sorted((snap.get('unique_indexes') or {}).items()) for columns in defs],
+            [{'table_name': table, 'name': name}
+             for table, names in sorted((snap.get('constraints') or {}).items()) for name in sorted(names)]]
 
 
 def merged_snapshot(base, after, applied):
@@ -135,6 +142,7 @@ def merged_snapshot(base, after, applied):
             'functions': set(base['functions']), 'triggers': set(base['triggers']),
             'policies': set(base['policies']), 'indexes': set(base['indexes']),
             'unique_indexes': {t: list(v) for t, v in (base.get('unique_indexes') or {}).items()},
+            'mandatory_columns': {t: set(v) for t, v in (base.get('mandatory_columns') or {}).items()},
             'function_flags': set(base['function_flags']),
             'counts': dict(base['counts']), 'rls_enabled': set(base['rls_enabled']),
             'ledger_present': base['ledger_present']}
@@ -527,3 +535,15 @@ def test_write_contract_columns_come_from_the_real_writers():
     # Exactly the payload the ETL sends for an audit row, nothing invented.
     assert {'run_id', 'record_key', 'raw_payload_canonical', 'property_id', 'status'} <= columns['ingestion_records']
     assert 'source_payload_hash' in columns['properties'] and 'financial_evidence' in columns['deals']
+
+
+def test_a_legacy_not_null_column_the_etl_never_sends_is_a_blocker():
+    """Every declared column can exist and every insert still fail 23502."""
+    snap = full_snapshot()
+    snap['tables']['ingestion_records'] = snap['tables']['ingestion_records'] | {'legacy_payload'}
+    snap['mandatory_columns'] = {'ingestion_records': {'id', 'legacy_payload'}}
+    contract = sh.write_contract(snap)
+    assert contract['status'] == 'failed'
+    # 'id' is assigned by the database and must never be reported.
+    assert contract['unwritable_required_columns'] == {'ingestion_records': ['legacy_payload']}
+    assert contract['missing_columns'] == {} and contract['missing_upsert_indexes'] == []

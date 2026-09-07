@@ -141,6 +141,15 @@ def write_contract(snapshot: dict) -> dict:
         absent = sorted(columns - present)
         if absent:
             missing_columns[table] = absent
+    # The reverse direction: a legacy NOT NULL column with no default that the
+    # ETL never sends rejects every row (23502) even though every declared
+    # column exists. Primary keys are excluded: the database assigns them.
+    unwritable = {}
+    for table, columns in sorted(write_columns().items()):
+        required = (snapshot.get('mandatory_columns') or {}).get(table, set()) - {'id'}
+        absent = sorted(required - columns)
+        if absent:
+            unwritable[table] = absent
     unique_indexes = snapshot.get('unique_indexes') or {}
     missing_upserts = []
     for table, target in sorted(UPSERT_TARGETS.items()):
@@ -148,11 +157,13 @@ def write_contract(snapshot: dict) -> dict:
             continue  # a missing table is already reported by the schema contract
         if tuple(sorted(target)) not in {tuple(sorted(columns)) for columns in unique_indexes.get(table, [])}:
             missing_upserts.append(f'{table}({",".join(target)})')
-    status = 'passed' if not missing_columns and not missing_upserts else 'failed'
+    status = 'passed' if not missing_columns and not missing_upserts and not unwritable else 'failed'
     return {'status': status, 'missing_columns': missing_columns,
             'missing_upsert_indexes': missing_upserts,
+            'unwritable_required_columns': unwritable,
             'note': 'Columns the ETL writes must exist and every on_conflict target needs a '
-                    'non-partial unique index; otherwise writes fail per row at ingestion time.'}
+                    'non-partial unique index; a NOT NULL column with no default that the ETL never '
+                    'sends rejects every row. All three fail only at write time.'}
 
 
 def marker_missing(snapshot: dict, filename: str) -> list[str]:
@@ -440,7 +451,8 @@ def snapshot_queries() -> list[str]:
     table_list = ','.join(repr(t) for t in APP_TABLES)
     counts_select = ', '.join(f"(select count(*) from public.{t}) as {t}" for t in APP_TABLES)
     return [
-        f"select table_name, column_name from information_schema.columns where table_schema='public' "
+        f"select table_name, column_name, is_nullable, column_default, is_identity, is_generated "
+        f"from information_schema.columns where table_schema='public' "
         f"and table_name in ({table_list}) order by 1,2",
         "select p.proname as name from pg_proc p join pg_namespace n on n.oid=p.pronamespace "
         "where n.nspname='public' order by 1",
@@ -464,6 +476,13 @@ def snapshot_queries() -> list[str]:
         "from pg_index x join pg_class i on i.oid=x.indexrelid join pg_class t on t.oid=x.indrelid "
         "join pg_namespace n on n.oid=t.relnamespace "
         f"where n.nspname='public' and x.indisunique and t.relname in ({table_list}) order by 1,2",
+        # Constraint names only: a check or foreign key the migrations never
+        # declared is legacy drift that rejects writes (23514/23503) long after
+        # the schema contract passes. Definitions are omitted, names are enough
+        # to spot an object this repository does not own.
+        "select c.relname as table_name, con.conname as name from pg_constraint con "
+        "join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace "
+        f"where n.nspname='public' and con.contype in ('c','f') and c.relname in ({table_list}) order by 1,2",
     ]
 
 
@@ -477,9 +496,17 @@ CROSS_CHECK_SQL = (
 
 def build_snapshot(rows: list[list[dict]]) -> dict:
     tables: dict[str, set] = {}
+    # Columns the database will not fill by itself: NOT NULL, no default, not an
+    # identity/generated column. Anything here that the ETL does not send makes
+    # every insert fail 23502 at write time while the schema still looks correct.
+    mandatory: dict[str, set] = {}
     for row in rows[0]:
         if isinstance(row, dict) and isinstance(row.get('table_name'), str) and isinstance(row.get('column_name'), str):
             tables.setdefault(row['table_name'], set()).add(row['column_name'])
+            if (str(row.get('is_nullable','YES')).upper()=='NO' and row.get('column_default') in (None,'')
+                    and str(row.get('is_identity','NO')).upper()=='NO'
+                    and str(row.get('is_generated','NEVER')).upper()=='NEVER'):
+                mandatory.setdefault(row['table_name'], set()).add(row['column_name'])
     def names(items, key='name'):
         return {item[key] for item in items if isinstance(item, dict) and isinstance(item.get(key), str)}
     counts = rows[6][0] if rows[6] and isinstance(rows[6][0], dict) else {}
@@ -499,7 +526,11 @@ def build_snapshot(rows: list[list[dict]]) -> dict:
         body = definition[definition.rfind('(') + 1:definition.rfind(')')]
         columns = tuple(sorted(part.strip().strip('"').split(' ')[0] for part in body.split(',') if part.strip()))
         unique_indexes.setdefault(row['table_name'], []).append(columns)
-    return {'tables': tables, 'functions': names(rows[1]), 'triggers': names(rows[2]),
+    constraints: dict[str, list] = {}
+    for row in (rows[10] if len(rows) > 10 else []):
+        if isinstance(row, dict) and isinstance(row.get('table_name'), str) and isinstance(row.get('name'), str):
+            constraints.setdefault(row['table_name'], []).append(row['name'])
+    return {'tables': tables, 'mandatory_columns': mandatory, 'constraints': constraints, 'functions': names(rows[1]), 'triggers': names(rows[2]),
             'policies': names(rows[3]), 'indexes': names(rows[4]), 'unique_indexes': unique_indexes,
             'ledger_present': bool(rows[5] and isinstance(rows[5][0], dict) and rows[5][0].get('exists')),
             'counts': {key: value for key, value in counts.items() if isinstance(value, int) and value >= 0},
@@ -517,6 +548,9 @@ def snapshot_for_report(snapshot: dict) -> dict:
             'functions': sorted(snapshot['functions']), 'triggers': sorted(snapshot['triggers']),
             'policies': sorted(snapshot['policies']), 'indexes': sorted(snapshot['indexes']),
             'unique_indexes': {table: sorted(columns) for table, columns in sorted((snapshot.get('unique_indexes') or {}).items())},
+            'mandatory_columns': {table: sorted(columns) for table, columns in sorted((snapshot.get('mandatory_columns') or {}).items())},
+            'constraints': {table: sorted(names) for table, names in sorted((snapshot.get('constraints') or {}).items())
+                            if table in write_columns()},
             'ledger_present': snapshot['ledger_present'], 'counts': snapshot['counts'],
             'function_flags': sorted(snapshot['function_flags']), 'rls_enabled': sorted(snapshot['rls_enabled']),
             **({'query_failures': snapshot['query_failures']} if snapshot.get('query_failures') else {})}
