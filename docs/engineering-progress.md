@@ -210,19 +210,25 @@ No production-ready claim is made or implied by these changes.
   `/privacy`, `/api/health` all 200). `dealscan-production-smoke` reported
   **ready_for_bounded_smoke** (El Paso probe 138,863 records, counts all 0,
   `ingestion_authorized=false`, no production writes).
-- **The physical pg_dump backup is still blocked, and now precisely diagnosed.**
-  The same run reported `pg_dump: error: connection to server at
-  "aws-1-eu-west-1.pooler.supabase.com" (54.229.189.117), port 5432 failed:
-  FATAL: password authentication failed for user "postgres"`. Two facts follow:
-  (a) the stored `SUPABASE_DB_URL` already uses the pooler host on the **aws-1**
-  shard, so IPv6 is no longer the blocker; (b) the username is the plain
-  `postgres`, which Supavisor cannot route — it must be `postgres.<ref>`. The
-  first derivation attempt also aborted with "SUPABASE_DB_URL is not a parseable
-  URL", i.e. `urlsplit()` hit an unencoded `[`/`]` in the password field — the
-  signature of an unreplaced `[YOUR-PASSWORD]` placeholder. Both are handled
-  now: the username is tenant-qualified from `SUPABASE_URL`, parsing no longer
-  crashes, and `--diagnose` emits a credential-free shape report
-  (`data/supabase-dsn-diagnosis.json`) naming the exact blocker. If the password
-  really is the placeholder, no code can invent it: OPERATOR ACTION is to store
-  the real, percent-encoded database password in `SUPABASE_DB_URL`. The logical
-  schema/count snapshot remains the verified surrogate meanwhile.
+- **The physical pg_dump backup is still blocked — root cause now proven, not
+  inferred.** Run 34158763056 (20:17:05Z, commit 3337628) emitted the
+  credential-free shape diagnosis:
+  `{"blockers":["password_is_the_dashboard_placeholder"],"host_class":"session_pooler",
+  "parsed":true,"password_present":true,"password_uri_safe":false,
+  "placeholder_suspect":true,"port":"5432","project_ref_available":true,
+  "username_tenant_qualified":true}`. So the stored `SUPABASE_DB_URL` is already
+  a correct **session pooler** endpoint (`aws-1-eu-west-1.pooler.supabase.com:5432`,
+  IPv4-reachable — the runner connected to 54.229.189.117) with an already
+  tenant-qualified username; the password field still holds the dashboard
+  placeholder `[YOUR-PASSWORD]`, which is why `pg_dump` gets
+  `FATAL: password authentication failed for user "postgres"` (Supavisor names
+  the downstream role, having routed the tenant successfully) and why the very
+  first derivation attempt died in `urlsplit()` with `Invalid IPv6 URL` on the
+  unencoded `[`.
+  **OPERATOR ACTION (the only remaining blocker for the physical backup):** in
+  GitHub → Settings → Secrets → Actions, re-store `SUPABASE_DB_URL` with the
+  real database password substituted for `[YOUR-PASSWORD]`, percent-encoded
+  (`@`→`%40`, `:`→`%3A`, `%`→`%25`). No host change is needed; the workflow
+  adapts host, port and username by itself. Until then the logical schema/count
+  snapshot remains the verified surrogate and the handoff still reports
+  `supabase_verified` (the backup step is non-failing by design).

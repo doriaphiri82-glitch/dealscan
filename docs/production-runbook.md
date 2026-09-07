@@ -221,12 +221,16 @@ Two rewrites, both learned from live runs:
 1. A direct `db.<ref>.supabase.co` host is moved onto the session pooler.
 2. A host that is **already** a pooler endpoint keeps its host (this project
    answers on the **`aws-1`** shard, not `aws-0`) but has its username
-   tenant-qualified and its port forced to 5432. Run 34158289491 proved why:
-   the stored secret pointed at `aws-1-eu-west-1.pooler.supabase.com:5432`
-   with the plain user `postgres`, and Supavisor answered
-   `FATAL: password authentication failed for user "postgres"`. The project ref
-   comes from `DEALSCAN_SUPABASE_PROJECT_REF` or the `SUPABASE_URL` secret; when
-   it is unknown the DSN is passed through rather than guessed.
+   tenant-qualified and its port forced to 5432. Supavisor routes on the tenant
+   suffix, so a plain `postgres` user against a pooler host cannot authenticate.
+   The project ref comes from `DEALSCAN_SUPABASE_PROJECT_REF` or the
+   `SUPABASE_URL` secret; when it is unknown the DSN is passed through rather
+   than guessed.
+
+Note on reading the error: `FATAL: password authentication failed for user
+"postgres"` from a pooler host names the *downstream* role, so it means the
+tenant was routed and the **password** was rejected — it is not evidence of a
+username problem. `FATAL: Tenant or user not found` is the username symptom.
 
 Port **6543** is transaction mode: it multiplexes statements and cannot serve
 `pg_dump`, so the derivation never emits it. Region and shard are pinned in the
