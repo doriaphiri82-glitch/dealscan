@@ -232,3 +232,29 @@ No production-ready claim is made or implied by these changes.
   adapts host, port and username by itself. Until then the logical schema/count
   snapshot remains the verified surrogate and the handoff still reports
   `supabase_verified` (the backup step is non-failing by design).
+- **Bounded-smoke dispatch gate repaired (2026-09-07 21:06Z, run 34161918861).**
+  The operator dispatched `dealscan-production-smoke` on
+  `arena/01a07d76-dealscan` with `preflight_only=false`, and the run finished
+  **success** — but the step "Validate, authorize, ingest, and verify the
+  complete current-run chain" was **skipped**. Evidence: the job step list shows
+  step 6 `skipped`, and the artifact (`production-smoke-34161918861`, 860 B)
+  contains only `readiness-summary.json` — no `smoke-summary.json`. The
+  read-only preflight in that same run passed at 21:07:36Z
+  (`ready_for_bounded_smoke`, El Paso 138,863 records, counts all 0,
+  `ingestion_authorized=false`), so **nothing was ingested and nothing was
+  written**; a green run was reported for a chain that never executed.
+  The gate was `if: github.event_name == 'workflow_dispatch' && !inputs.preflight_only`,
+  which depends on how a boolean input is delivered to the `inputs` context and
+  treats an empty value as authorization. It is now, strictly tighter, an
+  explicit literal comparison in both the typed input context and the raw event
+  payload, so only `false` opens the write path and any other value stays
+  read-only. Two supporting changes make a silent skip impossible to miss:
+  a "Resolve and record the dispatch intent" step prints and annotates the
+  resolved decision (event, county, cap, both representations of
+  `preflight_only`, `authorized_write_path`) on every run, and a new guard step
+  fails the run when an authorized dispatch produced no `smoke-summary.json`.
+  Contracts in `test_cli_integrity.py` pin the new gate and the guard.
+  **The bounded 250-record el_paso_tx chain therefore has NOT run yet** and must
+  be re-dispatched by the operator (sandbox tokens still get HTTP 403 on
+  `workflow dispatch`).
+

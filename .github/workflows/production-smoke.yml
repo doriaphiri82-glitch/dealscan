@@ -71,14 +71,53 @@ jobs:
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
         run: python -m validation.production_preflight --county "$COUNTY_ID" --max-records "$MAX_RECORDS" --app-url "$PRODUCTION_APP_URL" --report-file data/readiness-summary.json
+      - name: Resolve and record the dispatch intent
+        # Run 34161918861 was dispatched for the bounded chain, the write step
+        # evaluated to skipped, and the run still finished green — the operator
+        # had no way to see which way the gate went. The resolved decision is
+        # now printed and annotated on every run. No secret is echoed.
+        run: |
+          set -euo pipefail
+          echo "event=${{ github.event_name }}"
+          echo "county_id=$COUNTY_ID max_records=$MAX_RECORDS app_url=$PRODUCTION_APP_URL"
+          echo "preflight_only(typed)=${{ format('{0}', inputs.preflight_only) }}"
+          echo "preflight_only(payload)=${{ format('{0}', github.event.inputs.preflight_only) }}"
+          echo "authorized_write_path=${{ github.event_name == 'workflow_dispatch' && (format('{0}', inputs.preflight_only) == 'false' || format('{0}', github.event.inputs.preflight_only) == 'false') }}"
+          echo "::notice title=Dispatch intent::event=${{ github.event_name }} preflight_only=${{ format('{0}', inputs.preflight_only) }} authorized_write_path=${{ github.event_name == 'workflow_dispatch' && (format('{0}', inputs.preflight_only) == 'false' || format('{0}', github.event.inputs.preflight_only) == 'false') }} county=$COUNTY_ID max_records=$MAX_RECORDS"
       - name: Validate, authorize, ingest, and verify the complete current-run chain
-        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.preflight_only }}
+        id: chain
+        # Stricter than the previous boolean-negation form: only the exact
+        # literal false enables writes, in either the typed input context or the
+        # raw event payload (a boolean input reaches them differently depending
+        # on how the dispatch was made). Anything else — missing, empty, 'true',
+        # a typo — stays read-only, and a push event can never reach this step.
+        if: ${{ github.event_name == 'workflow_dispatch' && (format('{0}', inputs.preflight_only) == 'false' || format('{0}', github.event.inputs.preflight_only) == 'false') }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
         run: python main.py --production-smoke "$COUNTY_ID" --max-records "$MAX_RECORDS" --app-url "$PRODUCTION_APP_URL" --report-file data/smoke-summary.json
+      - name: A dispatched write must not silently skip
+        # An authorized dispatch that produces no chain evidence is a failure,
+        # never a green read-only run. This guard reads the raw payload as well
+        # as the typed input, so a gate that misreads the operator's intent is
+        # caught instead of being reported as success.
+        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+        run: |
+          set -euo pipefail
+          typed='${{ format('{0}', inputs.preflight_only) }}'
+          payload='${{ format('{0}', github.event.inputs.preflight_only) }}'
+          outcome='${{ steps.chain.outcome }}'
+          if [ "$typed" = "false" ] || [ "$payload" = "false" ]; then
+            if [ ! -s data/smoke-summary.json ]; then
+              echo "::error title=Authorized bounded smoke did not run::preflight_only was dispatched as false (typed=$typed payload=$payload) but the chain step outcome was '$outcome' and no smoke-summary.json exists. Nothing was ingested; this run is not evidence of a successful chain."
+              exit 1
+            fi
+            echo "Chain step outcome=$outcome; smoke summary present."
+          else
+            echo "Read-only dispatch (typed=$typed payload=$payload); chain intentionally not run."
+          fi
       - name: Upload minimized readiness and smoke summaries
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, Node 24

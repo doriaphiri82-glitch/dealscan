@@ -131,7 +131,18 @@ def test_production_readiness_runs_before_any_ingestion_and_defaults_to_read_onl
     text=(Path(__file__).parents[2]/'.github/workflows/production-smoke.yml').read_text()
     assert 'preflight_only:' in text and 'default: true' in text
     assert text.index('validation.production_preflight') < text.index('--production-smoke')
-    assert "if: ${{ github.event_name == 'workflow_dispatch' && !inputs.preflight_only }}" in text
+    # Only an explicit literal false opens the write path, in either the typed
+    # input context or the raw event payload; a push can never reach it. The
+    # older `!inputs.preflight_only` treated an empty value as authorization and
+    # silently skipped a genuine dispatch (run 34161918861).
+    gate = ("if: ${{ github.event_name == 'workflow_dispatch' && "
+            "(format('{0}', inputs.preflight_only) == 'false' || "
+            "format('{0}', github.event.inputs.preflight_only) == 'false') }}")
+    assert gate in text and '!inputs.preflight_only' not in text
+    # A dispatched write that produces no chain evidence must fail, never pass.
+    guard = text[text.index('- name: A dispatched write must not silently skip'):]
+    assert 'if: ${{ always()' in guard and 'exit 1' in guard
+    assert guard.index('data/smoke-summary.json') < guard.index('exit 1')
     # The push trigger stays pinned to exactly one explicit trusted session
     # branch (retargeted per Arena session) — never a wildcard, never main.
     pins=re.findall(r"branches: \[('[^']+'(?:, ?'[^']+')*)\]",text)
