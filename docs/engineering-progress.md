@@ -283,4 +283,40 @@ No production-ready claim is made or implied by these changes.
   connection, installs the matching `postgresql-client-<major>` from the
   official PostgreSQL apt repository and points the backup at it, falling back
   to the system client with a warning if that is not possible.
+- **The bounded 250-record chain RAN and FAILED, leaving real un-audited rows
+  (dispatch 34164109995, 21:42:41Z → 21:44:49Z, commit 7859fc8).** The repaired
+  gate worked — the intent notice recorded
+  `event=workflow_dispatch preflight_only=false authorized_write_path=true` and
+  the chain step executed instead of being skipped — but it exited 1, and the
+  new guard step confirmed a `smoke-summary.json` was produced (so this was a
+  real chain failure, not a skip). The next read-only preflight (run
+  34164524974) measured production: **counties 0→3, properties 0→248,
+  ingestion_runs 0→1, ingestion_records 0→0, deals 0**. Nothing is published
+  (`available_verified: 0`, public boundary still verified), and every property
+  is genuine El Paso source data — but the ingestion audit table is **empty**,
+  so 248 rows have no lineage. That is precisely the `audit_gap` condition the
+  design refuses to call success: `save_property()` upserts the property and
+  then writes its `ingestion_records` row, and only the second write failed, 248
+  times.
+- **Why it could not be diagnosed, and what now fixes that.** Three blind spots
+  were closed: (1) `main.py` wrote its report only to a log and an artifact —
+  blob downloads are frequently unreachable, so it now emits a minimized Check
+  annotation (`compact_report()` collapses lists to counts and statuses, so no
+  parcel or owner payload can ride along); (2) `_request()` raised
+  `HTTP <status>` with no cause — it now appends the PostgREST/SQLSTATE **code**
+  only, strictly validated as `[A-Za-z0-9_]{3,12}` (42P10 = no unique index for
+  an ON CONFLICT target, PGRST204 = unknown column, 23503/23514 = constraint,
+  P0001 = trigger), never the message, details or hint; `warn_audit()` keeps that
+  structural text only when it matches this module's own pattern, and
+  `runners.run()` now surfaces the distinct reasons in the run error; (3) the
+  Supabase handoff gained a **write contract**: every column the ETL can emit
+  (taken from the real payload builders) must exist, and every PostgREST
+  `on_conflict` target must have a non-partial unique index — a missing one is
+  invisible until write time and would produce exactly this empty-audit
+  outcome. A failing write contract now blocks the handoff.
+- **The 248 rows were left in place deliberately.** They are real source
+  records, not synthetic ones, nothing about them is published, and the upserts
+  are idempotent on `(apn, county_id)`: a corrected re-run re-writes them with
+  their audit rows rather than duplicating them. Deleting production rows is an
+  operator decision, not an autonomous one.
 

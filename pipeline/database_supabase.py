@@ -16,6 +16,16 @@ from persistence import (AuditRunNotFound, COMP_FIELDS, PUBLIC_COMP_FIELDS, PUBL
 log = logging.getLogger(__name__)
 
 
+def error_code(response) -> str:
+    """The PostgREST error code only, whitelisted to alphanumerics and underscore."""
+    try:
+        body = response.json()
+    except ValueError:
+        return ''
+    code = body.get('code') if isinstance(body, dict) else None
+    return f' code {code}' if isinstance(code, str) and re.fullmatch(r'[A-Za-z0-9_]{3,12}', code) else ''
+
+
 class SupabaseDatabase:
     def __init__(self, url: str | None = None, key: str | None = None) -> None:
         self.url = (url or os.getenv('SUPABASE_URL', '')).rstrip('/')
@@ -53,8 +63,14 @@ class SupabaseDatabase:
                 continue
             if not response.ok or 300 <= response.status_code < 400:
                 # PostgreSQL error bodies may contain owner names, values or SQL.
-                # Never echo those bodies or credentials into Actions logs.
-                raise RuntimeError(f'Supabase {method} {table} failed (HTTP {response.status_code})')
+                # Never echo those bodies or credentials into Actions logs. The
+                # PostgREST/SQLSTATE *code* is structural (42P10 = no unique index
+                # for an ON CONFLICT target, PGRST204 = unknown column, 23503 = FK,
+                # 23514 = check, P0001 = trigger) and carries no row data, so a
+                # strictly validated code is kept: without it a failing write is
+                # unattributable.
+                raise RuntimeError(f'Supabase {method} {table} failed '
+                                   f'(HTTP {response.status_code}{error_code(response)})')
             return response
         raise RuntimeError('Supabase retry budget exhausted')
 
@@ -68,8 +84,13 @@ class SupabaseDatabase:
             self._request('GET', table, params={'select': fields, 'limit': '0'})
         self._schema_checked = True
 
+    # Only this module's own structural failure text may be carried into a
+    # report; anything else contributes its exception type alone.
+    STRUCTURAL_FAILURE = re.compile(r'Supabase [A-Z]+ [a-z_/]+ failed \(HTTP \d{3}(?: code [A-Za-z0-9_]{3,12})?\)')
+
     def warn_audit(self, operation: str, exc: Exception) -> None:
-        message = f'{operation}: {type(exc).__name__}'
+        detail = str(exc) if self.STRUCTURAL_FAILURE.fullmatch(str(exc)) else ''
+        message = f'{operation}: {detail or type(exc).__name__}'
         self.audit_failures.append(message)
         log.warning('Ingestion audit unavailable (%s); primary data retained, publication held', message)
 

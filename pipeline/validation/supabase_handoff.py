@@ -109,6 +109,52 @@ MIGRATION_MARKERS: dict[str, dict] = {
 }
 
 
+def write_columns() -> dict:
+    """Columns the ETL can actually send, taken from the writers themselves.
+
+    Derived by calling the real payload builders with minimal fixture inputs, so
+    the contract cannot drift from the code that performs the writes. No fixture
+    value is ever sent anywhere: only the resulting key names are used.
+    """
+    from persistence import audit_record, deal_payload, property_payload, run_payload
+    return {'properties': set(property_payload({'apn': 'contract', 'county_id': 'contract'})),
+            'deals': set(deal_payload({'property_id': 1})),
+            'ingestion_runs': set(run_payload('contract', 'running', {})),
+            'ingestion_records': set(audit_record(1, 'contract', {}))}
+
+
+# Every PostgREST on_conflict= target used by database_supabase.py. Each needs a
+# non-partial unique index on exactly those columns or the upsert fails 42P10.
+UPSERT_TARGETS = {'counties': ('county_id',), 'ingestion_runs': ('run_key',),
+                  'ingestion_records': ('record_key', 'run_id'), 'properties': ('apn', 'county_id'),
+                  'deals': ('property_id',), 'waitlist': ('email',)}
+
+
+def write_contract(snapshot: dict) -> dict:
+    """Can the ETL actually write? Structure only; no row is read or written."""
+    missing_columns = {}
+    for table, columns in sorted(write_columns().items()):
+        present = snapshot['tables'].get(table)
+        if present is None:
+            missing_columns[table] = ['<table absent>']
+            continue
+        absent = sorted(columns - present)
+        if absent:
+            missing_columns[table] = absent
+    unique_indexes = snapshot.get('unique_indexes') or {}
+    missing_upserts = []
+    for table, target in sorted(UPSERT_TARGETS.items()):
+        if table not in snapshot['tables']:
+            continue  # a missing table is already reported by the schema contract
+        if tuple(sorted(target)) not in {tuple(sorted(columns)) for columns in unique_indexes.get(table, [])}:
+            missing_upserts.append(f'{table}({",".join(target)})')
+    status = 'passed' if not missing_columns and not missing_upserts else 'failed'
+    return {'status': status, 'missing_columns': missing_columns,
+            'missing_upsert_indexes': missing_upserts,
+            'note': 'Columns the ETL writes must exist and every on_conflict target needs a '
+                    'non-partial unique index; otherwise writes fail per row at ingestion time.'}
+
+
 def marker_missing(snapshot: dict, filename: str) -> list[str]:
     """Everything a migration must have created, evaluated on the snapshot."""
     markers = MIGRATION_MARKERS.get(filename)
@@ -411,6 +457,13 @@ def snapshot_queries() -> list[str]:
         "select pg_get_functiondef('public.set_updated_at()'::regprocedure) ilike '%set search_path%' as hardened",
         "select relname as name, relrowsecurity as enabled from pg_class c join pg_namespace n on n.oid=c.relnamespace "
         f"where n.nspname='public' and relname in ({table_list}) order by 1",
+        # Unique index definitions back every PostgREST on_conflict= upsert. A
+        # missing one fails only at write time (SQLSTATE 42P10), which is how a
+        # whole ingestion audit can come back empty while the run looks healthy.
+        "select t.relname as table_name, pg_get_indexdef(x.indexrelid) as definition "
+        "from pg_index x join pg_class i on i.oid=x.indexrelid join pg_class t on t.oid=x.indrelid "
+        "join pg_namespace n on n.oid=t.relnamespace "
+        f"where n.nspname='public' and x.indisunique and t.relname in ({table_list}) order by 1,2",
     ]
 
 
@@ -435,8 +488,19 @@ def build_snapshot(rows: list[list[dict]]) -> dict:
         flags.add('set_updated_at_search_path')
     rls = {item['name'] for item in rows[8]
            if isinstance(item, dict) and item.get('enabled') is True and isinstance(item.get('name'), str)}
+    unique_indexes: dict[str, list[tuple]] = {}
+    for row in (rows[9] if len(rows) > 9 else []):
+        if not (isinstance(row, dict) and isinstance(row.get('table_name'), str)
+                and isinstance(row.get('definition'), str)):
+            continue
+        definition = row['definition']
+        if ' WHERE ' in definition.upper():
+            continue  # a partial index cannot serve ON CONFLICT
+        body = definition[definition.rfind('(') + 1:definition.rfind(')')]
+        columns = tuple(sorted(part.strip().strip('"').split(' ')[0] for part in body.split(',') if part.strip()))
+        unique_indexes.setdefault(row['table_name'], []).append(columns)
     return {'tables': tables, 'functions': names(rows[1]), 'triggers': names(rows[2]),
-            'policies': names(rows[3]), 'indexes': names(rows[4]),
+            'policies': names(rows[3]), 'indexes': names(rows[4]), 'unique_indexes': unique_indexes,
             'ledger_present': bool(rows[5] and isinstance(rows[5][0], dict) and rows[5][0].get('exists')),
             'counts': {key: value for key, value in counts.items() if isinstance(value, int) and value >= 0},
             'function_flags': flags, 'rls_enabled': rls}
@@ -452,6 +516,7 @@ def snapshot_for_report(snapshot: dict) -> dict:
     return {'tables': {table: sorted(columns) for table, columns in sorted(snapshot['tables'].items())},
             'functions': sorted(snapshot['functions']), 'triggers': sorted(snapshot['triggers']),
             'policies': sorted(snapshot['policies']), 'indexes': sorted(snapshot['indexes']),
+            'unique_indexes': {table: sorted(columns) for table, columns in sorted((snapshot.get('unique_indexes') or {}).items())},
             'ledger_present': snapshot['ledger_present'], 'counts': snapshot['counts'],
             'function_flags': sorted(snapshot['function_flags']), 'rls_enabled': sorted(snapshot['rls_enabled']),
             **({'query_failures': snapshot['query_failures']} if snapshot.get('query_failures') else {})}
@@ -559,6 +624,7 @@ def run_handoff(client: SupabaseManagement, ref: str, *, apply: bool, origin: st
             application['note'] += ' Some write calls returned non-empty or non-list bodies; see the diary.'
     checks['application'] = application
     checks['schema_contract'] = required_columns_status(final_snapshot)
+    checks['write_contract'] = write_contract(final_snapshot)
 
     try:
         raw_config = client.json('GET', f'/v1/projects/{ref}/config/auth')
@@ -594,6 +660,7 @@ def run_handoff(client: SupabaseManagement, ref: str, *, apply: bool, origin: st
 
     reconciled = not checks['reconciliation']['pending'] and not checks['reconciliation']['inconsistent']
     healthy = (reconciled and checks['schema_contract']['status'] == 'passed'
+               and checks['write_contract']['status'] == 'passed'
                and checks['auth']['status'] == 'passed')
     return {'status': 'supabase_verified' if healthy else 'blocked',
             'scope': 'supabase_management_handoff', 'migrations_applied_this_run': applied_now,
@@ -621,6 +688,7 @@ def annotation_summary(report: dict) -> dict:
             'application_stopped_at': (checks.get('application') or {}).get('stopped_at'),
             'pending': recon.get('pending'), 'inconsistent': recon.get('inconsistent'),
             'schema_contract': contract,
+            'write_contract': checks.get('write_contract'),
             'auth': {key: auth.get(key) for key in ('status', 'missing', 'site_url', 'callback_allowed',
                                                     'localhost_urls_present', 'fix_applied', 'reason')
                      if auth.get(key) is not None},

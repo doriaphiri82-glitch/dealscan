@@ -27,10 +27,16 @@ def full_snapshot():
     trgs = {'counties_set_updated_at', 'properties_set_updated_at', 'deals_set_updated_at',
             'deals_require_raw_source_evidence', 'deals_require_comparable_arithmetic',
             'deals_require_a_typed_validation', 'counties_revoke_validation_proof'}
-    return {'tables': {t: set(c) for t, c in ALL_COLUMNS.items()}, 'functions': fns, 'triggers': trgs,
+    # The fixture carries the contract columns plus everything the ETL writes,
+    # so a real production gap is what fails the write contract, not the fixture.
+    writes = sh.write_columns()
+    return {'tables': {t: set(c) | writes.get(t, set()) for t, c in ALL_COLUMNS.items()},
+            'functions': fns, 'triggers': trgs,
             'policies': {'public read counties', 'public read published deals', 'public read deal properties',
                          'public read comps for published deals'},
-            'indexes': {'idx_deals_verified_score'}, 'ledger_present': False,
+            'indexes': {'idx_deals_verified_score'},
+            'unique_indexes': {table: [tuple(sorted(columns))] for table, columns in sh.UPSERT_TARGETS.items()},
+            'ledger_present': False,
             'counts': {t: 0 for t in sh.APP_TABLES}, 'function_flags': {'set_updated_at_search_path'},
             'rls_enabled': set(sh.APP_TABLES[:7])}
 
@@ -61,7 +67,7 @@ def test_every_repository_migration_has_registered_markers():
 def test_reconcile_pending_vs_applied_vs_inconsistent():
     files = [f.name for f in sh.migration_files()]
     empty = {'tables': {}, 'functions': set(), 'triggers': set(), 'policies': set(),
-             'indexes': set(), 'function_flags': set()}
+             'indexes': set(), 'function_flags': set(), 'unique_indexes': {}}
     recon = sh.reconcile(files, [], empty)
     assert recon['pending'] == files and recon['applicable'] == files
     recon = sh.reconcile(files, [], full_snapshot())
@@ -116,7 +122,9 @@ def rows_from_snapshot(snap):
             [{'exists': snap['ledger_present']}],
             [snap['counts']],
             [{'hardened': 'set_updated_at_search_path' in snap['function_flags']}],
-            [{'name': n, 'enabled': n in snap['rls_enabled']} for n in sorted(sh.APP_TABLES)]]
+            [{'name': n, 'enabled': n in snap['rls_enabled']} for n in sorted(sh.APP_TABLES)],
+            [{'table_name': table, 'definition': f'CREATE UNIQUE INDEX u ON public.{table} USING btree ({", ".join(columns)})'}
+             for table, defs in sorted((snap.get('unique_indexes') or {}).items()) for columns in defs]]
 
 
 def merged_snapshot(base, after, applied):
@@ -126,6 +134,7 @@ def merged_snapshot(base, after, applied):
     snap = {'tables': {t: set(c) for t, c in base['tables'].items()},
             'functions': set(base['functions']), 'triggers': set(base['triggers']),
             'policies': set(base['policies']), 'indexes': set(base['indexes']),
+            'unique_indexes': {t: list(v) for t, v in (base.get('unique_indexes') or {}).items()},
             'function_flags': set(base['function_flags']),
             'counts': dict(base['counts']), 'rls_enabled': set(base['rls_enabled']),
             'ledger_present': base['ledger_present']}
@@ -143,6 +152,10 @@ def merged_snapshot(base, after, applied):
             snap['tables'][table] |= set(cols for cols in after['tables'].get(table, set()) if cols in set(columns))
         if after.get('rls_enabled') != base['rls_enabled']:
             snap['rls_enabled'] = set(after.get('rls_enabled', base['rls_enabled']))
+    # A created table brings the unique indexes its migration declares.
+    for table, defs in (after.get('unique_indexes') or {}).items():
+        if table in snap['tables']:
+            snap['unique_indexes'][table] = list(defs)
     return snap
 
 
@@ -485,3 +498,32 @@ def test_probes_read_real_catalogs_case_insensitively():
     assert 'information_schema.triggers' not in trigger_probe[0]
     hardened = [p for p in probes if 'pg_get_functiondef' in p]
     assert len(hardened) == 1 and 'ilike' in hardened[0]
+
+
+def test_write_contract_catches_a_missing_column_and_a_missing_upsert_index():
+    """The ETL wrote 248 properties and zero audit rows in production; a write
+    that can only fail at ingestion time must be visible during the handoff."""
+    assert sh.write_contract(full_snapshot())['status'] == 'passed'
+    snap = full_snapshot()
+    snap['tables']['ingestion_records'] = snap['tables']['ingestion_records'] - {'raw_payload_canonical'}
+    snap['unique_indexes'] = {t: v for t, v in snap['unique_indexes'].items() if t != 'ingestion_records'}
+    contract = sh.write_contract(snap)
+    assert contract['status'] == 'failed'
+    assert contract['missing_columns']['ingestion_records'] == ['raw_payload_canonical']
+    assert contract['missing_upsert_indexes'] == ['ingestion_records(record_key,run_id)']
+
+
+def test_partial_unique_indexes_do_not_satisfy_on_conflict():
+    rows = rows_from_snapshot(full_snapshot())
+    rows[9] = [{'table_name': 'properties',
+                'definition': 'CREATE UNIQUE INDEX u ON public.properties USING btree (apn, county_id) WHERE (id > 0)'}]
+    snapshot = sh.build_snapshot(rows)
+    assert snapshot['unique_indexes'] == {}
+    assert 'properties(apn,county_id)' in sh.write_contract(snapshot)['missing_upsert_indexes']
+
+
+def test_write_contract_columns_come_from_the_real_writers():
+    columns = sh.write_columns()
+    # Exactly the payload the ETL sends for an audit row, nothing invented.
+    assert {'run_id', 'record_key', 'raw_payload_canonical', 'property_id', 'status'} <= columns['ingestion_records']
+    assert 'source_payload_hash' in columns['properties'] and 'financial_evidence' in columns['deals']

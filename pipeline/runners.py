@@ -261,7 +261,11 @@ def run(county_id, mode='publish', max_records=5000, dry_run=False, offline=Fals
         metrics.errors.append(f'run_error: {type(exc).__name__}')
 
     if len(db.audit_failures) > audit_failures_before:
-        metrics.errors.append('audit_unavailable: source provenance or run finalization requires reconciliation')
+        # Carry the distinct structural reasons: an empty audit table with a
+        # healthy-looking run is otherwise impossible to attribute afterwards.
+        reasons = '; '.join(sorted(set(db.audit_failures[audit_failures_before:]))[:3])
+        metrics.errors.append('audit_unavailable: source provenance or run finalization requires reconciliation'
+                              + (f' [{reasons}]' if reasons else ''))
         if summary['status'] == 'ok': summary['status'] = 'degraded'
     summary.update(counts=metrics.to_counts(), error='; '.join(metrics.errors[:3]),
                    rejection_reasons=metrics.rejection_reasons, hold_reasons=metrics.hold_reasons,
