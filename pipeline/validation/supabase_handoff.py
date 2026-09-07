@@ -530,7 +530,9 @@ def snapshot_queries() -> list[str]:
         # declared is legacy drift that rejects writes (23514/23503) long after
         # the schema contract passes. Definitions are omitted, names are enough
         # to spot an object this repository does not own.
-        "select c.relname as table_name, con.conname as name from pg_constraint con "
+        "select c.relname as table_name, con.conname as name, con.contype::text as kind, "
+        "case when con.contype='c' then pg_get_constraintdef(con.oid) else 'foreign key' end as definition "
+        "from pg_constraint con "
         "join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace "
         f"where n.nspname='public' and con.contype in ('c','f') and c.relname in ({table_list}) order by 1,2",
     ]
@@ -576,10 +578,12 @@ def build_snapshot(rows: list[list[dict]]) -> dict:
         body = definition[definition.rfind('(') + 1:definition.rfind(')')]
         columns = tuple(sorted(part.strip().strip('"').split(' ')[0] for part in body.split(',') if part.strip()))
         unique_indexes.setdefault(row['table_name'], []).append(columns)
-    constraints: dict[str, list] = {}
+    constraints: dict[str, dict] = {}
     for row in (rows[10] if len(rows) > 10 else []):
         if isinstance(row, dict) and isinstance(row.get('table_name'), str) and isinstance(row.get('name'), str):
-            constraints.setdefault(row['table_name'], []).append(row['name'])
+            definition = row.get('definition')
+            constraints.setdefault(row['table_name'], {})[row['name']] = (
+                definition if isinstance(definition, str) else 'unknown')
     return {'tables': tables, 'mandatory_columns': mandatory, 'constraints': constraints, 'functions': names(rows[1]), 'triggers': names(rows[2]),
             'policies': names(rows[3]), 'indexes': names(rows[4]), 'unique_indexes': unique_indexes,
             'ledger_present': bool(rows[5] and isinstance(rows[5][0], dict) and rows[5][0].get('exists')),
@@ -599,7 +603,7 @@ def snapshot_for_report(snapshot: dict) -> dict:
             'policies': sorted(snapshot['policies']), 'indexes': sorted(snapshot['indexes']),
             'unique_indexes': {table: sorted(columns) for table, columns in sorted((snapshot.get('unique_indexes') or {}).items())},
             'mandatory_columns': {table: sorted(columns) for table, columns in sorted((snapshot.get('mandatory_columns') or {}).items())},
-            'constraints': {table: sorted(names) for table, names in sorted((snapshot.get('constraints') or {}).items())
+            'constraints': {table: dict(sorted(defs.items())) for table, defs in sorted((snapshot.get('constraints') or {}).items())
                             if table in write_columns()},
             'ledger_present': snapshot['ledger_present'], 'counts': snapshot['counts'],
             'function_flags': sorted(snapshot['function_flags']), 'rls_enabled': sorted(snapshot['rls_enabled']),
@@ -782,7 +786,7 @@ def annotation_summary(report: dict) -> dict:
             # raising P0001, rejects audit writes long after the schema and
             # write contracts both pass. The artifact is unreadable in CI, so
             # this evidence has to travel in the annotation.
-            'audit_constraints': {table: sorted((before.get('constraints') or {}).get(table, []))
+            'audit_constraints': {table: dict(sorted(((before.get('constraints') or {}).get(table) or {}).items()))
                                   for table in ('ingestion_records', 'ingestion_runs')},
             'triggers': sorted(before.get('triggers') or []),
             'counts': before.get('counts'), 'ledger_present': before.get('ledger_present'),

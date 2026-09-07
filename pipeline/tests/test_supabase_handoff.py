@@ -130,8 +130,9 @@ def rows_from_snapshot(snap):
             [{'name': n, 'enabled': n in snap['rls_enabled']} for n in sorted(sh.APP_TABLES)],
             [{'table_name': table, 'definition': f'CREATE UNIQUE INDEX u ON public.{table} USING btree ({", ".join(columns)})'}
              for table, defs in sorted((snap.get('unique_indexes') or {}).items()) for columns in defs],
-            [{'table_name': table, 'name': name}
-             for table, names in sorted((snap.get('constraints') or {}).items()) for name in sorted(names)]]
+            [{'table_name': table, 'name': name, 'kind': 'c', 'definition': definition}
+             for table, defs in sorted((snap.get('constraints') or {}).items())
+             for name, definition in sorted(dict(defs).items())]]
 
 
 def merged_snapshot(base, after, applied):
