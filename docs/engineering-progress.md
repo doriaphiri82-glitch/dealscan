@@ -272,4 +272,15 @@ No production-ready claim is made or implied by these changes.
   suffix); its classification lands in the annotation and in
   `data/supabase-auth-probe.txt`. Everything else in the handoff stays
   `supabase_verified`; the physical dump remains the only red item.
+- **Pooler authentication now succeeds (run 34162816449, 21:21:52Z, commit
+  4fe4e15).** The read-only probe reports `session_5432=ok transaction_6543=ok`,
+  so the reset database password, the tenant-qualified username and the IPv4
+  session pooler all work — the earlier 28P01 was the stale password (Supavisor
+  had not yet picked up the reset). The physical dump then failed on a purely
+  technical incompatibility: `pg_dump: error: aborting because of server version
+  mismatch` — ubuntu-latest ships an older `postgresql-client` than the managed
+  server. A step now reads the server major version over the same read-only
+  connection, installs the matching `postgresql-client-<major>` from the
+  official PostgreSQL apt repository and points the backup at it, falling back
+  to the system client with a warning if that is not possible.
 

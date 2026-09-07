@@ -286,3 +286,13 @@ value. Port 6543 is contacted **for diagnosis only**; `pg_dump` always uses 5432
 | `invalid_password_28P01` | `invalid_password_28P01` | the password in the secret does not match the database password, or Supavisor has not yet picked up a very recent reset |
 | `invalid_password_28P01` | `ok` | credentials are right; session mode is the problem, not the secret |
 | any | `tenant_or_user_not_found` | the username's tenant suffix is wrong |
+
+### pg_dump version matching
+
+`pg_dump` refuses to dump a server newer than itself. The workflow reads
+`current_setting('server_version_num')` over the same read-only connection,
+installs `postgresql-client-<major>` from the official PostgreSQL apt repository
+when `/usr/lib/postgresql/<major>/bin/pg_dump` is absent, and exports `PG_DUMP`
+for the backup step. If the install is not possible the system client is kept
+and the step warns — the backup stays non-failing by design.
+

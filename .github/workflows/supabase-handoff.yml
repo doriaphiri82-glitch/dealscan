@@ -76,6 +76,42 @@ jobs:
             exit 0
           fi
           echo "SUPABASE_DB_POOLER_DSN=$(python -m validation.supabase_pooler_url --dsn)" >> "$GITHUB_ENV"
+      - name: Provide a pg_dump matching the server major version
+        # ubuntu-latest ships an older postgresql-client than the managed
+        # server, and pg_dump refuses to dump a newer server ("aborting because
+        # of server version mismatch", observed in run 34162816449). The major
+        # version is read from the server itself (read-only) and the matching
+        # client is installed from the official PostgreSQL apt repository.
+        if: always()
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PGCONNECT_TIMEOUT: '10'
+        run: |
+          set -uo pipefail
+          if [ -z "${SUPABASE_DB_POOLER_DSN:-}" ] && [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "No DSN available; keeping the system pg_dump."; exit 0
+          fi
+          DB_DSN="${SUPABASE_DB_POOLER_DSN:-$SUPABASE_DB_URL}"
+          major=$(psql "$DB_DSN" -Atc "select current_setting('server_version_num')::int / 10000" 2>/dev/null || true)
+          case "$major" in
+            ''|*[!0-9]*) echo "::warning::Could not read the server major version; keeping the system pg_dump."; exit 0 ;;
+          esac
+          echo "server_major=$major client=$(pg_dump --version | awk '{print $3}')"
+          candidate="/usr/lib/postgresql/$major/bin/pg_dump"
+          if [ ! -x "$candidate" ]; then
+            curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+              | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg || true
+            echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+              | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+            sudo apt-get update -qq || true
+            sudo apt-get install -y -qq "postgresql-client-$major" || true
+          fi
+          if [ -x "$candidate" ]; then
+            echo "PG_DUMP=$candidate" >> "$GITHUB_ENV"
+            echo "::notice title=pg_dump client::server major $major, using $candidate"
+          else
+            echo "::warning::postgresql-client-$major unavailable; keeping the system pg_dump (a version mismatch may still block the dump)."
+          fi
       - name: Physical schema backup before any application (pg_dump, schema-only + counts)
         working-directory: .
         env:
@@ -100,7 +136,7 @@ jobs:
             # Schema-only: never export row content into an artifact. Counts only.
             # stderr is credential-redacted and never printed to the console —
             # only a short excerpt lands in the artifact for operator diagnosis.
-            if pg_dump "$DB_DSN" --schema-only --no-owner --no-privileges \
+            if "${PG_DUMP:-pg_dump}" "$DB_DSN" --schema-only --no-owner --no-privileges \
               --schema=public --schema=supabase_migrations \
               -f data/supabase-schema-backup.sql \
               2> >(sed -E 's|://[^/@:]+(:[^/@]*)?@|://REDACTED@|g' | head -c 400 > data/supabase-backup-error.txt); then
