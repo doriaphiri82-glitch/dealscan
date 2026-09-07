@@ -131,6 +131,53 @@ jobs:
               echo "::warning::Physical pg_dump backup failed (exit $code_dump). $first_line [redacted excerpt; full excerpt in artifact; logical snapshot remains the verified surrogate]"
             fi
           fi
+      - name: Classify the PostgreSQL connection outcome (read-only, credential-free)
+        if: always()
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          DEALSCAN_SUPABASE_REGION: eu-west-1
+          DEALSCAN_SUPABASE_POOLER_SHARD: aws-1
+          PGCONNECT_TIMEOUT: '10'
+        run: |
+          set -uo pipefail
+          out_file="$GITHUB_WORKSPACE/data/supabase-auth-probe.txt"
+          mkdir -p "$GITHUB_WORKSPACE/data"
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "skipped_no_secret" > "$out_file"; exit 0
+          fi
+          # Both DSNs are masked before they are ever held in a shell variable.
+          python -m validation.supabase_pooler_url --emit-mask --mode session || true
+          python -m validation.supabase_pooler_url --emit-mask --mode transaction || true
+          classify() {
+            # select 1 only: a read-only liveness/auth probe, never a write.
+            out=$(psql "$1" -Atc 'select 1' 2>&1 | tr '\n' ' ')
+            case "$out" in
+              1*) echo "ok" ;;
+              *"Tenant or user not found"*) echo "tenant_or_user_not_found" ;;
+              *"password authentication failed"*) echo "invalid_password_28P01" ;;
+              *"Network is unreachable"*) echo "ipv6_unreachable" ;;
+              *"could not translate host name"*) echo "dns_failure" ;;
+              *"timeout expired"*|*"timed out"*) echo "timeout" ;;
+              *"SSL"*|*"ssl"*) echo "tls_error" ;;
+              *) echo "other" ;;
+            esac
+          }
+          session=$(python -m validation.supabase_pooler_url --dsn --mode session 2>/dev/null || true)
+          transaction=$(python -m validation.supabase_pooler_url --dsn --mode transaction 2>/dev/null || true)
+          s_result="not_derived"; t_result="not_derived"
+          [ -n "$session" ] && s_result=$(classify "$session")
+          [ -n "$transaction" ] && t_result=$(classify "$transaction")
+          echo "session_5432=$s_result transaction_6543=$t_result" > "$out_file"
+          cat "$out_file"
+          # Interpretation, so the operator does not have to guess:
+          #   both invalid_password  -> the password in the secret does not match
+          #                             the database password (or Supavisor has
+          #                             not yet picked up a very recent reset)
+          #   session invalid, tx ok -> credentials are right; session mode is
+          #                             the problem, not the secret
+          #   tenant_or_user_not_found -> the username tenant suffix is wrong
+          echo "::notice title=PostgreSQL auth probe (read-only select 1)::$(cat "$out_file")"
       - name: Inspect, snapshot, apply reviewed ordered migrations, verify Auth
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -157,6 +204,7 @@ jobs:
             data/supabase-backup-status.txt
             data/supabase-backup-endpoint.txt
             data/supabase-dsn-diagnosis.json
+            data/supabase-auth-probe.txt
             data/supabase-backup-error.txt
           if-no-files-found: warn
           retention-days: 7

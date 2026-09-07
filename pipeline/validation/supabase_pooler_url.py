@@ -38,6 +38,7 @@ import string
 import sys
 
 POOLER_PORT = '5432'  # Session mode. 6543 is transaction mode and cannot serve pg_dump.
+TRANSACTION_PORT = '6543'  # Diagnostic only: proves whether the tenant/password work at all.
 POOLER_SUFFIX = '.pooler.supabase.com'
 DEFAULT_REGION = 'eu-west-1'
 DEFAULT_SHARD = 'aws-0'
@@ -129,7 +130,7 @@ def _rebuild(parts: dict, username: str, host: str, port: str) -> str:
 
 
 def session_pooler_dsn(database_url: str, pooler_region: str | None = None,
-                       ref: str | None = None) -> str:
+                       ref: str | None = None, mode: str = 'session') -> str:
     """Return a DSN reachable and authenticable from an IPv4-only runner.
 
     ``db.<ref>.supabase.co`` URLs are rewritten onto the session pooler; hosts
@@ -137,6 +138,9 @@ def session_pooler_dsn(database_url: str, pooler_region: str | None = None,
     tenant-qualified username and session-mode port; every other host raises,
     because silently trusting an unknown host would hide a misconfigured secret.
     """
+    if mode not in ('session', 'transaction'):
+        raise PoolerUrlError('Pooler mode must be session or transaction')
+    port = POOLER_PORT if mode == 'session' else TRANSACTION_PORT
     parts = parse_dsn(database_url)
     host = parts['host']
     if host.endswith(POOLER_SUFFIX):
@@ -145,15 +149,15 @@ def session_pooler_dsn(database_url: str, pooler_region: str | None = None,
         if username and '.' not in username and known_ref:
             # Supavisor routes on the tenant suffix; plain "postgres" is rejected.
             username = f'{username}.{known_ref}'
-        if username == parts['username'] and parts['port'] == POOLER_PORT:
+        if username == parts['username'] and parts['port'] == port:
             return str(database_url).strip()  # already correct: pass through untouched
-        return _rebuild(parts, username or 'postgres', host, POOLER_PORT)
+        return _rebuild(parts, username or 'postgres', host, port)
     match = DIRECT_HOST_PATTERN.fullmatch(host)
     if not match:
         raise PoolerUrlError('SUPABASE_DB_URL host is neither db.<ref>.supabase.co nor a *.pooler.supabase.com endpoint')
     derived_ref = match.group('ref')
     pooler_host = f'{shard()}-{region(pooler_region)}{POOLER_SUFFIX}'
-    return _rebuild(parts, f'postgres.{derived_ref}', pooler_host, POOLER_PORT)
+    return _rebuild(parts, f'postgres.{derived_ref}', pooler_host, port)
 
 
 def diagnose(database_url: str) -> dict:
@@ -211,6 +215,8 @@ def main(argv=None) -> int:
     parser.add_argument('--diagnose', metavar='FILE', default=None,
                         help='Write a credential-free shape diagnosis for the operator')
     parser.add_argument('--region', default=None, help='Override DEALSCAN_SUPABASE_REGION')
+    parser.add_argument('--mode', choices=('session', 'transaction'), default='session',
+                        help='session (5432, required by pg_dump) or transaction (6543, diagnostic only)')
     args = parser.parse_args(argv)
     if not (args.emit_mask or args.dsn or args.diagnose):
         parser.error('choose --emit-mask, --dsn and/or --diagnose')
@@ -222,7 +228,7 @@ def main(argv=None) -> int:
         print(f'::notice title=SUPABASE_DB_URL shape (no values)::{json.dumps(report, sort_keys=True)}',
               file=sys.stderr)
     try:
-        dsn = session_pooler_dsn(raw, args.region)
+        dsn = session_pooler_dsn(raw, args.region, mode=args.mode)
     except PoolerUrlError as exc:
         # Reason only, never a value; stderr so a $() capture stays empty.
         print(f'::warning title=Session Pooler DSN not derived::{exc}', file=sys.stderr)

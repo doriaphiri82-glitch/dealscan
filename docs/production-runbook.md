@@ -271,3 +271,18 @@ credential value, and never which character is wrong.
 Operator note: no rotation is required for the *host*; the workflow adapts it.
 Only the database **password** itself must be correct and percent-encoded in
 `SUPABASE_DB_URL`.
+
+### Read-only auth probe
+
+A `select 1` probe runs after the backup step against **both** pooler ports and
+writes `data/supabase-auth-probe.txt` (also a `::notice::`). It classifies each
+outcome as `ok`, `invalid_password_28P01`, `tenant_or_user_not_found`,
+`ipv6_unreachable`, `dns_failure`, `timeout`, `tls_error` or `other` — never a
+value. Port 6543 is contacted **for diagnosis only**; `pg_dump` always uses 5432.
+
+| session 5432 | transaction 6543 | meaning |
+|---|---|---|
+| `ok` | any | credentials fine; a dump failure is something else |
+| `invalid_password_28P01` | `invalid_password_28P01` | the password in the secret does not match the database password, or Supavisor has not yet picked up a very recent reset |
+| `invalid_password_28P01` | `ok` | credentials are right; session mode is the problem, not the secret |
+| any | `tenant_or_user_not_found` | the username's tenant suffix is wrong |

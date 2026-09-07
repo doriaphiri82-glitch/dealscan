@@ -117,3 +117,13 @@ def test_diagnosis_names_blockers_without_revealing_any_credential(tmp_path, cap
                               '@aws-1-eu-west-1.pooler.supabase.com:5432/postgres')
     assert healthy['blockers'] == [] and healthy['password_uri_safe'] is True
     assert PASSWORD not in json.dumps(healthy)
+
+
+def test_transaction_mode_is_available_only_as_an_explicit_diagnostic(monkeypatch):
+    """pg_dump needs session mode; 6543 exists solely to classify auth failures."""
+    monkeypatch.setenv('DEALSCAN_SUPABASE_PROJECT_REF', REF)
+    stored = f'postgresql://postgres.{REF}:{PASSWORD}@aws-1-eu-west-1.pooler.supabase.com:5432/postgres'
+    assert pooler.session_pooler_dsn(stored, mode='transaction').endswith(':6543/postgres')
+    assert pooler.session_pooler_dsn(stored).endswith(':5432/postgres')
+    with pytest.raises(pooler.PoolerUrlError, match='session or transaction'):
+        pooler.session_pooler_dsn(stored, mode='6543')

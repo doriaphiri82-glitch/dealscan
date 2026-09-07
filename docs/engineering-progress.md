@@ -257,4 +257,19 @@ No production-ready claim is made or implied by these changes.
   **The bounded 250-record el_paso_tx chain therefore has NOT run yet** and must
   be re-dispatched by the operator (sandbox tokens still get HTTP 403 on
   `workflow dispatch`).
+- **Database password reset verified end to end at the shape level, still
+  failing at authentication (run 34162606071, 21:18:15Z, commit 132c3f8).**
+  After the operator reset the database password and re-stored
+  `SUPABASE_DB_URL`, the credential-free diagnosis is now completely clean:
+  `{"blockers":[],"host_class":"session_pooler","parsed":true,
+  "password_present":true,"password_uri_safe":true,"placeholder_suspect":false,
+  "port":"5432","project_ref_available":true,"username_tenant_qualified":true}`.
+  The placeholder is gone and the URI is well formed. `pg_dump` nevertheless
+  still reports `FATAL: password authentication failed for user "postgres"` at
+  `aws-1-eu-west-1.pooler.supabase.com` (18.202.64.2). A read-only `select 1`
+  probe against both pooler ports was added to tell the remaining cases apart
+  (stale/mismatched password vs session-mode-only failure vs wrong tenant
+  suffix); its classification lands in the annotation and in
+  `data/supabase-auth-probe.txt`. Everything else in the handoff stays
+  `supabase_verified`; the physical dump remains the only red item.
 
