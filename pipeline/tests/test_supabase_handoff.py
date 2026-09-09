@@ -1,7 +1,12 @@
 """Offline Supabase management handoff contracts. No network; fixture shapes only."""
 from __future__ import annotations
+import re
+from pathlib import Path
+
 import pytest
 from validation import supabase_handoff as sh
+
+ROOT = Path(__file__).resolve().parents[2]
 
 ORIGIN = 'https://dealscan-omega.vercel.app'
 ALL_COLUMNS = {'counties': {'county_id', 'county_name', 'extra'},
@@ -16,6 +21,11 @@ ALL_COLUMNS = {'counties': {'county_id', 'county_name', 'extra'},
                'waitlist_request_limits': {'id', 'window_started_at'}}
 
 
+REPAIRED_STATUS_CHECK = ("CHECK ((status = ANY (ARRAY['received'::text, 'normalized'::text, "
+                         "'persisted'::text, 'candidate'::text, 'held'::text, 'rejected'::text, "
+                         "'skipped'::text, 'duplicate'::text, 'error'::text, 'failed'::text])))")
+
+
 def full_snapshot():
     fns = {'set_updated_at', 'finite_number', 'replace_deal_comps', 'hold_deals_for_parcels',
            'bump_deal_revision', 'distance_miles', 'require_publication_evidence',
@@ -27,11 +37,19 @@ def full_snapshot():
     trgs = {'counties_set_updated_at', 'properties_set_updated_at', 'deals_set_updated_at',
             'deals_require_raw_source_evidence', 'deals_require_comparable_arithmetic',
             'deals_require_a_typed_validation', 'counties_revoke_validation_proof'}
-    return {'tables': {t: set(c) for t, c in ALL_COLUMNS.items()}, 'functions': fns, 'triggers': trgs,
+    # The fixture carries the contract columns plus everything the ETL writes,
+    # so a real production gap is what fails the write contract, not the fixture.
+    writes = sh.write_columns()
+    return {'tables': {t: set(c) | writes.get(t, set()) for t, c in ALL_COLUMNS.items()},
+            'functions': fns, 'triggers': trgs,
             'policies': {'public read counties', 'public read published deals', 'public read deal properties',
                          'public read comps for published deals'},
-            'indexes': {'idx_deals_verified_score'}, 'ledger_present': False,
+            'indexes': {'idx_deals_verified_score'},
+            'unique_indexes': {table: [tuple(sorted(columns))] for table, columns in sh.UPSERT_TARGETS.items()},
+            'mandatory_columns': {},
+            'ledger_present': False,
             'counts': {t: 0 for t in sh.APP_TABLES}, 'function_flags': {'set_updated_at_search_path'},
+            'constraints': {'ingestion_records': {'ingestion_records_status_v2': REPAIRED_STATUS_CHECK}},
             'rls_enabled': set(sh.APP_TABLES[:7])}
 
 
@@ -54,14 +72,14 @@ def test_inspection_sql_is_provably_read_only():
 
 def test_every_repository_migration_has_registered_markers():
     files = sh.migration_files()
-    assert len(files) == 11
+    assert len(files) == 12
     assert {f.name for f in files} == set(sh.MIGRATION_MARKERS)
 
 
 def test_reconcile_pending_vs_applied_vs_inconsistent():
     files = [f.name for f in sh.migration_files()]
     empty = {'tables': {}, 'functions': set(), 'triggers': set(), 'policies': set(),
-             'indexes': set(), 'function_flags': set()}
+             'indexes': set(), 'function_flags': set(), 'unique_indexes': {}, 'mandatory_columns': {}}
     recon = sh.reconcile(files, [], empty)
     assert recon['pending'] == files and recon['applicable'] == files
     recon = sh.reconcile(files, [], full_snapshot())
@@ -107,7 +125,11 @@ def test_required_columns_contract():
 
 
 def rows_from_snapshot(snap):
-    columns = [{'table_name': t, 'column_name': c} for t, cols in sorted(snap['tables'].items()) for c in sorted(cols)]
+    mandatory = snap.get('mandatory_columns') or {}
+    columns = [{'table_name': t, 'column_name': c,
+                'is_nullable': 'NO' if c in mandatory.get(t, set()) else 'YES',
+                'column_default': None, 'is_identity': 'NO', 'is_generated': 'NEVER'}
+               for t, cols in sorted(snap['tables'].items()) for c in sorted(cols)]
     return [columns,
             [{'name': n} for n in sorted(snap['functions'])],
             [{'name': n} for n in sorted(snap['triggers'])],
@@ -116,7 +138,12 @@ def rows_from_snapshot(snap):
             [{'exists': snap['ledger_present']}],
             [snap['counts']],
             [{'hardened': 'set_updated_at_search_path' in snap['function_flags']}],
-            [{'name': n, 'enabled': n in snap['rls_enabled']} for n in sorted(sh.APP_TABLES)]]
+            [{'name': n, 'enabled': n in snap['rls_enabled']} for n in sorted(sh.APP_TABLES)],
+            [{'table_name': table, 'definition': f'CREATE UNIQUE INDEX u ON public.{table} USING btree ({", ".join(columns)})'}
+             for table, defs in sorted((snap.get('unique_indexes') or {}).items()) for columns in defs],
+            [{'table_name': table, 'name': name, 'kind': 'c', 'definition': definition}
+             for table, defs in sorted((snap.get('constraints') or {}).items())
+             for name, definition in sorted(dict(defs).items())]]
 
 
 def merged_snapshot(base, after, applied):
@@ -126,6 +153,9 @@ def merged_snapshot(base, after, applied):
     snap = {'tables': {t: set(c) for t, c in base['tables'].items()},
             'functions': set(base['functions']), 'triggers': set(base['triggers']),
             'policies': set(base['policies']), 'indexes': set(base['indexes']),
+            'unique_indexes': {t: list(v) for t, v in (base.get('unique_indexes') or {}).items()},
+            'mandatory_columns': {t: set(v) for t, v in (base.get('mandatory_columns') or {}).items()},
+            'constraints': {t: dict(v) for t, v in (base.get('constraints') or {}).items()},
             'function_flags': set(base['function_flags']),
             'counts': dict(base['counts']), 'rls_enabled': set(base['rls_enabled']),
             'ledger_present': base['ledger_present']}
@@ -138,11 +168,19 @@ def merged_snapshot(base, after, applied):
             # a real table always has columns; an empty column set would emit zero
             # catalog rows in rows_from_snapshot and shadow the table entirely
             snap['tables'][table] = columns or {'id'}
+        for table, constraints in (markers.get('constraints') or {}).items():
+            for constraint in constraints:
+                snap['constraints'].setdefault(table, {})[constraint] = (
+                    (after.get('constraints') or {}).get(table, {}).get(constraint, 'foreign key'))
         for table, columns in (markers.get('columns') or {}).items():
             snap['tables'].setdefault(table, set())
             snap['tables'][table] |= set(cols for cols in after['tables'].get(table, set()) if cols in set(columns))
         if after.get('rls_enabled') != base['rls_enabled']:
             snap['rls_enabled'] = set(after.get('rls_enabled', base['rls_enabled']))
+    # A created table brings the unique indexes its migration declares.
+    for table, defs in (after.get('unique_indexes') or {}).items():
+        if table in snap['tables']:
+            snap['unique_indexes'][table] = list(defs)
     return snap
 
 
@@ -291,7 +329,7 @@ def test_handoff_applies_pending_migrations_in_order_and_fixes_auth():
     report = sh.run_handoff(client, 'ref111', apply=True)
     assert report['migrations_applied_this_run'] == list(sh.MIGRATION_MARKERS)
     assert client.applied == list(sh.MIGRATION_MARKERS)  # exact timestamp order, no skips
-    assert len(client.ledger_inserts) == 11
+    assert len(client.ledger_inserts) == 12
     assert client.patches and client.patches[0][2]['SITE_URL'] == ORIGIN
     assert report['checks']['auth']['status'] == 'passed' and report['checks']['auth']['fix_applied'] is True
     assert report['status'] == 'supabase_verified'
@@ -485,3 +523,98 @@ def test_probes_read_real_catalogs_case_insensitively():
     assert 'information_schema.triggers' not in trigger_probe[0]
     hardened = [p for p in probes if 'pg_get_functiondef' in p]
     assert len(hardened) == 1 and 'ilike' in hardened[0]
+
+
+def test_write_contract_catches_a_missing_column_and_a_missing_upsert_index():
+    """The ETL wrote 248 properties and zero audit rows in production; a write
+    that can only fail at ingestion time must be visible during the handoff."""
+    assert sh.write_contract(full_snapshot())['status'] == 'passed'
+    snap = full_snapshot()
+    snap['tables']['ingestion_records'] = snap['tables']['ingestion_records'] - {'raw_payload_canonical'}
+    snap['unique_indexes'] = {t: v for t, v in snap['unique_indexes'].items() if t != 'ingestion_records'}
+    contract = sh.write_contract(snap)
+    assert contract['status'] == 'failed'
+    assert contract['missing_columns']['ingestion_records'] == ['raw_payload_canonical']
+    assert contract['missing_upsert_indexes'] == ['ingestion_records(record_key,run_id)']
+
+
+def test_partial_unique_indexes_do_not_satisfy_on_conflict():
+    rows = rows_from_snapshot(full_snapshot())
+    rows[9] = [{'table_name': 'properties',
+                'definition': 'CREATE UNIQUE INDEX u ON public.properties USING btree (apn, county_id) WHERE (id > 0)'}]
+    snapshot = sh.build_snapshot(rows)
+    assert snapshot['unique_indexes'] == {}
+    assert 'properties(apn,county_id)' in sh.write_contract(snapshot)['missing_upsert_indexes']
+
+
+def test_write_contract_columns_come_from_the_real_writers():
+    columns = sh.write_columns()
+    # Exactly the payload the ETL sends for an audit row, nothing invented.
+    assert {'run_id', 'record_key', 'raw_payload_canonical', 'property_id', 'status'} <= columns['ingestion_records']
+    assert 'source_payload_hash' in columns['properties'] and 'financial_evidence' in columns['deals']
+
+
+def test_a_legacy_not_null_column_the_etl_never_sends_is_a_blocker():
+    """Every declared column can exist and every insert still fail 23502."""
+    snap = full_snapshot()
+    snap['tables']['ingestion_records'] = snap['tables']['ingestion_records'] | {'legacy_payload'}
+    snap['mandatory_columns'] = {'ingestion_records': {'id', 'legacy_payload'}}
+    contract = sh.write_contract(snap)
+    assert contract['status'] == 'failed'
+    # 'id' is assigned by the database and must never be reported.
+    assert contract['unwritable_required_columns'] == {'ingestion_records': ['legacy_payload']}
+    assert contract['missing_columns'] == {} and contract['missing_upsert_indexes'] == []
+
+
+def test_write_columns_include_columns_the_transport_adds_after_the_builder():
+    """run_key is created inside record_ingestion_run, not by run_payload.
+
+    Modelling only the payload builders reported a column the ETL does send as
+    an unwritable NOT NULL column against the live database.
+    """
+    columns = sh.write_columns()
+    assert {'run_key', 'run_type', 'source_url'} <= columns['ingestion_runs']
+    assert 'counties' in columns and 'county_id' in columns['counties']
+    for table, target in sh.UPSERT_TARGETS.items():
+        if table in columns:
+            assert set(target) <= columns[table], f'{table} cannot fill its own on_conflict target'
+
+
+LEGACY_STATUS_CHECK = ("CHECK ((status = ANY (ARRAY['received'::text, 'normalized'::text, "
+                       "'persisted'::text, 'rejected'::text, 'duplicate'::text, 'error'::text])))")
+
+
+def test_a_check_narrower_than_the_writer_vocabulary_is_a_blocker():
+    """The production defect: one disallowed status rejects the whole batch.
+
+    Every column and index checked out while 248 properties stored with zero
+    lineage rows, because the legacy check predates candidate/held/skipped/failed.
+    """
+    snap = full_snapshot()
+    snap['constraints'] = {'ingestion_records': {
+        'ingestion_records_status_check': LEGACY_STATUS_CHECK,
+        # A non-vocabulary check must not be misread as a value list.
+        'ingestion_runs_terminal_v2': "CHECK (((status = 'running'::text) = (finished_at IS NULL)))"}}
+    contract = sh.write_contract(snap)
+    assert contract['status'] == 'failed'
+    assert contract['rejected_values'] == {'ingestion_records.status': {
+        'constraint': 'ingestion_records_status_check',
+        'unsupported': ['candidate', 'failed', 'held', 'skipped']}}
+
+
+def test_the_shipped_migration_permits_every_status_the_etl_writes():
+    """The repair must widen the vocabulary without invalidating legacy rows."""
+    from persistence import AUDIT_STATUSES
+    path = ROOT / 'supabase' / 'migrations' / '20260907230000_audit_status_vocabulary.sql'
+    body = path.read_text()
+    values = set(re.findall(r"'([a-z]+)'", body.split('check (status in (')[1].split('))')[0]))
+    assert AUDIT_STATUSES <= values
+    assert {'received', 'duplicate', 'error'} <= values, 'legacy rows must stay valid'
+    _, permitted = sh.permitted_values(LEGACY_STATUS_CHECK)
+    assert permitted <= values
+
+
+def test_every_writer_vocabulary_names_a_column_the_writer_sends():
+    for (table, column), values in sh.write_vocabulary().items():
+        assert column in sh.write_columns()[table]
+        assert values, f'{table}.{column} vocabulary is empty'

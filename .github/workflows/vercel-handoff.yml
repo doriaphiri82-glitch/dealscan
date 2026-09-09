@@ -7,7 +7,7 @@ on:
   # pushed branch or any unreviewed commit. Environment protection rules still
   # apply. The operator authorized this exact promotion in the handoff request.
   push:
-    branches: ['arena/01a0759b-dealscan']
+    branches: ['arena/01a07d76-dealscan']
   workflow_dispatch:
 
 permissions:

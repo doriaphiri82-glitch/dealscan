@@ -106,7 +106,157 @@ MIGRATION_MARKERS: dict[str, dict] = {
     '20260906020000_typed_validation_evidence.sql': {
         'functions': ['current_validation_proof', 'require_typed_source_validation', 'revoke_changed_validation_proof'],
         'triggers': ['deals_require_a_typed_validation', 'counties_revoke_validation_proof']},
+    '20260907230000_audit_status_vocabulary.sql': {
+        'constraints': {'ingestion_records': ['ingestion_records_status_v2']}},
 }
+
+
+class _CaptureStop(Exception):
+    """Raised to abandon a captured write before any network call happens."""
+
+
+class _StubResponse:
+    status_code = 200
+    def json(self):
+        return []
+
+
+def _sent_columns(table: str, call) -> set:
+    """Column names one writer method actually sends for `table`.
+
+    The real method runs against a transport that returns empty results and
+    stops at the first write to `table`, so the contract observes the payload
+    the ETL builds rather than a second-hand copy of it. Fixture inputs are
+    key-shaped only and never leave this process.
+    """
+    from database_supabase import SupabaseDatabase
+    body: dict = {}
+
+    class _Capture(SupabaseDatabase):
+        headers: dict = {}
+        def __init__(self):
+            self._counties, self._active, self._active_checked_at = {}, None, 0.0
+        def _request(self, method, path, **kwargs):
+            payload = kwargs.get('json')
+            if str(path).split('?')[0] != table or method not in {'POST', 'PATCH'}:
+                return _StubResponse()
+            for row in (payload if isinstance(payload, list) else [payload]):
+                if isinstance(row, dict):
+                    body.update(row)
+            raise _CaptureStop
+
+    try:
+        call(_Capture())
+    except _CaptureStop:
+        pass
+    if not body:
+        raise RuntimeError(f'write contract observed no {table} write')
+    return set(body)
+
+
+def write_columns() -> dict:
+    """Columns the ETL can actually send, taken from the writers themselves.
+
+    Every set is captured from the writer method, not rebuilt here, because the
+    transport layer adds columns of its own (`ingestion_runs.run_key` is created
+    inside `record_ingestion_run`, not by `run_payload`). A contract that models
+    only the payload builders reports columns the ETL does send as missing.
+    """
+    return {
+        'counties': _sent_columns('counties', lambda db: db.upsert_counties(
+            [{'county_id': 'contract', 'county_name': 'contract'}])),
+        'properties': _sent_columns('properties', lambda db: db.save_property(
+            {'apn': 'contract', 'county_id': 'contract'})),
+        'deals': _sent_columns('deals', lambda db: db.save_deal({'property_id': 1})),
+        'ingestion_runs': _sent_columns('ingestion_runs', lambda db: db.record_ingestion_run(
+            'contract', 'running', {})),
+        'ingestion_records': _sent_columns('ingestion_records', lambda db: db.record_ingestion_records(
+            1, 'contract', [{}])),
+    }
+
+
+def write_vocabulary() -> dict:
+    """Column values the ETL writes, taken from the writers' own constants.
+
+    A check constraint narrower than one of these sets rejects an entire batched
+    insert (23514) for a single offending row, which reads as a silent audit gap
+    rather than a failure of the column it constrains.
+    """
+    from persistence import AUDIT_STATUSES, STATUS_MAP
+    from database_supabase import RUN_TYPES
+    return {('ingestion_records', 'status'): set(AUDIT_STATUSES),
+            ('ingestion_runs', 'status'): set(STATUS_MAP.values()),
+            ('ingestion_runs', 'run_type'): set(RUN_TYPES)}
+
+
+ALLOWED_VALUES = re.compile(
+    r"\(?([a-z_][a-z0-9_]*)\)?(?:::text)?\s*=\s*ANY\s*\(\(?ARRAY\[(.+?)\]", re.S)
+
+
+def permitted_values(definition: str) -> tuple:
+    """Column and value list of a `col = ANY (ARRAY[...])` check, else (None, set())."""
+    match = ALLOWED_VALUES.search(definition or '')
+    if not match:
+        return None, set()
+    return match.group(1), {literal.strip().strip("'") for literal in
+                            re.findall(r"'((?:[^']|'')*)'", match.group(2))}
+
+
+# Every PostgREST on_conflict= target used by database_supabase.py. Each needs a
+# non-partial unique index on exactly those columns or the upsert fails 42P10.
+UPSERT_TARGETS = {'counties': ('county_id',), 'ingestion_runs': ('run_key',),
+                  'ingestion_records': ('record_key', 'run_id'), 'properties': ('apn', 'county_id'),
+                  'deals': ('property_id',), 'waitlist': ('email',)}
+
+
+def write_contract(snapshot: dict) -> dict:
+    """Can the ETL actually write? Structure only; no row is read or written."""
+    missing_columns = {}
+    for table, columns in sorted(write_columns().items()):
+        present = snapshot['tables'].get(table)
+        if present is None:
+            missing_columns[table] = ['<table absent>']
+            continue
+        absent = sorted(columns - present)
+        if absent:
+            missing_columns[table] = absent
+    # The reverse direction: a legacy NOT NULL column with no default that the
+    # ETL never sends rejects every row (23502) even though every declared
+    # column exists. Primary keys are excluded: the database assigns them.
+    unwritable = {}
+    for table, columns in sorted(write_columns().items()):
+        required = (snapshot.get('mandatory_columns') or {}).get(table, set()) - {'id'}
+        absent = sorted(required - columns)
+        if absent:
+            unwritable[table] = absent
+    # A value vocabulary narrower than the writer's rejects whole batches.
+    rejected_values = {}
+    for table, defs in sorted((snapshot.get('constraints') or {}).items()):
+        for name, definition in sorted(dict(defs).items()):
+            column, allowed = permitted_values(definition if isinstance(definition, str) else '')
+            if not column:
+                continue
+            written = write_vocabulary().get((table, column))
+            unsupported = sorted(written - allowed) if written else []
+            if unsupported:
+                rejected_values[f'{table}.{column}'] = {'constraint': name, 'unsupported': unsupported}
+    unique_indexes = snapshot.get('unique_indexes') or {}
+    missing_upserts = []
+    for table, target in sorted(UPSERT_TARGETS.items()):
+        if table not in snapshot['tables']:
+            continue  # a missing table is already reported by the schema contract
+        if tuple(sorted(target)) not in {tuple(sorted(columns)) for columns in unique_indexes.get(table, [])}:
+            missing_upserts.append(f'{table}({",".join(target)})')
+    status = ('passed' if not missing_columns and not missing_upserts and not unwritable
+              and not rejected_values else 'failed')
+    return {'status': status, 'missing_columns': missing_columns,
+            'missing_upsert_indexes': missing_upserts,
+            'unwritable_required_columns': unwritable,
+            'rejected_values': rejected_values,
+            'note': 'Columns the ETL writes must exist and every on_conflict target needs a '
+                    'non-partial unique index; a NOT NULL column with no default that the ETL never '
+                    'sends rejects every row, and a check constraint narrower than the writer\'s '
+                    'vocabulary rejects the whole batch. All of these fail only at write time.'}
 
 
 def marker_missing(snapshot: dict, filename: str) -> list[str]:
@@ -134,6 +284,10 @@ def marker_missing(snapshot: dict, filename: str) -> list[str]:
         for column in columns:
             if column not in snapshot['tables'].get(table, set()):
                 missing.append(f'column:{table}.{column}')
+    for table, constraints in (markers.get('constraints') or {}).items():
+        for constraint in constraints:
+            if constraint not in ((snapshot.get('constraints') or {}).get(table) or {}):
+                missing.append(f'constraint:{table}.{constraint}')
     for flag in markers.get('function_flags', []):
         if flag not in snapshot['function_flags']:
             missing.append('flag:' + flag)
@@ -394,7 +548,8 @@ def snapshot_queries() -> list[str]:
     table_list = ','.join(repr(t) for t in APP_TABLES)
     counts_select = ', '.join(f"(select count(*) from public.{t}) as {t}" for t in APP_TABLES)
     return [
-        f"select table_name, column_name from information_schema.columns where table_schema='public' "
+        f"select table_name, column_name, is_nullable, column_default, is_identity, is_generated "
+        f"from information_schema.columns where table_schema='public' "
         f"and table_name in ({table_list}) order by 1,2",
         "select p.proname as name from pg_proc p join pg_namespace n on n.oid=p.pronamespace "
         "where n.nspname='public' order by 1",
@@ -411,6 +566,22 @@ def snapshot_queries() -> list[str]:
         "select pg_get_functiondef('public.set_updated_at()'::regprocedure) ilike '%set search_path%' as hardened",
         "select relname as name, relrowsecurity as enabled from pg_class c join pg_namespace n on n.oid=c.relnamespace "
         f"where n.nspname='public' and relname in ({table_list}) order by 1",
+        # Unique index definitions back every PostgREST on_conflict= upsert. A
+        # missing one fails only at write time (SQLSTATE 42P10), which is how a
+        # whole ingestion audit can come back empty while the run looks healthy.
+        "select t.relname as table_name, pg_get_indexdef(x.indexrelid) as definition "
+        "from pg_index x join pg_class i on i.oid=x.indexrelid join pg_class t on t.oid=x.indrelid "
+        "join pg_namespace n on n.oid=t.relnamespace "
+        f"where n.nspname='public' and x.indisunique and t.relname in ({table_list}) order by 1,2",
+        # Constraint names only: a check or foreign key the migrations never
+        # declared is legacy drift that rejects writes (23514/23503) long after
+        # the schema contract passes. Definitions are omitted, names are enough
+        # to spot an object this repository does not own.
+        "select c.relname as table_name, con.conname as name, con.contype::text as kind, "
+        "case when con.contype='c' then pg_get_constraintdef(con.oid) else 'foreign key' end as definition "
+        "from pg_constraint con "
+        "join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace "
+        f"where n.nspname='public' and con.contype in ('c','f') and c.relname in ({table_list}) order by 1,2",
     ]
 
 
@@ -424,9 +595,17 @@ CROSS_CHECK_SQL = (
 
 def build_snapshot(rows: list[list[dict]]) -> dict:
     tables: dict[str, set] = {}
+    # Columns the database will not fill by itself: NOT NULL, no default, not an
+    # identity/generated column. Anything here that the ETL does not send makes
+    # every insert fail 23502 at write time while the schema still looks correct.
+    mandatory: dict[str, set] = {}
     for row in rows[0]:
         if isinstance(row, dict) and isinstance(row.get('table_name'), str) and isinstance(row.get('column_name'), str):
             tables.setdefault(row['table_name'], set()).add(row['column_name'])
+            if (str(row.get('is_nullable','YES')).upper()=='NO' and row.get('column_default') in (None,'')
+                    and str(row.get('is_identity','NO')).upper()=='NO'
+                    and str(row.get('is_generated','NEVER')).upper()=='NEVER'):
+                mandatory.setdefault(row['table_name'], set()).add(row['column_name'])
     def names(items, key='name'):
         return {item[key] for item in items if isinstance(item, dict) and isinstance(item.get(key), str)}
     counts = rows[6][0] if rows[6] and isinstance(rows[6][0], dict) else {}
@@ -435,8 +614,25 @@ def build_snapshot(rows: list[list[dict]]) -> dict:
         flags.add('set_updated_at_search_path')
     rls = {item['name'] for item in rows[8]
            if isinstance(item, dict) and item.get('enabled') is True and isinstance(item.get('name'), str)}
-    return {'tables': tables, 'functions': names(rows[1]), 'triggers': names(rows[2]),
-            'policies': names(rows[3]), 'indexes': names(rows[4]),
+    unique_indexes: dict[str, list[tuple]] = {}
+    for row in (rows[9] if len(rows) > 9 else []):
+        if not (isinstance(row, dict) and isinstance(row.get('table_name'), str)
+                and isinstance(row.get('definition'), str)):
+            continue
+        definition = row['definition']
+        if ' WHERE ' in definition.upper():
+            continue  # a partial index cannot serve ON CONFLICT
+        body = definition[definition.rfind('(') + 1:definition.rfind(')')]
+        columns = tuple(sorted(part.strip().strip('"').split(' ')[0] for part in body.split(',') if part.strip()))
+        unique_indexes.setdefault(row['table_name'], []).append(columns)
+    constraints: dict[str, dict] = {}
+    for row in (rows[10] if len(rows) > 10 else []):
+        if isinstance(row, dict) and isinstance(row.get('table_name'), str) and isinstance(row.get('name'), str):
+            definition = row.get('definition')
+            constraints.setdefault(row['table_name'], {})[row['name']] = (
+                definition if isinstance(definition, str) else 'unknown')
+    return {'tables': tables, 'mandatory_columns': mandatory, 'constraints': constraints, 'functions': names(rows[1]), 'triggers': names(rows[2]),
+            'policies': names(rows[3]), 'indexes': names(rows[4]), 'unique_indexes': unique_indexes,
             'ledger_present': bool(rows[5] and isinstance(rows[5][0], dict) and rows[5][0].get('exists')),
             'counts': {key: value for key, value in counts.items() if isinstance(value, int) and value >= 0},
             'function_flags': flags, 'rls_enabled': rls}
@@ -452,6 +648,10 @@ def snapshot_for_report(snapshot: dict) -> dict:
     return {'tables': {table: sorted(columns) for table, columns in sorted(snapshot['tables'].items())},
             'functions': sorted(snapshot['functions']), 'triggers': sorted(snapshot['triggers']),
             'policies': sorted(snapshot['policies']), 'indexes': sorted(snapshot['indexes']),
+            'unique_indexes': {table: sorted(columns) for table, columns in sorted((snapshot.get('unique_indexes') or {}).items())},
+            'mandatory_columns': {table: sorted(columns) for table, columns in sorted((snapshot.get('mandatory_columns') or {}).items())},
+            'constraints': {table: dict(sorted(defs.items())) for table, defs in sorted((snapshot.get('constraints') or {}).items())
+                            if table in write_columns()},
             'ledger_present': snapshot['ledger_present'], 'counts': snapshot['counts'],
             'function_flags': sorted(snapshot['function_flags']), 'rls_enabled': sorted(snapshot['rls_enabled']),
             **({'query_failures': snapshot['query_failures']} if snapshot.get('query_failures') else {})}
@@ -559,6 +759,7 @@ def run_handoff(client: SupabaseManagement, ref: str, *, apply: bool, origin: st
             application['note'] += ' Some write calls returned non-empty or non-list bodies; see the diary.'
     checks['application'] = application
     checks['schema_contract'] = required_columns_status(final_snapshot)
+    checks['write_contract'] = write_contract(final_snapshot)
 
     try:
         raw_config = client.json('GET', f'/v1/projects/{ref}/config/auth')
@@ -594,6 +795,7 @@ def run_handoff(client: SupabaseManagement, ref: str, *, apply: bool, origin: st
 
     reconciled = not checks['reconciliation']['pending'] and not checks['reconciliation']['inconsistent']
     healthy = (reconciled and checks['schema_contract']['status'] == 'passed'
+               and checks['write_contract']['status'] == 'passed'
                and checks['auth']['status'] == 'passed')
     return {'status': 'supabase_verified' if healthy else 'blocked',
             'scope': 'supabase_management_handoff', 'migrations_applied_this_run': applied_now,
@@ -621,10 +823,19 @@ def annotation_summary(report: dict) -> dict:
             'application_stopped_at': (checks.get('application') or {}).get('stopped_at'),
             'pending': recon.get('pending'), 'inconsistent': recon.get('inconsistent'),
             'schema_contract': contract,
+            'write_contract': checks.get('write_contract'),
             'auth': {key: auth.get(key) for key in ('status', 'missing', 'site_url', 'callback_allowed',
                                                     'localhost_urls_present', 'fix_applied', 'reason')
                      if auth.get(key) is not None},
             'tables_present': sorted((before.get('tables') or {}).keys()),
+            # Names only, for the two tables that carry ingestion lineage. A
+            # check or foreign key these migrations never declared, or a trigger
+            # raising P0001, rejects audit writes long after the schema and
+            # write contracts both pass. The artifact is unreadable in CI, so
+            # this evidence has to travel in the annotation.
+            'audit_constraints': {table: dict(sorted(((before.get('constraints') or {}).get(table) or {}).items()))
+                                  for table in ('ingestion_records', 'ingestion_runs')},
+            'triggers': sorted(before.get('triggers') or []),
             'counts': before.get('counts'), 'ledger_present': before.get('ledger_present'),
             'legacy_objects_note': 'Schema had pre-existing legacy objects; application was additive, ordered, main-sourced.'}
 

@@ -138,3 +138,40 @@ def test_run_upsert_retries_preserve_one_operation_key(db,monkeypatch):
 @pytest.mark.parametrize('url',['http://database.example','https://user:secret@database.example','https://database.example/path','https://database.example?key=secret'])
 def test_backend_rejects_unsafe_credential_destinations(url):
     with pytest.raises(RuntimeError,match='HTTPS origin'): SupabaseDatabase(url,'ephemeral-key')
+
+
+def test_failed_write_carries_only_a_structural_error_code(monkeypatch):
+    """An empty audit table must be attributable: keep the SQLSTATE, drop the body."""
+    import database_supabase as ds
+
+    class Response:
+        status_code = 400
+        ok = False
+        headers = {}
+        def json(self):
+            return {'code': '42P10', 'message': 'no unique constraint',
+                    'details': 'Key (apn)=(SECRET-PARCEL-1) already exists'}
+
+    assert ds.error_code(Response()) == ' code 42P10'
+
+    class Leaky(Response):
+        def json(self):
+            return {'code': "42P10'; drop table deals; --"}
+
+    assert ds.error_code(Leaky()) == ''
+
+    class Empty(Response):
+        def json(self):
+            raise ValueError('not json')
+
+    assert ds.error_code(Empty()) == ''
+
+
+def test_audit_warning_keeps_structural_text_and_drops_anything_else():
+    from database_supabase import SupabaseDatabase
+    db = SupabaseDatabase.__new__(SupabaseDatabase)
+    db.audit_failures = []
+    db.warn_audit('property_audit', RuntimeError('Supabase POST ingestion_records failed (HTTP 400 code 42P10)'))
+    db.warn_audit('property_audit', RuntimeError('parcel APN 123 belongs to Jane Doe'))
+    assert db.audit_failures == ['property_audit: Supabase POST ingestion_records failed (HTTP 400 code 42P10)',
+                                 'property_audit: RuntimeError']

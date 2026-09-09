@@ -198,3 +198,101 @@ match. The Check annotation carries a minimized summary (<4 KB); the full JSON
 report is a 7-day artifact. The endpoint answers HTTP 201 (not 200) with the
 row array. Physical `pg_dump` still needs `SUPABASE_DB_URL` (not available);
 the schema/count snapshot is the verified surrogate.
+
+## PostgreSQL connectivity: IPv4 Session Pooler
+
+GitHub-hosted runners are **IPv4-only**, and the direct database host
+`db.<ref>.supabase.co` publishes an **IPv6-only** address unless the project
+buys the IPv4 add-on. A `SUPABASE_DB_URL` that works from a laptop therefore
+failed on the runner with `connection to server ... Network is unreachable`.
+Supabase's Supavisor pooler is dual-stack, so `pipeline/validation/supabase_pooler_url.py`
+adapts the stored secret per run instead of asking for a manual secret swap.
+
+| element    | direct                 | required for the runner                                  |
+|------------|------------------------|----------------------------------------------------------|
+| host       | `db.<ref>.supabase.co` | `aws-<shard>-<region>.pooler.supabase.com` (dual-stack)   |
+| port       | 5432                   | **5432 — session mode**                                   |
+| user       | `postgres`             | **`postgres.<ref>`** — Supavisor routes on the tenant suffix |
+| password   | percent-encoded        | copied verbatim, never decoded, never logged              |
+| path/query | —                      | preserved byte for byte                                   |
+
+Two rewrites, both learned from live runs:
+
+1. A direct `db.<ref>.supabase.co` host is moved onto the session pooler.
+2. A host that is **already** a pooler endpoint keeps its host (this project
+   answers on the **`aws-1`** shard, not `aws-0`) but has its username
+   tenant-qualified and its port forced to 5432. Supavisor routes on the tenant
+   suffix, so a plain `postgres` user against a pooler host cannot authenticate.
+   The project ref comes from `DEALSCAN_SUPABASE_PROJECT_REF` or the
+   `SUPABASE_URL` secret; when it is unknown the DSN is passed through rather
+   than guessed.
+
+Note on reading the error: `FATAL: password authentication failed for user
+"postgres"` from a pooler host names the *downstream* role, so it means the
+tenant was routed and the **password** was rejected — it is not evidence of a
+username problem. `FATAL: Tenant or user not found` is the username symptom.
+
+Port **6543** is transaction mode: it multiplexes statements and cannot serve
+`pg_dump`, so the derivation never emits it. Region and shard are pinned in the
+workflow (`DEALSCAN_SUPABASE_REGION=eu-west-1`, `DEALSCAN_SUPABASE_POOLER_SHARD=aws-1`)
+and validated (`^[a-z]+-[a-z]+-[0-9]+$`, `^aws-[0-9]+$`). Any host that is
+neither form raises rather than hiding a misconfigured secret.
+
+Parsing is done by hand, libpq-style (authority ends at the first `/`, `?` or
+`#`; userinfo ends at the first `@`), because `urlsplit()` raises
+`Invalid IPv6 URL` on an unencoded `[`/`]` in the password — which is exactly
+what an unreplaced `[YOUR-PASSWORD]` placeholder looks like, and aborting there
+would hide the real problem.
+
+Secret handling: the workflow calls `--emit-mask` first so the derived DSN is
+registered with `::add-mask::` before the `--dsn` capture into `GITHUB_ENV`;
+failures print a credential-free `::warning::` to stderr and exit 1 with empty
+stdout, so the capture cannot pick up junk. The backup step uses
+`DB_DSN="${SUPABASE_DB_POOLER_DSN:-$SUPABASE_DB_URL}"` and stays non-failing by
+design: if the physical dump cannot run, the logical schema/count snapshot
+remains the verified surrogate.
+
+### Diagnosing an authentication failure without seeing the secret
+
+`--diagnose` writes `data/supabase-dsn-diagnosis.json` into the 7-day artifact
+and echoes it as a `::notice::`. It reports **shape only** — `host_class`
+(`session_pooler` / `transaction_pooler` / `direct_ipv6_only` / `unknown`),
+`port`, `username_tenant_qualified`, `password_present`, `password_uri_safe`,
+`placeholder_suspect`, `project_ref_available` — plus a `blockers` list. No
+credential value, and never which character is wrong.
+
+| blocker | operator fix |
+|---------|--------------|
+| `password_is_the_dashboard_placeholder` | The literal `[YOUR-PASSWORD]` was never replaced. Re-copy the Session Pooler URI from Supabase → Connect and substitute the real database password. |
+| `password_not_percent_encoded` | Percent-encode special characters (`@`→`%40`, `:`→`%3A`, `%`→`%25`, `[`→`%5B`). |
+| `pooler_username_not_tenant_qualified_and_ref_unknown` | Store `SUPABASE_URL` (or `DEALSCAN_SUPABASE_PROJECT_REF`) so `postgres` can become `postgres.<ref>`. |
+| `unrecognised_host` | The secret is neither the direct host nor a pooler host. |
+
+Operator note: no rotation is required for the *host*; the workflow adapts it.
+Only the database **password** itself must be correct and percent-encoded in
+`SUPABASE_DB_URL`.
+
+### Read-only auth probe
+
+A `select 1` probe runs after the backup step against **both** pooler ports and
+writes `data/supabase-auth-probe.txt` (also a `::notice::`). It classifies each
+outcome as `ok`, `invalid_password_28P01`, `tenant_or_user_not_found`,
+`ipv6_unreachable`, `dns_failure`, `timeout`, `tls_error` or `other` — never a
+value. Port 6543 is contacted **for diagnosis only**; `pg_dump` always uses 5432.
+
+| session 5432 | transaction 6543 | meaning |
+|---|---|---|
+| `ok` | any | credentials fine; a dump failure is something else |
+| `invalid_password_28P01` | `invalid_password_28P01` | the password in the secret does not match the database password, or Supavisor has not yet picked up a very recent reset |
+| `invalid_password_28P01` | `ok` | credentials are right; session mode is the problem, not the secret |
+| any | `tenant_or_user_not_found` | the username's tenant suffix is wrong |
+
+### pg_dump version matching
+
+`pg_dump` refuses to dump a server newer than itself. The workflow reads
+`current_setting('server_version_num')` over the same read-only connection,
+installs `postgresql-client-<major>` from the official PostgreSQL apt repository
+when `/usr/lib/postgresql/<major>/bin/pg_dump` is absent, and exports `PG_DUMP`
+for the backup step. If the install is not possible the system client is kept
+and the step warns — the backup stays non-failing by design.
+

@@ -7,7 +7,7 @@ on:
   # the run stops at the first failure/inconsistency with a before/after
   # logical snapshot, and no existing object is dropped or recreated.
   push:
-    branches: ['arena/01a0759b-dealscan']
+    branches: ['arena/01a07d76-dealscan']
   workflow_dispatch:
 
 permissions:
@@ -44,6 +44,74 @@ jobs:
           done
           ls -1 "$RUNNER_TEMP/main-migrations"
           echo "DEALSCAN_MIGRATIONS_DIR=$RUNNER_TEMP/main-migrations" >> "$GITHUB_ENV"
+      - name: Derive the IPv4 Session Pooler DSN for PostgreSQL access
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          # The project ref lets a plain "postgres" username be tenant-qualified
+          # to postgres.<ref>, which Supavisor requires for routing.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # Pinned: this project lives in eu-west-1 and its Supavisor endpoint
+          # is the aws-1 shard (observed live in run 34158289491). Runners are
+          # IPv4-only while db.<ref>.supabase.co is IPv6-only without the paid
+          # IPv4 add-on, so pg_dump/psql must go through the SESSION pooler
+          # (port 5432 — transaction mode 6543 cannot serve pg_dump).
+          DEALSCAN_SUPABASE_REGION: eu-west-1
+          DEALSCAN_SUPABASE_POOLER_SHARD: aws-1
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/data"
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "::warning::SUPABASE_DB_URL not configured; no pooler DSN derived"
+            exit 0
+          fi
+          # --diagnose writes a credential-free shape report (host class, port,
+          # whether the username is tenant-qualified, whether the password is
+          # percent-encoded or still the dashboard placeholder) so an auth
+          # failure is attributable without ever printing a value.
+          # --emit-mask registers the derived DSN with ::add-mask:: before the
+          # capture below can put it anywhere near stdout.
+          if ! python -m validation.supabase_pooler_url --emit-mask \
+              --diagnose "$GITHUB_WORKSPACE/data/supabase-dsn-diagnosis.json"; then
+            echo "::warning::Session Pooler DSN not derived; the backup step falls back to SUPABASE_DB_URL as stored"
+            exit 0
+          fi
+          echo "SUPABASE_DB_POOLER_DSN=$(python -m validation.supabase_pooler_url --dsn)" >> "$GITHUB_ENV"
+      - name: Provide a pg_dump matching the server major version
+        # ubuntu-latest ships an older postgresql-client than the managed
+        # server, and pg_dump refuses to dump a newer server ("aborting because
+        # of server version mismatch", observed in run 34162816449). The major
+        # version is read from the server itself (read-only) and the matching
+        # client is installed from the official PostgreSQL apt repository.
+        if: always()
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PGCONNECT_TIMEOUT: '10'
+        run: |
+          set -uo pipefail
+          if [ -z "${SUPABASE_DB_POOLER_DSN:-}" ] && [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "No DSN available; keeping the system pg_dump."; exit 0
+          fi
+          DB_DSN="${SUPABASE_DB_POOLER_DSN:-$SUPABASE_DB_URL}"
+          major=$(psql "$DB_DSN" -Atc "select current_setting('server_version_num')::int / 10000" 2>/dev/null || true)
+          case "$major" in
+            ''|*[!0-9]*) echo "::warning::Could not read the server major version; keeping the system pg_dump."; exit 0 ;;
+          esac
+          echo "server_major=$major client=$(pg_dump --version | awk '{print $3}')"
+          candidate="/usr/lib/postgresql/$major/bin/pg_dump"
+          if [ ! -x "$candidate" ]; then
+            curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+              | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg || true
+            echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+              | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+            sudo apt-get update -qq || true
+            sudo apt-get install -y -qq "postgresql-client-$major" || true
+          fi
+          if [ -x "$candidate" ]; then
+            echo "PG_DUMP=$candidate" >> "$GITHUB_ENV"
+            echo "::notice title=pg_dump client::server major $major, using $candidate"
+          else
+            echo "::warning::postgresql-client-$major unavailable; keeping the system pg_dump (a version mismatch may still block the dump)."
+          fi
       - name: Physical schema backup before any application (pg_dump, schema-only + counts)
         working-directory: .
         env:
@@ -55,10 +123,20 @@ jobs:
             echo "skipped_no_secret" > data/supabase-backup-status.txt
             echo "::warning::SUPABASE_DB_URL not configured; physical backup skipped (logical snapshot still recorded)"
           else
+            # IPv4 Session Pooler when it could be derived, otherwise the secret
+            # exactly as stored. Endpoint mode (host only, never credentials) is
+            # recorded so a failure is attributable.
+            DB_DSN="${SUPABASE_DB_POOLER_DSN:-$SUPABASE_DB_URL}"
+            if [ -n "${SUPABASE_DB_POOLER_DSN:-}" ]; then
+              echo "derived_session_pooler_dsn" > data/supabase-backup-endpoint.txt
+            else
+              echo "supabase_db_url_as_stored" > data/supabase-backup-endpoint.txt
+            fi
+            cat data/supabase-backup-endpoint.txt
             # Schema-only: never export row content into an artifact. Counts only.
             # stderr is credential-redacted and never printed to the console —
             # only a short excerpt lands in the artifact for operator diagnosis.
-            if pg_dump "$SUPABASE_DB_URL" --schema-only --no-owner --no-privileges \
+            if "${PG_DUMP:-pg_dump}" "$DB_DSN" --schema-only --no-owner --no-privileges \
               --schema=public --schema=supabase_migrations \
               -f data/supabase-schema-backup.sql \
               2> >(sed -E 's|://[^/@:]+(:[^/@]*)?@|://REDACTED@|g' | head -c 400 > data/supabase-backup-error.txt); then
@@ -71,7 +149,7 @@ jobs:
               : > data/supabase-counts-backup.txt
               ok=1
               for t in $TABLES; do
-                if c=$(psql "$SUPABASE_DB_URL" -Atc "select count(*) from public.$t" 2>/dev/null); then
+                if c=$(psql "$DB_DSN" -Atc "select count(*) from public.$t" 2>/dev/null); then
                   echo "$t=$c" >> data/supabase-counts-backup.txt
                 else
                   echo "$t=unavailable" >> data/supabase-counts-backup.txt; ok=0
@@ -89,6 +167,53 @@ jobs:
               echo "::warning::Physical pg_dump backup failed (exit $code_dump). $first_line [redacted excerpt; full excerpt in artifact; logical snapshot remains the verified surrogate]"
             fi
           fi
+      - name: Classify the PostgreSQL connection outcome (read-only, credential-free)
+        if: always()
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          DEALSCAN_SUPABASE_REGION: eu-west-1
+          DEALSCAN_SUPABASE_POOLER_SHARD: aws-1
+          PGCONNECT_TIMEOUT: '10'
+        run: |
+          set -uo pipefail
+          out_file="$GITHUB_WORKSPACE/data/supabase-auth-probe.txt"
+          mkdir -p "$GITHUB_WORKSPACE/data"
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "skipped_no_secret" > "$out_file"; exit 0
+          fi
+          # Both DSNs are masked before they are ever held in a shell variable.
+          python -m validation.supabase_pooler_url --emit-mask --mode session || true
+          python -m validation.supabase_pooler_url --emit-mask --mode transaction || true
+          classify() {
+            # select 1 only: a read-only liveness/auth probe, never a write.
+            out=$(psql "$1" -Atc 'select 1' 2>&1 | tr '\n' ' ')
+            case "$out" in
+              1*) echo "ok" ;;
+              *"Tenant or user not found"*) echo "tenant_or_user_not_found" ;;
+              *"password authentication failed"*) echo "invalid_password_28P01" ;;
+              *"Network is unreachable"*) echo "ipv6_unreachable" ;;
+              *"could not translate host name"*) echo "dns_failure" ;;
+              *"timeout expired"*|*"timed out"*) echo "timeout" ;;
+              *"SSL"*|*"ssl"*) echo "tls_error" ;;
+              *) echo "other" ;;
+            esac
+          }
+          session=$(python -m validation.supabase_pooler_url --dsn --mode session 2>/dev/null || true)
+          transaction=$(python -m validation.supabase_pooler_url --dsn --mode transaction 2>/dev/null || true)
+          s_result="not_derived"; t_result="not_derived"
+          [ -n "$session" ] && s_result=$(classify "$session")
+          [ -n "$transaction" ] && t_result=$(classify "$transaction")
+          echo "session_5432=$s_result transaction_6543=$t_result" > "$out_file"
+          cat "$out_file"
+          # Interpretation, so the operator does not have to guess:
+          #   both invalid_password  -> the password in the secret does not match
+          #                             the database password (or Supavisor has
+          #                             not yet picked up a very recent reset)
+          #   session invalid, tx ok -> credentials are right; session mode is
+          #                             the problem, not the secret
+          #   tenant_or_user_not_found -> the username tenant suffix is wrong
+          echo "::notice title=PostgreSQL auth probe (read-only select 1)::$(cat "$out_file")"
       - name: Inspect, snapshot, apply reviewed ordered migrations, verify Auth
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -113,6 +238,9 @@ jobs:
             data/supabase-schema-backup.sql
             data/supabase-counts-backup.txt
             data/supabase-backup-status.txt
+            data/supabase-backup-endpoint.txt
+            data/supabase-dsn-diagnosis.json
+            data/supabase-auth-probe.txt
             data/supabase-backup-error.txt
           if-no-files-found: warn
           retention-days: 7

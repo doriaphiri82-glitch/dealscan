@@ -189,3 +189,236 @@ No production-ready claim is made or implied by these changes.
 - Full local sweep re-verified: 461 Python tests, 208 web tests, typecheck,
   production build; final diff scanned — no secrets, no credentials, no debug
   code (the four print()s are the handoff CLIs' sanitized report emitters).
+- **IPv4 Session Pooler derivation (2026-09-07).** The earlier OPERATOR ACTION
+  "replace the SUPABASE_DB_URL secret with the Supavisor pooler connection
+  string" is **obsolete** — no host swap is needed. `pipeline/validation/supabase_pooler_url.py`
+  adapts the stored secret per run: a direct `db.<ref>.supabase.co` host moves to
+  `aws-<shard>-<region>.pooler.supabase.com:5432` with user `postgres.<ref>`, and
+  an already-pooled host keeps its host but gets a tenant-qualified username and
+  session-mode port. The password is spliced verbatim (never decoded/re-encoded,
+  never logged), parsing is libpq-style by hand so an unencoded `[`/`]` cannot
+  abort it, and the workflow masks the DSN with `::add-mask::` before capturing
+  it into `GITHUB_ENV`. Transaction mode (6543) is never emitted: it cannot serve
+  `pg_dump`.
+- **Live evidence, run 34158289491 (2026-09-07 20:09:53Z, commit c3b57a2).**
+  `dealscan-supabase-handoff` returned **supabase_verified** again with the
+  restored token: query endpoint passed, pending/inconsistent both empty, schema
+  contract passed, Auth passed (site URL + callback, no localhost), all 10 app
+  tables present with counts 0, catalog cross-check 15 triggers / 4 policies /
+  30 functions, project ACTIVE_HEALTHY in eu-west-1. `dealscan-vercel-handoff`
+  stayed **handoff_verified** (production deployment on main 1b8c5fb, `/`,
+  `/privacy`, `/api/health` all 200). `dealscan-production-smoke` reported
+  **ready_for_bounded_smoke** (El Paso probe 138,863 records, counts all 0,
+  `ingestion_authorized=false`, no production writes).
+- **The physical pg_dump backup is still blocked — root cause now proven, not
+  inferred.** Run 34158763056 (20:17:05Z, commit 3337628) emitted the
+  credential-free shape diagnosis:
+  `{"blockers":["password_is_the_dashboard_placeholder"],"host_class":"session_pooler",
+  "parsed":true,"password_present":true,"password_uri_safe":false,
+  "placeholder_suspect":true,"port":"5432","project_ref_available":true,
+  "username_tenant_qualified":true}`. So the stored `SUPABASE_DB_URL` is already
+  a correct **session pooler** endpoint (`aws-1-eu-west-1.pooler.supabase.com:5432`,
+  IPv4-reachable — the runner connected to 54.229.189.117) with an already
+  tenant-qualified username; the password field still holds the dashboard
+  placeholder `[YOUR-PASSWORD]`, which is why `pg_dump` gets
+  `FATAL: password authentication failed for user "postgres"` (Supavisor names
+  the downstream role, having routed the tenant successfully) and why the very
+  first derivation attempt died in `urlsplit()` with `Invalid IPv6 URL` on the
+  unencoded `[`.
+  **OPERATOR ACTION (the only remaining blocker for the physical backup):** in
+  GitHub → Settings → Secrets → Actions, re-store `SUPABASE_DB_URL` with the
+  real database password substituted for `[YOUR-PASSWORD]`, percent-encoded
+  (`@`→`%40`, `:`→`%3A`, `%`→`%25`). No host change is needed; the workflow
+  adapts host, port and username by itself. Until then the logical schema/count
+  snapshot remains the verified surrogate and the handoff still reports
+  `supabase_verified` (the backup step is non-failing by design).
+- **Bounded-smoke dispatch gate repaired (2026-09-07 21:06Z, run 34161918861).**
+  The operator dispatched `dealscan-production-smoke` on
+  `arena/01a07d76-dealscan` with `preflight_only=false`, and the run finished
+  **success** — but the step "Validate, authorize, ingest, and verify the
+  complete current-run chain" was **skipped**. Evidence: the job step list shows
+  step 6 `skipped`, and the artifact (`production-smoke-34161918861`, 860 B)
+  contains only `readiness-summary.json` — no `smoke-summary.json`. The
+  read-only preflight in that same run passed at 21:07:36Z
+  (`ready_for_bounded_smoke`, El Paso 138,863 records, counts all 0,
+  `ingestion_authorized=false`), so **nothing was ingested and nothing was
+  written**; a green run was reported for a chain that never executed.
+  The gate was `if: github.event_name == 'workflow_dispatch' && !inputs.preflight_only`,
+  which depends on how a boolean input is delivered to the `inputs` context and
+  treats an empty value as authorization. It is now, strictly tighter, an
+  explicit literal comparison in both the typed input context and the raw event
+  payload, so only `false` opens the write path and any other value stays
+  read-only. Two supporting changes make a silent skip impossible to miss:
+  a "Resolve and record the dispatch intent" step prints and annotates the
+  resolved decision (event, county, cap, both representations of
+  `preflight_only`, `authorized_write_path`) on every run, and a new guard step
+  fails the run when an authorized dispatch produced no `smoke-summary.json`.
+  Contracts in `test_cli_integrity.py` pin the new gate and the guard.
+  **The bounded 250-record el_paso_tx chain therefore has NOT run yet** and must
+  be re-dispatched by the operator (sandbox tokens still get HTTP 403 on
+  `workflow dispatch`).
+- **Database password reset verified end to end at the shape level, still
+  failing at authentication (run 34162606071, 21:18:15Z, commit 132c3f8).**
+  After the operator reset the database password and re-stored
+  `SUPABASE_DB_URL`, the credential-free diagnosis is now completely clean:
+  `{"blockers":[],"host_class":"session_pooler","parsed":true,
+  "password_present":true,"password_uri_safe":true,"placeholder_suspect":false,
+  "port":"5432","project_ref_available":true,"username_tenant_qualified":true}`.
+  The placeholder is gone and the URI is well formed. `pg_dump` nevertheless
+  still reports `FATAL: password authentication failed for user "postgres"` at
+  `aws-1-eu-west-1.pooler.supabase.com` (18.202.64.2). A read-only `select 1`
+  probe against both pooler ports was added to tell the remaining cases apart
+  (stale/mismatched password vs session-mode-only failure vs wrong tenant
+  suffix); its classification lands in the annotation and in
+  `data/supabase-auth-probe.txt`. Everything else in the handoff stays
+  `supabase_verified`; the physical dump remains the only red item.
+- **Pooler authentication now succeeds (run 34162816449, 21:21:52Z, commit
+  4fe4e15).** The read-only probe reports `session_5432=ok transaction_6543=ok`,
+  so the reset database password, the tenant-qualified username and the IPv4
+  session pooler all work — the earlier 28P01 was the stale password (Supavisor
+  had not yet picked up the reset). The physical dump then failed on a purely
+  technical incompatibility: `pg_dump: error: aborting because of server version
+  mismatch` — ubuntu-latest ships an older `postgresql-client` than the managed
+  server. A step now reads the server major version over the same read-only
+  connection, installs the matching `postgresql-client-<major>` from the
+  official PostgreSQL apt repository and points the backup at it, falling back
+  to the system client with a warning if that is not possible.
+- **The bounded 250-record chain RAN and FAILED, leaving real un-audited rows
+  (dispatch 34164109995, 21:42:41Z → 21:44:49Z, commit 7859fc8).** The repaired
+  gate worked — the intent notice recorded
+  `event=workflow_dispatch preflight_only=false authorized_write_path=true` and
+  the chain step executed instead of being skipped — but it exited 1, and the
+  new guard step confirmed a `smoke-summary.json` was produced (so this was a
+  real chain failure, not a skip). The next read-only preflight (run
+  34164524974) measured production: **counties 0→3, properties 0→248,
+  ingestion_runs 0→1, ingestion_records 0→0, deals 0**. Nothing is published
+  (`available_verified: 0`, public boundary still verified), and every property
+  is genuine El Paso source data — but the ingestion audit table is **empty**,
+  so 248 rows have no lineage. That is precisely the `audit_gap` condition the
+  design refuses to call success: `save_property()` upserts the property and
+  then writes its `ingestion_records` row, and only the second write failed, 248
+  times.
+- **Why it could not be diagnosed, and what now fixes that.** Three blind spots
+  were closed: (1) `main.py` wrote its report only to a log and an artifact —
+  blob downloads are frequently unreachable, so it now emits a minimized Check
+  annotation (`compact_report()` collapses lists to counts and statuses, so no
+  parcel or owner payload can ride along); (2) `_request()` raised
+  `HTTP <status>` with no cause — it now appends the PostgREST/SQLSTATE **code**
+  only, strictly validated as `[A-Za-z0-9_]{3,12}` (42P10 = no unique index for
+  an ON CONFLICT target, PGRST204 = unknown column, 23503/23514 = constraint,
+  P0001 = trigger), never the message, details or hint; `warn_audit()` keeps that
+  structural text only when it matches this module's own pattern, and
+  `runners.run()` now surfaces the distinct reasons in the run error; (3) the
+  Supabase handoff gained a **write contract**: every column the ETL can emit
+  (taken from the real payload builders) must exist, and every PostgREST
+  `on_conflict` target must have a non-partial unique index — a missing one is
+  invisible until write time and would produce exactly this empty-audit
+  outcome. A failing write contract now blocks the handoff.
+- **The 248 rows were left in place deliberately.** They are real source
+  records, not synthetic ones, nothing about them is published, and the upserts
+  are idempotent on `(apn, county_id)`: a corrected re-run re-writes them with
+  their audit rows rather than duplicating them. Deleting production rows is an
+  operator decision, not an autonomous one.
+
+
+## Write contract passed, so the audit failure is not shape drift
+
+The `write_contract` verdict on the production database came back `passed`:
+every column the ETL writes exists and every `on_conflict` target is backed by
+a non-partial unique index. That eliminates the two leading hypotheses (42P10
+and PGRST204) without another dispatch.
+
+Reading `runners.run_county` again narrowed the fault further. Properties are
+saved with `_defer_audit`, and all audit rows are written by a single batched
+`record_ingestion_records` call. One failed request, not 248, explains 248
+properties with zero lineage rows.
+
+Two read-only checks were added for what a column list cannot see:
+
+* `mandatory_columns` — NOT NULL, no default, not identity or generated. Such
+  a column that the ETL never sends rejects every insert with 23502 while the
+  schema contract still passes. `id` is excluded; the database assigns it.
+* `constraints` — check and foreign-key names on the six write tables. Names
+  only, no definitions: enough to recognise an object these migrations never
+  declared, which is how legacy drift rejects writes with 23514 or 23503.
+
+The first live answer was `unwritable_required_columns: {ingestion_runs:
+[run_key]}` — and it was the contract that was wrong, not the database.
+`run_key` is generated inside `record_ingestion_run`, after `run_payload`
+returns, so a contract modelled on the payload builders alone reported a
+column the ETL does send. The check found a real class of defect on its first
+outing; it just found it in itself.
+
+`write_columns` now captures each column set from the writer method by running
+it against a transport that returns empty results and stops at the first write
+to the table in question, so anything the transport layer adds is observed.
+`counties` joined the contract at the same time. A regression contract asserts
+that every `on_conflict` target is a column its own writer can fill.
+
+If the re-run comes back clean, the remaining explanations are a trigger
+raising P0001 or the batch request itself being rejected, and the error code
+now carried into the run summary will name it on the next chain run.
+
+## Root cause of the empty audit: a legacy status vocabulary
+
+Carrying check-constraint definitions into the annotation named the fault on
+the first read. Production carries a legacy constraint the repository never
+declared:
+
+    ingestion_records_status_check
+      CHECK (status = ANY (ARRAY['received','normalized','persisted',
+                                 'rejected','duplicate','error']))
+
+`pipeline/persistence.py` writes `candidate`, `held`, `skipped` and `failed`
+as well. `record_ingestion_records` sends the run's rows as one batched insert,
+so a single row with a status the constraint predates rejects all 248 with
+SQLSTATE 23514. Properties upserted normally; only the lineage batch died.
+Every earlier check passed honestly: the columns exist, the unique indexes
+exist, nothing is null that must not be. The vocabulary was the gap.
+
+`20260907230000_audit_status_vocabulary.sql` replaces the legacy check with
+the union of the ETL's vocabulary and the legacy values, so rows written by
+earlier deployments stay valid and nothing is deleted or rewritten. The
+handoff sources migrations from `main`, so production is repaired when this
+branch merges, not before.
+
+The contract now covers the class, not just the instance. `write_vocabulary()`
+reads `AUDIT_STATUSES`, `STATUS_MAP` and `RUN_TYPES` from the writers, and
+`write_contract` parses every `col = ANY (ARRAY[...])` check on a write table
+and reports any value the ETL can produce that the database would refuse. A
+migration marker was added for the new constraint, so its application is
+verified by observing the constraint rather than by trusting HTTP success.
+
+The 248 properties, 3 counties and 1 run stay where they are. Re-running the
+chain after the migration lands re-upserts the same rows on their natural keys
+and writes the lineage that should have accompanied them.
+
+## The chain confirmed 23514 from the other side
+
+An operator dispatch of the bounded chain on `4cf89a9` (run 34167915227)
+failed at the ingest stage and, for the first time, said why:
+
+    audit_unavailable: source provenance or run finalization requires
+    reconciliation [record_sources: Supabase POST ingestion_records failed
+    (HTTP 400 code 23514)]
+
+That is the same verdict the write contract reached by inspecting the schema,
+arrived at independently through the transport layer. An exception type alone
+would have said `RuntimeError` again. The diagnosability rule paid for itself:
+no dispatch was needed to find the fault, and the dispatch that happened
+confirmed it rather than starting a new search.
+
+Production still carries the legacy constraint because the handoff applies
+migrations only from `main` and the branch is unmerged, so the repair is
+pending a merge, not pending a diagnosis.
+
+### The next honest blocker is the source, not the code
+
+The same run reported `discovered 250, stored 248, scored 246, qualified 0`
+with `hold_reasons: {missing_source_asking_price: 246, duplicate_county_apn: 2}`.
+Every parcel was held because the El Paso CAD parcel layer publishes assessed
+and market values but no asking price, and a deal is not published without a
+source-backed price. Repairing the audit vocabulary will produce complete
+lineage for those 248 rows; it will not produce deals. Publishing any would
+require a listing source that states a price, and inventing one is not an
+option this project takes.
