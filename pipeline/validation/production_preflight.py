@@ -101,7 +101,7 @@ def run_preflight(county_id: str, app_url: str, max_records: int = 250) -> dict:
     contact = os.getenv('WAITLIST_CONTACT_EMAIL') or ''
     if contact != EXPECTED_CONTACT: missing.append('requested WAITLIST_CONTACT_EMAIL')
     checks['configuration'] = {'status':'passed' if not missing else 'failed','missing':missing}
-    checks['platform_access'] = {key:bool(os.getenv(key)) or os.getenv('HAS_'+key)=='true' for key in ('VERCEL_TOKEN','SUPABASE_ACCESS_TOKEN','SUPABASE_DB_URL')}
+    checks['platform_access'] = {key:bool(os.getenv(key)) or os.getenv('HAS_'+key)=='true' for key in ('VERCEL_TOKEN','SUPABASE_ACCESS_TOKEN','SUPABASE_DB_URL','SUPABASE_SERVICE_ROLE_KEY')}
     try:
         checks['deployment'] = deployment_probe(app_url,EXPECTED_CONTACT)
     except Exception as exc: checks['deployment'] = _failure(exc)

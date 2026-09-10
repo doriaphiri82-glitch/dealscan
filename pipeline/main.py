@@ -213,7 +213,14 @@ def main(argv=None):
         else: p.print_help(); return 0
     except Exception as exc:
         # Request bodies and source/owner data must never enter workflow artifacts.
-        result={'status':'error','error':f'{type(exc).__name__}: operation failed; check configuration, schema and source connectivity'}
+        # SmokeFailure messages are static, value-free assertions (a fixed table or
+        # field name at most), so only those keep their detail: a chain that raises
+        # after writing must name its failed assertion in the minimized report and
+        # annotation, exactly as the production preflight already does. Any other
+        # exception keeps the generic guidance and contributes its type alone.
+        from validation.production_smoke import SmokeFailure
+        detail = str(exc) if isinstance(exc, SmokeFailure) else 'operation failed; check configuration, schema and source connectivity'
+        result={'status':'error','error':f'{type(exc).__name__}: {detail}'}
         code=1
     finally:
         if mutable and registry_loaded:
