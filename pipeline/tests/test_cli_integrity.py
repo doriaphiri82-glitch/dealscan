@@ -84,6 +84,31 @@ def test_workflows_use_reproducible_builds_and_never_commit_runtime_data():
     assert '--production-smoke' in smoke and 'app_url:' in smoke
 
 
+def test_no_workflow_expression_uses_a_double_quoted_literal():
+    """Actions expressions only accept single-quoted string literals.
+
+    `!= ""` on the SUPABASE_SERVICE_ROLE_KEY presence check made the whole
+    workflow unparseable: GitHub aborted at startup with zero jobs
+    (runs 34533437095, 34533615403, 34534355797, 34534668839, 34535256409)
+    while `dealscan-ci` stayed green, so two PRs merged a workflow that could
+    never run. Nothing here needs a YAML parser; a double quote inside
+    `${{ }}` is unconditionally invalid, so scanning the raw text is exact.
+    """
+    root=Path(__file__).parents[2]/'.github/workflows'
+    workflows=sorted(root.glob('*.yml'))+sorted(root.glob('*.yaml'))
+    assert workflows, 'no workflow files found to scan'
+    for path in workflows:
+        text=path.read_text()
+        for start in [m.end() for m in re.finditer(r'\$\{\{',text)]:
+            end=text.index('}}',start)
+            expr=text[start:end]
+            line=text[:start].count('\n')+1
+            assert '"' not in expr, (
+                f'{path.name}:{line} uses a double-quoted literal in an '
+                f'expression, which GitHub cannot parse and which fails every '
+                f'run at startup: ${{{{ {expr.strip()} }}}}')
+
+
 def test_read_only_coverage_hydrates_without_pushing(monkeypatch):
     calls=[]
     monkeypatch.setattr(main,'pull_registry',lambda:calls.append('read'))
