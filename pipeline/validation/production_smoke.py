@@ -22,7 +22,12 @@ def get_backend():
 
 
 class SmokeFailure(RuntimeError):
-    pass
+    """A failed production assertion whose message is safe for reports.
+
+    Messages must stay static and value-free: fixed table/field names at most,
+    never source values, owner data, credentials or SQL. They are copied verbatim
+    into workflow reports and Check annotations.
+    """
 
 
 def public_key() -> str:

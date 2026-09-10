@@ -76,6 +76,20 @@ def test_readiness_success_does_not_claim_ingestion_or_migration(monkeypatch):
     assert report['checks']['platform_access']['VERCEL_TOKEN'] is True
 
 
+def test_platform_access_reports_service_role_key_presence_without_granting_access(monkeypatch):
+    monkeypatch.delenv('SUPABASE_SERVICE_ROLE_KEY',raising=False)
+    monkeypatch.setenv('HAS_SUPABASE_SERVICE_ROLE_KEY','true')
+    monkeypatch.setattr(preflight,'deployment_probe',lambda *a:{'status':'failed'})
+    monkeypatch.setattr(preflight,'probe_source',lambda *a:{'status':'failed'})
+    report=preflight.run_preflight('el_paso_tx','https://app.example')
+    access=report['checks']['platform_access']
+    assert access['SUPABASE_SERVICE_ROLE_KEY'] is True
+    assert access['VERCEL_TOKEN'] is False and access['SUPABASE_ACCESS_TOKEN'] is False and access['SUPABASE_DB_URL'] is False
+    # Presence reporting is not access: the configuration gate still requires the key itself.
+    assert 'SUPABASE_SERVICE_ROLE_KEY' in report['checks']['configuration']['missing']
+    assert report['checks']['database']['status']=='not_checked'
+
+
 def test_production_command_checks_deployment_before_registry_or_ingestion_writes(monkeypatch):
     configure(monkeypatch)
     db=SupabaseDatabase()

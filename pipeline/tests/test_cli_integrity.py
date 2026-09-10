@@ -174,6 +174,27 @@ def test_cli_emits_minimized_annotation_evidence_without_records(monkeypatch,cap
     assert json.loads(report_file.read_text())['stage']=='ingest'
 
 
+def test_chain_smoke_failure_names_its_assertion_while_other_errors_stay_generic(monkeypatch,capsys,tmp_path):
+    """A chain that raises after writing must name its failed assertion; anything else keeps only its type."""
+    from validation import production_smoke as smoke
+    monkeypatch.setenv('GITHUB_ACTIONS','true')
+    monkeypatch.setattr(main,'pull_registry',lambda:None)
+    monkeypatch.setattr(main,'push_registry',lambda:None)
+    report_file=tmp_path/'smoke.json'
+    monkeypatch.setattr(main,'production_smoke',lambda *a,**k:(_ for _ in ()).throw(smoke.SmokeFailure('The requested run did not complete with intact audit')))
+    assert main.main(['--production-smoke','el_paso_tx','--report-file',str(report_file)])==1
+    out=capsys.readouterr().out
+    assert 'SmokeFailure: The requested run did not complete with intact audit' in out
+    assert json.loads(report_file.read_text())['error']=='SmokeFailure: The requested run did not complete with intact audit'
+    annotation=[line for line in out.splitlines() if line.startswith('::error title=DealScan CLI report')]
+    assert len(annotation)==1 and 'did not complete with intact audit' in annotation[0]
+    monkeypatch.setattr(main,'production_smoke',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('connection reset by 10.0.0.1 key=SECRET')))
+    assert main.main(['--production-smoke','el_paso_tx','--report-file',str(report_file)])==1
+    out=capsys.readouterr().out
+    assert 'SECRET' not in out and '10.0.0.1' not in out
+    assert 'RuntimeError: operation failed; check configuration, schema and source connectivity' in out
+
+
 def test_compact_report_truncates_strings_and_deep_structures():
     compacted=main.compact_report({'note':'x'*500,'deep':{'a':{'b':{'c':{'d':{'e':1}}}}},
                                    'ids':[1,2,3,4,5,6,7]})
