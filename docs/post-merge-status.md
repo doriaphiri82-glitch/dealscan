@@ -1,130 +1,127 @@
-# Post-merge status — 2026-09-06 (session `arena/01a0759b-dealscan`)
+# Post-merge status — 2026-09-10 (session `arena/01a08d60-dealscan`)
 
-This file is a fresh, session-scoped record. It replaces the previous local-only
-post-merge note (commit `5098f87` on the prior session branch, never pushed and
-absent from this checkout). Nothing here claims production ingestion, migration,
-authorization or deployment success.
+This file is a fresh, session-scoped record. It replaces the previous session's
+note. Nothing here claims production ingestion, migration, authorization or
+deployment success.
 
-## Verified in this sandbox (commit `afee487` = `origin/main`, PR #10 merge)
+## What was actually broken
 
-- Working tree clean; HEAD equals `origin/main` exactly.
-- GitHub token works for code push, PRs, runs/checks and environment reads.
-- **421 Python tests passed** (`python -m pytest -q`, locked Python 3.11 venv).
-- **208 web/database/UI tests passed** (`npm test`, Node 22.22.3, `npm ci`).
-- Typecheck (`next typegen && tsc --noEmit`) and production build passed;
-  16 routes listed, middleware bundle built.
+`dealscan-production-smoke` had not executed a single job since PR #13. Its
+`SUPABASE_SERVICE_ROLE_KEY` presence check used a double-quoted string literal:
+
+```yaml
+HAS_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY != "" }}
+```
+
+GitHub Actions expressions accept only **single-quoted** literals, so the file
+was unparseable and GitHub aborted every run at startup with zero jobs:
+
+| Run | Branch | Event | Conclusion | Jobs |
+|---|---|---|---|---|
+| 34533437095 | `arena/01a0884c` | push | failure (0s) | 0 |
+| 34533615403 | `main` | push | failure (0s) | 0 |
+| 34534355797 | `arena/01a08d47` | push | failure (0s) | 0 |
+| 34534668839 | `main` | push | failure (0s) | 0 |
+| 34535256409 | `main` | workflow_dispatch | `startup_failure` | `total_count: 0` |
+
+Corroborating evidence: the workflow was registered under its *filename*
+(`.github/workflows/production-smoke.yml`) rather than its declared
+`name: dealscan-production-smoke`, because GitHub could not parse the name out
+of it. After the fix the same workflow ID `351029384` resolves by name.
+
+`dealscan-ci` was green through PR #13 **and** PR #14 because no check ever
+parsed a workflow expression. The fix landed as PR #15 (merge commit
+`69898ec`) and adds `test_no_workflow_expression_uses_a_double_quoted_literal`,
+which scans every workflow for a `"` inside `${{ }}` using only the stdlib —
+`pipeline/requirements.lock.txt` has no PyYAML, so a `yaml` import would itself
+have broken CI. The guard was verified in both directions: it fails on the
+previous text and passes on the fixed one.
+
+## Verified in this sandbox
+
+- **487 tests passed** (`python -m pytest -q`, locked Python 3.11 venv) — the
+  486 prior tests plus the new guard.
 - `python -m compileall -q pipeline` passed.
-- `npm audit`: **0 vulnerabilities**.
-- Local source/API audit of the merged tree: middleware fail-closed auth,
-  verified-only PostgREST public reads with RLS plus explicit allowlist
-  projection, bounded/origin-checked waitlist RPC, admin coverage RPC with
-  server-side role check, no mock/demo/substitute data in public paths.
+- Expression scan across all 6 workflow files: clean after the fix, flags
+  `production-smoke.yml:55` before it.
+- Merge CI on `main` (`69898ec`) succeeded: run 34536862603.
+- PR CI succeeded: run 34536685263; its `pipeline` job step 6 "Run pipeline
+  tests" concluded `success`.
 
-## GitHub-observed evidence
+## GitHub-observed readiness evidence
 
-- Merge CI on `main` (`afee487`) succeeded:
-  https://github.com/doriaphiri82-glitch/dealscan/actions/runs/34016161996
-- Fresh read-only readiness on this branch, commit `adff79f`,
-  2026-09-06T07:38:56Z (run 34019687589, Check annotation retargeted push
-  trigger working as intended):
-  - **configuration: failed** — now missing **only** `SUPABASE_SERVICE_ROLE_KEY`.
-    `SUPABASE_URL` and a public Supabase key are present in the Production
-    environment, so secret configuration has begun since the previous run.
-  - **deployment: failed, HTTP 503** `deployed_health_unavailable` — the
-    runner now reaches the deployed application (the earlier HTTP 500 /
-    middleware crash is gone); production health returns 503 because the web
-    app still has no public Supabase configuration.
-  - **source: passed** (read-only technical probe, unchanged): El Paso query
-    `legal_acreage > 0 AND imprv_val = 0`, 138,863 matching records,
-    5 samples across 3 pages, object-ID field `ObjectID_1`,
-    `ingestion_authorized:false`.
-  - **database / public_boundary: not checked** (service key missing);
-    `production_writes_performed:false`; `ingestion_status:"not_attempted"`.
-- CI on this branch and its PR passed:
-  https://github.com/doriaphiri82-glitch/dealscan/actions/runs/34019687689 and
-  https://github.com/doriaphiri82-glitch/dealscan/actions/runs/34019725407.
-- Previous readiness annotation (prior branch, commit `837aef9`,
-  2026-09-06T06:10:25Z) reported all three required secrets missing and the
-  deployment at HTTP 500; that is superseded by the fresh run above.
-- `Production` environment still has **no protection rules** and no branch
-  policy restriction (read via API, 2 environments exist).
-- Legacy `county-source-smoke` workflow references
-  `.github/workflows/county-smoke.yml`, which does not exist on `main`; it is a
-  leftover from an older branch. Harmless, but it cannot run from `main`.
+Read-only run 34537161709 on `arena/01a08d60-dealscan`, commit `ffee83c`,
+annotation stamped 2026-09-10T22:23:45Z. Steps 1–4 passed and step 5 ran, which
+is itself proof the expression now parses. The `Read-only production readiness`
+annotation reports `status: blocked`:
 
-## Operator-reported production observations (not agent-verified)
+- **configuration: failed** — `missing: ["SUPABASE_SERVICE_ROLE_KEY"]`.
+  Nothing else is missing: `SUPABASE_URL`, a public Supabase key, the explicit
+  production Supabase mode and `WAITLIST_CONTACT_EMAIL` are all present.
+- **platform_access** — `VERCEL_TOKEN: true`, `SUPABASE_ACCESS_TOKEN: true`,
+  `SUPABASE_DB_URL: true`, `SUPABASE_SERVICE_ROLE_KEY: **false**`.
+- **deployment: passed** — `https://dealscan-omega.vercel.app/api/health`
+  returned HTTP 200 with `database: ok`, and `/privacy` carries
+  `mailto:doriaphiri82@gmail.com`.
+- **source: passed** (read-only technical probe) — El Paso CAD
+  `ElPasoCADWebService/FeatureServer/0`, 138,736 matching records, 5 samples
+  across 3 pages, object-ID field `ObjectID_1`, `ingestion_authorized: false`.
+- **database / public_boundary: not checked** — `private_configuration_missing`.
+- `production_writes_performed: false`, `ingestion_status: "not_attempted"`.
 
-The sandbox cannot complete TLS handshakes to `*.vercel.app`, the ArcGIS source,
-or GitHub blob/log hosts (`SSL_ERROR_SYSCALL` / EOF). TLS was not weakened. The
-operator reported after the merge that:
+So exactly one thing blocks the bounded smoke: that one secret.
 
-- `/` and `/privacy` load (previous middleware crash resolved; privacy shows
-  `doriaphiri82@gmail.com`).
-- `/api/health` → `database: not-configured` (web app has no public Supabase env).
-- `/api/deals` → unavailable, with **no substitute records** (correct contract).
-- `/api/admin/coverage` → requires authentication (correct contract).
+### The service-role key has never reached a runner
 
-These must be re-confirmed by a GitHub readiness run before any write step;
-a passing source probe is not deployment verification.
+Two independent preflight runs, an hour apart, both report it missing:
 
-## Vercel runtime handoff — VERIFIED from the runner (2026-09-06 16:59Z)
+- 2026-09-10T21:23:34Z, run 34531858733 (dispatch on `main` at `3ac6b48`, before
+  PR #13 introduced the parse error) — `missing: ["SUPABASE_SERVICE_ROLE_KEY"]`.
+- 2026-09-10T22:23:45Z, run 34537161709 — same, plus
+  `platform_access.SUPABASE_SERVICE_ROLE_KEY: false`.
 
-`VERCEL_TOKEN` was supplied in GitHub secrets. The sandbox cannot reach
-`api.vercel.com` (TLS blocked), so verification runs where the secret is
-usable: the new `dealscan-vercel-handoff` workflow on this branch (success:
-https://github.com/doriaphiri82-glitch/dealscan/actions/runs/34047146235).
-Evidence is name/target-only; no credential values were read or printed.
+The owner believed the key was added roughly two hours before the 21:22 UTC
+failure. Whatever was saved, it is not visible to Actions in this repository.
 
-- **Root Directory = `landing`** — matches (project `dealscan`,
-  team `doriaphiri82-4774s-projects`, framework `nextjs`, Git production
-  branch `main`).
-- **Node.js** — dashboard was found at **24.x**; the workflow patched the one
-  documented, reversible setting to **22.x** and verified the re-read
-  (`config_fix.applied, verified:true`). Versioned `package.json` already pins
-  `"node": "22.x"`.
-- **Environment variables (production target)** — `NEXT_PUBLIC_SUPABASE_URL`,
-  `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
-  all present. `WAITLIST_CONTACT_EMAIL` is intentionally satisfied by
-  versioned `landing/vercel.json` (build + runtime), not a dashboard entry.
-- **Current production deployment** — READY, commit `afee487` = exact current
-  `main` HEAD; the merge-era promotion is the serving deployment. No further
-  promotion was needed (`already_current`).
-- **Live endpoints** — `/` 200, `/privacy` 200 with the operator contact,
-  `/api/health` 200 `database:ok`.
-- **Read-only preflight gate** — the smoke workflow's deployment check now
-  **passes** (16:59Z) and the El Paso source probe passes; the GitHub-side
-  Production environment still lacks `SUPABASE_SERVICE_ROLE_KEY`, so
-  database/public-boundary checks remain `not_checked`.
-  `preflight_only` remains **true**; no ingestion was run or authorized.
+### Ruled out: an environment-name mismatch
 
-## Re-confirmed access blockers (unchanged)
+The workflow declares `environment: production` (lowercase) while the repo's
+settings contain `Production` (capital). That looked like the likely cause, and
+it is **not**: `GET /environments/production` and `GET /environments/Production`
+return the same entity (`id: 20783439090`), so GitHub resolves environment names
+case-insensitively and the job does run in `Production`. The deployments API
+merely records the casing as written. `Production` also has no protection rules,
+and three sibling secrets resolve inside that same job — so the environment is
+not hiding anything.
 
-- `403 Resource not accessible by integration` for repository/environment
-  secrets and variables, and for manual `workflow_dispatch`.
-- No Supabase, Vercel or DealScan credentials exist in this sandbox environment.
-- Actual production Supabase schema, migration state and the real 250-record
-  ingestion remain **unverified**. Scheduled ingestion stays disabled.
+### What remains, and what could not be checked here
 
-## Operator actions still required (no credentials in chat)
+The agent token (`arena-ai-coding-agent[bot]`) lacks `actions:write`, so
+`workflow_dispatch` returns HTTP 403 and only the owner can dispatch; it also
+lacks secrets read, so the secret list could not be inspected to name the
+fault. Because a push event can never reach the write step, the read-only pin
+was retargeted to this session branch — the mechanism this trigger's own
+comment prescribes — to obtain a real readiness annotation. Nothing was
+bypassed and no gate was weakened.
 
-Per `docs/production-runbook.md` and `docs/production-handoff.md`:
+Since the key is genuinely absent, the remaining causes are on the GitHub
+settings side and need the owner:
 
-1. Supply the still-missing matching `SUPABASE_SERVICE_ROLE_KEY` in the GitHub
-   **Production** environment (Vercel is fully configured as of 16:59Z; the
-   GitHub Actions side is not) and add environment protection rules before any
-   write-enabled dispatch.
-2. In Supabase: verify Auth site URL `https://dealscan-omega.vercel.app` and
-   allowed `/auth/callback` redirects. A Vercel token cannot read Auth config;
-   provide `SUPABASE_ACCESS_TOKEN` through the secure secret store if the agent
-   is to verify it mechanically. (Vercel root/Node/env checks from the earlier
-   version of this item are now verified complete.)
-3. Back up/inspect the real Supabase schema, then apply the unapplied ordered
-   migrations in `supabase/migrations/` before any ingestion.
-4. Run read-only readiness (a push to this session's branch triggers it now
-   that the workflow pin was retargeted), review source authority, then
-   dispatch `dealscan-production-smoke` with `preflight_only=false`,
-   `county_id=el_paso_tx`, `max_records=250`,
-   `app_url=https://dealscan-omega.vercel.app`.
-5. Verify that exact run's persistence/audit/raw/normalized/hash/identity chain
-   and deployed API agreement before any cron enabling
-   (`ENABLE_PRODUCTION_INGESTION=true`).
+1. Exact name `SUPABASE_SERVICE_ROLE_KEY` — no trailing space, no
+   `NEXT_PUBLIC_` prefix, not `SUPABASE_SERVICE_ROLE`.
+2. **Secrets** tab, not **Variables** — a variable is exposed as an env var and
+   is invisible to `secrets.*`.
+3. **Actions** sub-tab, not Codespaces or Dependabot.
+4. Repository scope for `doriaphiri82-glitch/dealscan`, or the `Production`
+   environment — not an org secret left unshared with this repo.
+5. A non-empty `service_role` JWT. A saved-but-empty value reads as absent, and
+   the `publishable`/`anon` key will not work: the smoke deliberately rejects
+   service-or-unknown keys as an RLS proxy.
+
+Once that is in place, a dispatch from `main` with `preflight_only=true` should
+report `configuration.missing == []` and
+`platform_access.SUPABASE_SERVICE_ROLE_KEY: true`, and only then is
+`preflight_only=false` worth spending. A green bounded chain will still yield
+`deals: 0`, because the El Paso CAD parcel layer publishes assessed and market
+values but no asking price — see `docs/engineering-progress.md`. That is the
+source, not a regression.

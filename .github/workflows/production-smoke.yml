@@ -5,7 +5,7 @@ on:
   # cannot select the write step and still honors environment protection rules.
   # Each new Arena session branch retargets this pin to itself explicitly.
   push:
-    branches: ['arena/01a07d76-dealscan']
+    branches: ['arena/01a08d60-dealscan']
   workflow_dispatch:
     inputs:
       county_id:
