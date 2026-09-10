@@ -171,7 +171,7 @@ def test_production_readiness_runs_before_any_ingestion_and_defaults_to_read_onl
     # The push trigger stays pinned to exactly one explicit trusted session
     # branch (retargeted per Arena session) — never a wildcard, never main.
     pins=re.findall(r"branches: \[('[^']+'(?:, ?'[^']+')*)\]",text)
-    assert pins==["'arena/01a07d76-dealscan'"]
+    assert pins==["'arena/01a08d60-dealscan'"]
     install=text[text.index('- name: Install dependencies'):text.index('- name: Read-only production readiness')]
     assert 'SUPABASE_SERVICE_ROLE_KEY' not in install
 
