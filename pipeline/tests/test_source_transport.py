@@ -135,7 +135,9 @@ def test_actual_urllib3_gzip_decoding_is_bounded_by_expanded_bytes(monkeypatch,l
 
 
 def test_excessively_nested_json_is_a_bounded_failure_not_an_uncaught_parser_error(monkeypatch):
-    response=Response(b'['*2000+b'0'+b']'*2000)
+    # Use nesting depth that exceeds Python's JSON recursion limit (typically 1000)
+    # This triggers a RecursionError which should be caught and reported as a bounded failure
+    response=Response(b'['*10000+b'0'+b']'*10000)
     monkeypatch.setattr(base._session,'post',lambda *a,**kw:response)
     result=base.post_json('https://county.example/data',{})
     assert result.ok is False and response.closed
