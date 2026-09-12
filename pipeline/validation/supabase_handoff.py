@@ -108,6 +108,10 @@ MIGRATION_MARKERS: dict[str, dict] = {
         'triggers': ['deals_require_a_typed_validation', 'counties_revoke_validation_proof']},
     '20260907230000_audit_status_vocabulary.sql': {
         'constraints': {'ingestion_records': ['ingestion_records_status_v2']}},
+    '20260912173000_index_hardening.sql': {
+        'indexes': ['comps_county_id_idx', 'comps_ingestion_record_id_idx',
+                    'deals_ingestion_record_id_idx', 'ingestion_records_deal_id_idx',
+                    'ingestion_records_property_county_idx', 'ingestion_records_run_county_idx']},
 }
 
 

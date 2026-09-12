@@ -2,7 +2,7 @@ name: dealscan-ci
 
 on:
   push:
-    branches: [main, 'arena/**']
+    branches: [main, 'arena/**', 'manus/**']
     paths: ['pipeline/**', 'landing/**', 'supabase/**', '.github/workflows/**', 'pytest.ini']
   pull_request:
     paths: ['pipeline/**', 'landing/**', 'supabase/**', '.github/workflows/**', 'pytest.ini']
