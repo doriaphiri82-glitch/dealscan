@@ -1,13 +1,9 @@
 name: dealscan-vercel-handoff
 
 on:
-  # Evidence + idempotent main promotion for this trusted session branch. The
-  # only mutating step promotes an already-built READY deployment whose commit
-  # equals origin/main (obtained live via ls-remote); it can never select the
-  # pushed branch or any unreviewed commit. Environment protection rules still
-  # apply. The operator authorized this exact promotion in the handoff request.
-  push:
-    branches: ['arena/01a07d76-dealscan']
+  # Vercel inspection/promotion is operator-dispatched only. This workflow has
+  # a production mutation path, so it must not run because an ephemeral repair
+  # or session branch happened to be pushed.
   workflow_dispatch:
 
 permissions:
