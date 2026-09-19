@@ -36,7 +36,14 @@ jobs:
       DEALSCAN_DB_BACKEND: supabase
       DEALSCAN_REGISTRY_PATH: data/counties.json
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # The owner saved the service-role key as SUPABASE_SERVER_ROLE_KEY
+      # (updated 2026-09-10T19:10:32Z) while every consumer reads
+      # SUPABASE_SERVICE_ROLE_KEY, so the presence gate below could never pass
+      # and cron stayed dark. Accept the corrected name first and fall back to
+      # the legacy alias. This is fail-closed: production_preflight rejects any
+      # value that is not a genuine service_role JWT or sb_secret_ key, so a
+      # wrong or empty value still blocks the run instead of degrading to anon.
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVER_ROLE_KEY }}
       COUNTY_ID: ${{ inputs.county_id || 'el_paso_tx' }}
       MAX_RECORDS: ${{ inputs.max_records || '250' }}
     defaults:
@@ -54,7 +61,7 @@ jobs:
       - name: Verify production configuration
         run: |
           test -n "$SUPABASE_URL" || { echo 'Missing SUPABASE_URL secret'; exit 1; }
-          test -n "$SUPABASE_SERVICE_ROLE_KEY" || { echo 'Missing SUPABASE_SERVICE_ROLE_KEY secret'; exit 1; }
+          test -n "$SUPABASE_SERVICE_ROLE_KEY" || { echo 'Missing service-role key: set SUPABASE_SERVICE_ROLE_KEY (preferred) or SUPABASE_SERVER_ROLE_KEY'; exit 1; }
       - name: Run pipeline tests
         working-directory: pipeline
         env:

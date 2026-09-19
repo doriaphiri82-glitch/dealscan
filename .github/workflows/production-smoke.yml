@@ -52,7 +52,7 @@ jobs:
       HAS_VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN != '' }}
       HAS_SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN != '' }}
       HAS_SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL != '' }}
-      HAS_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY != '' }}
+      HAS_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY != '' || secrets.SUPABASE_SERVER_ROLE_KEY != '' }}
     defaults:
       run:
         working-directory: pipeline
@@ -68,7 +68,10 @@ jobs:
       - name: Read-only production readiness
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Prefer the corrected name; fall back to the alias the owner actually
+          # saved (SUPABASE_SERVER_ROLE_KEY). Fail-closed: production_preflight
+          # rejects anything that is not a real service_role/sb_secret_ key.
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVER_ROLE_KEY }}
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
         run: python -m validation.production_preflight --county "$COUNTY_ID" --max-records "$MAX_RECORDS" --app-url "$PRODUCTION_APP_URL" --report-file data/readiness-summary.json
@@ -95,7 +98,8 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && (format('{0}', inputs.preflight_only) == 'false' || format('{0}', github.event.inputs.preflight_only) == 'false') }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Same corrected-name-first fallback as the readiness step above.
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVER_ROLE_KEY }}
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
         run: python main.py --production-smoke "$COUNTY_ID" --max-records "$MAX_RECORDS" --app-url "$PRODUCTION_APP_URL" --report-file data/smoke-summary.json

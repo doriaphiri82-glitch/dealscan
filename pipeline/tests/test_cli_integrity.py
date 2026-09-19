@@ -109,6 +109,46 @@ def test_no_workflow_expression_uses_a_double_quoted_literal():
                 f'run at startup: ${{{{ {expr.strip()} }}}}')
 
 
+def test_root_gitignore_still_protects_secrets_and_runtime_data():
+    """Commit f2d50db replaced the root .gitignore with an LLM chat reply.
+
+    That was not cosmetic: `.env`, `.env.*`, `*.db`, `pipeline/data/*` and
+    `__pycache__/` stopped being ignored and 103 compiled files entered the
+    index. This pins every protection so the same wholesale replacement fails
+    CI instead of quietly re-exposing secrets.
+    """
+    root=Path(__file__).parents[2]
+    lines=[line.strip() for line in (root/'.gitignore').read_text().splitlines()]
+    required={'.env','.env.*','!.env.example','*.pem','*.key','*.db','*.sqlite',
+              '*.sqlite3','pipeline/data/*','landing/data/*','__pycache__/',
+              '*.py[cod]','landing/.next/','landing/node_modules/','.vercel'}
+    missing=sorted(required-set(lines))
+    assert not missing, f'root .gitignore no longer ignores: {missing}'
+    # A chat reply is prose; no ignore pattern is a 40+ character sentence.
+    prose=[line for line in lines if line and not line.startswith('#') and len(line)>40]
+    assert not prose, f'.gitignore holds prose, not ignore patterns: {prose}'
+
+
+def test_service_role_key_alias_is_resolved_by_both_write_workflows():
+    """The owner saved the key as SUPABASE_SERVER_ROLE_KEY (updated
+    2026-09-10T19:10:32Z) while every consumer reads SUPABASE_SERVICE_ROLE_KEY,
+    so the presence gate could never pass and scheduled ingestion stayed dark.
+    Both write workflows must keep accepting the corrected name first and the
+    saved alias second; the fallback stays fail-closed because
+    production_preflight rejects any value that is not a genuine service key.
+    """
+    workflows=Path(__file__).parents[2]/'.github/workflows'
+    fallback='${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVER_ROLE_KEY }}'
+    presence="${{ secrets.SUPABASE_SERVICE_ROLE_KEY != '' || secrets.SUPABASE_SERVER_ROLE_KEY != '' }}"
+    bare='SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}'
+    scheduled=(workflows/'scrape.yml').read_text()
+    smoke=(workflows/'production-smoke.yml').read_text()
+    assert fallback in scheduled, 'scheduled ingestion must resolve the saved alias'
+    assert fallback in smoke, 'the bounded smoke chain must resolve the saved alias'
+    assert presence in smoke, 'readiness must not report the saved alias as absent'
+    assert bare not in scheduled and bare not in smoke, 'a bare service-key read returns empty'
+
+
 def test_read_only_coverage_hydrates_without_pushing(monkeypatch):
     calls=[]
     monkeypatch.setattr(main,'pull_registry',lambda:calls.append('read'))
