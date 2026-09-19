@@ -1,1 +1,52 @@
-Nothing needs to be added to .gitignore since the only modified file is a Python test file (`pipeline/tests/test_source_transport.py`) which is source code and should not be ignored.
+# ===== Landing (Next.js webapp) =====
+landing/node_modules/
+landing/.next/
+landing/out/
+*.tsbuildinfo
+landing/next-env.d.ts
+
+# ===== Private runtime files and generated snapshots (never commit source rows) =====
+landing/data/*
+data/*
+pipeline/data/*
+!landing/data/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# ===== Environment & secrets =====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+secrets*
+
+# ===== Pipeline (Python) =====
+venv/
+.venv/
+.venv*/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# ===== OS / editor =====
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vercel
+
+# ===== Local engineering reports and test scratch files =====
+.arena/
+
+# NOTE: This file was once replaced wholesale by an LLM's chat reply (commit
+# f2d50db, author qwen.ai[bot]), which silently un-ignored .env, *.db,
+# pipeline/data/* and __pycache__/ — 103 compiled files were tracked as a
+# result. pipeline/tests/test_cli_integrity.py::
+# test_root_gitignore_still_protects_secrets_and_runtime_data now fails if any
+# of these protections go missing again. Edit this file additively; never
+# replace its contents.
