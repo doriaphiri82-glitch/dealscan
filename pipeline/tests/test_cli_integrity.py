@@ -208,10 +208,11 @@ def test_production_readiness_runs_before_any_ingestion_and_defaults_to_read_onl
     guard = text[text.index('- name: A dispatched write must not silently skip'):]
     assert 'if: ${{ always()' in guard and 'exit 1' in guard
     assert guard.index('data/smoke-summary.json') < guard.index('exit 1')
-    # The push trigger stays pinned to exactly one explicit trusted session
-    # branch (retargeted per Arena session) — never a wildcard, never main.
-    pins=re.findall(r"branches: \[('[^']+'(?:, ?'[^']+')*)\]",text)
-    assert pins==["'arena/01a08d60-dealscan'"]
+    # Production verification is explicitly dispatched, never implicitly
+    # enabled by a push to an ephemeral session or repair branch.
+    assert 'workflow_dispatch:' in text
+    assert 'push:' not in text
+    assert 'arena/' not in text
     install=text[text.index('- name: Install dependencies'):text.index('- name: Read-only production readiness')]
     assert 'SUPABASE_SERVICE_ROLE_KEY' not in install
 

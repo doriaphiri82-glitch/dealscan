@@ -44,7 +44,10 @@ def full_snapshot():
             'functions': fns, 'triggers': trgs,
             'policies': {'public read counties', 'public read published deals', 'public read deal properties',
                          'public read comps for published deals'},
-            'indexes': {'idx_deals_verified_score'},
+            'indexes': {'idx_deals_verified_score', 'comps_county_id_idx',
+                        'comps_ingestion_record_id_idx', 'deals_ingestion_record_id_idx',
+                        'ingestion_records_deal_id_idx', 'ingestion_records_property_county_idx',
+                        'ingestion_records_run_county_idx'},
             'unique_indexes': {table: [tuple(sorted(columns))] for table, columns in sh.UPSERT_TARGETS.items()},
             'mandatory_columns': {},
             'ledger_present': False,
@@ -72,7 +75,7 @@ def test_inspection_sql_is_provably_read_only():
 
 def test_every_repository_migration_has_registered_markers():
     files = sh.migration_files()
-    assert len(files) == 12
+    assert len(files) == 13
     assert {f.name for f in files} == set(sh.MIGRATION_MARKERS)
 
 
@@ -329,7 +332,7 @@ def test_handoff_applies_pending_migrations_in_order_and_fixes_auth():
     report = sh.run_handoff(client, 'ref111', apply=True)
     assert report['migrations_applied_this_run'] == list(sh.MIGRATION_MARKERS)
     assert client.applied == list(sh.MIGRATION_MARKERS)  # exact timestamp order, no skips
-    assert len(client.ledger_inserts) == 12
+    assert len(client.ledger_inserts) == 13
     assert client.patches and client.patches[0][2]['SITE_URL'] == ORIGIN
     assert report['checks']['auth']['status'] == 'passed' and report['checks']['auth']['fix_applied'] is True
     assert report['status'] == 'supabase_verified'

@@ -17,3 +17,12 @@ def test_registry_accepts_arcgis_layer_metadata():
     text = registry.read_text(encoding="utf-8")
     assert "arcgis_layer_url:Optional[str]=None" in text
     assert "extras[\"arcgis_layer_url\"]=arcgis_layer_url" in text
+
+
+def test_production_workflows_are_operator_dispatched_not_ephemeral_branch_pinned():
+    workflows = Path(__file__).parents[2] / ".github" / "workflows"
+    for name in ("production-smoke.yml", "vercel-handoff.yml"):
+        text = (workflows / name).read_text(encoding="utf-8")
+        assert "workflow_dispatch:" in text
+        assert "push:" not in text
+        assert "arena/" not in text
