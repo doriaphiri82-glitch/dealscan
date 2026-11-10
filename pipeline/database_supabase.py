@@ -145,7 +145,7 @@ class SupabaseDatabase:
 
     def record_ingestion_run(self, county_id: str, status: str, counts: dict, error: str = '',
                              source_url: str | None = None, metadata: dict | None = None, run_key: str | None = None) -> int:
-        payload = run_payload(county_id, status, counts, error, metadata)
+        payload = run_payload(county_id, status, counts, error, metadata, started_at=None)
         payload.update(run_key=run_key or str(uuid.uuid4()), source_url=source_url,
                        run_type=RUN_TYPES[1] if os.getenv('GITHUB_ACTIONS') else RUN_TYPES[0])
         rows = self._request('POST', 'ingestion_runs', params={'on_conflict': 'run_key'},
@@ -157,7 +157,9 @@ class SupabaseDatabase:
 
     def update_ingestion_run(self, run_id: int, county_id: str, status: str, counts: dict, error: str = '', metadata: dict | None = None) -> int:
         active = self._active if self._active and self._active['id'] == run_id and self._active['county_id'] == county_id else {}
-        payload = run_payload(county_id, status, counts, error, {**active.get('metadata',{}), **(metadata or {})})
+        payload = run_payload(county_id, status, counts, error,
+                              {**active.get('metadata', {}), **(metadata or {})},
+                              started_at=(active.get('metadata') or {}).get('started_at'))
         rows = self._request('PATCH', 'ingestion_runs', params={'id': f'eq.{run_id}', 'county_id': f'eq.{county_id}', 'status': 'eq.running'},
                 headers={**self.headers, 'Prefer': 'return=representation'}, json=payload).json()
         if not rows:
@@ -199,7 +201,7 @@ class SupabaseDatabase:
             run_id = self.record_ingestion_run(county_id, 'running', {}, source_url=source_url,
                 metadata={'workflow_run_id': os.getenv('GITHUB_RUN_ID'), 'workflow_attempt': os.getenv('GITHUB_RUN_ATTEMPT')})
             self._active = {'id': run_id, 'county_id': county_id, 'source_url': source_url,
-                            'metadata': {'workflow_run_id': os.getenv('GITHUB_RUN_ID'), 'workflow_attempt': os.getenv('GITHUB_RUN_ATTEMPT')}}
+                            'metadata': {'workflow_run_id': os.getenv('GITHUB_RUN_ID'), 'workflow_attempt': os.getenv('GITHUB_RUN_ATTEMPT'), 'started_at': now()}}
         self._active_checked_at = time.monotonic()
         os.environ['DEALSCAN_ACTIVE_AUDIT_RUN_ID'] = str(self._active['id'])
         return int(self._active['id'])

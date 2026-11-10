@@ -80,12 +80,15 @@ def deal_payload(data: dict) -> dict:
     return json_safe(payload)
 
 
-def run_payload(county_id: str, status: str, counts: dict, error: str = '', metadata: dict | None = None) -> dict:
+def run_payload(county_id: str, status: str, counts: dict, error: str = '', metadata: dict | None = None, started_at: str | None = None) -> dict:
     state = STATUS_MAP.get(status)
     if state is None: raise ValueError('Invalid ingestion status')
+    if started_at is None:
+        started_at = now()
     payload = {'county_id': county_id, 'status': state, 'heartbeat_at': now(),
                'finished_at': None if state == 'running' else now(),
                'error_message': error or None, 'metadata': metadata or {}}
+    payload['started_at'] = started_at
     for field, counter in {'records_seen': 'discovered', 'records_normalized': 'normalized',
                            'records_persisted': 'stored', 'records_rejected': 'rejected',
                            'records_held': 'held', 'records_skipped': 'skipped',

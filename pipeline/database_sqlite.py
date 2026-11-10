@@ -243,7 +243,8 @@ class SQLiteDatabase:
 
     def update_ingestion_run(self, run_id, county_id, status, counts, error='', metadata=None):
         active = self._active if self._active and self._active['id'] == run_id and self._active['county_id'] == county_id else {}
-        payload = run_payload(county_id,status,counts,error,{**active.get('metadata',{}),**(metadata or {})})
+        payload = run_payload(county_id,status,counts,error,{**active.get('metadata',{}),**(metadata or {})},
+                              started_at=(active.get('metadata') or {}).get('started_at'))
         with self.connection() as conn:
             fields = list(payload)
             changed = conn.execute(f'UPDATE ingestion_runs SET {",".join(field+"=?" for field in fields)} WHERE id=? AND county_id=? AND status=\'running\'', [*[_encode(payload[field]) for field in fields],run_id,county_id]).rowcount
@@ -261,7 +262,7 @@ class SQLiteDatabase:
                 row = conn.execute("SELECT id FROM ingestion_runs WHERE id=? AND county_id=? AND status='running'", (self._active['id'],county_id)).fetchone()
                 if row: return self._active['id']
         run_id = self.record_ingestion_run(county_id,'running',{},source_url=source_url)
-        self._active = {'id':run_id,'county_id':county_id,'source_url':source_url,'metadata':{}}
+        self._active = {'id':run_id,'county_id':county_id,'source_url':source_url,'metadata':{'started_at': now()}}
         return run_id
 
     def active_run_id(self, county_id):

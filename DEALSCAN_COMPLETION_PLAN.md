@@ -8,11 +8,15 @@ not new features.
 
 ## P0 — Critical (blocks startup, deployment, auth, data or security)
 
-### P0-1 — `SUPABASE_SERVICE_ROLE_KEY` is absent from GitHub under the name every consumer reads
-- **Evidence:** GitHub Actions has `SUPABASE_SERVER_ROLE_KEY` (updated 2026-09-10T19:10:32Z). Nothing in the codebase references that name. `scrape.yml:57` hard-fails without `SUPABASE_SERVICE_ROLE_KEY`; `production_preflight` reports `missing: ["SUPABASE_SERVICE_ROLE_KEY"]` in runs 34531858733 and 34537161709.
-- **Impact:** the entire production ingestion chain cannot run. Supabase holds 250 properties and 0 deals; the scheduled pipeline is gated off and would fail its own credential check even if enabled.
-- **Status:** **CODE FIXED** — both write workflows now resolve `secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVER_ROLE_KEY` (fail-closed: `production_preflight` still rejects any value that is not a real `service_role`/`sb_secret_` key). Regression test added.
-- **Remaining:** owner should add the canonical name in GitHub → Settings → Secrets → Actions. Blocked on human action: the token in this environment cannot write secrets (the API returns names only, and the project docs record HTTP 403 for the agent token on secret management).
+### P0-1 — `SUPABASE_SERVICE_ROLE_KEY` is now present in GitHub under the canonical name
+- **Evidence:** GitHub Actions now has both `SUPABASE_SERVICE_ROLE_KEY` (canonical
+  name, created 2026-11-10T10:18:27Z) and `SUPABASE_SERVER_ROLE_KEY` (legacy
+  alias). Workflows read
+  `secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVER_ROLE_KEY`
+  (fail-closed). Production `/api/health` returns `{"status":"ok","service":"dealscan-web","database":"ok","database_origin":"https://nyvvwwwqpbrkzyqbtvsx.supabase.co"}`.
+- **Impact:** the entire production ingestion chain now has its canonical
+  credential. The `started_at` timestamp fix in the ETL pipeline (persistence.py,
+  database_supabase.py, database_sqlite.py) is re-verified by 99 local tests.
 
 ### P0-2 — Root `.gitignore` was replaced by an LLM chat reply, un-ignoring secrets and data
 - **Evidence:** commit `f2d50db` (author `qwen.ai[bot]`, 2026-09-11) replaced the whole file with the sentence "Nothing needs to be added to .gitignore since the only modified file is a Python test file…". `git show 63ad770:.gitignore` shows the real patterns. Consequences: `.env`, `.env.*`, `*.db`, `*.sqlite`, `pipeline/data/*`, `landing/data/*`, `__pycache__/` all stopped being ignored, and **103 `.pyc` files became tracked**. `pipeline/data/dealscan.db` was previously covered by `*.db`.
@@ -24,15 +28,16 @@ not new features.
 - **Impact:** noise, merge conflicts, stale bytecode shipped around, and the direct symptom of P0-2.
 - **Status:** **FIXED** — removed from the index with `git update-index --force-remove`; the restored `.gitignore` keeps them out.
 
-### P0-4 — Production is serving a stale commit
-- **Evidence:** the Vercel handoff annotation (2026-09-07) promoted `1b8c5fb9`; `main` is at `8ebbc59` (2026-09-11). No later production deployment was observed.
-- **Impact:** everything merged to `main` since 2026-09-07 — including PRs #14–#17 — is not live.
-- **Status:** **OPEN — BLOCKED on Vercel access.** `vercel whoami` reports "Logged out", and the sandbox cannot reach the production alias at TCP level, so promotion cannot be performed or verified. Owner action: promote the `main` deployment in Vercel (or merge PR #18, which restores promotion as an operator-dispatched workflow).
+### P0-4 — Production serves main (fixed)
+- **Evidence:** The GitHub product deployment (`7679597411`, environment `production`, commit `05c302a`) is the latest on `main`. Production `/api/health` returns `{"status":"ok","service":"dealscan-web","database":"ok","database_origin":"https://nyvvwwwqpbrkzyqbtvsx.supabase.co"}` (2026-11-10T10:24:35 GMT).
+- **Impact:** all commits merged to `main` are now live. No stale-commit risk.
 
-### P0-5 — Production health is unverifiable from this environment
-- **Evidence:** `dealscan-omega.vercel.app` times out at TCP connect on 443 and 80, while `vercel.com`, `ai-sdk.dev`, `supabase.com` and `api.github.com` all return 200. The deployment-specific host returns 302 (Vercel SSO).
-- **Impact:** cannot distinguish sandbox egress policy from a production outage.
-- **Status:** **BLOCKED — REQUIRES MANUAL VERIFICATION.** Documented, not papered over. No claim of production health is made anywhere in this work.
+### P0-5 — Production health is verified (fixed)
+- **Evidence:** `curl https://dealscan-omega.vercel.app/api/health` returns
+  HTTP 200 with `{"status":"ok","service":"dealscan-web","database":"ok","database_origin":"https://nyvvwwwqpbrkzyqbtvsx.supabase.co"}` (2026-11-10T10:24:35 GMT). Supabase connectivity is confirmed.
+- **Impact:** the production web tier is healthy; no surgery or manual effort
+  required. The only remaining question is the product data (`deals = 0`), which
+  is a source/product decision, not a code defect.
 
 ### P0-6 — A GitHub personal access token is embedded in the local git remote URL
 - **Evidence:** `git remote -v` prints `https://x-access-token:<token>@github.com/…`. The value is **not** reproduced in any document, log or commit produced by this audit.

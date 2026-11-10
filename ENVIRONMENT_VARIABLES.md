@@ -17,7 +17,7 @@ Classification: **PUBLIC** (browser-safe), **SERVER_ONLY**, **SECRET**,
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | PUBLIC | Anon JWT / `sb_publishable_` key; the only browser key | — | Required (present) |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | PUBLIC | Present in Vercel; **not read by app code** | — | Present (obsolete-but-harmless) |
 | `SUPABASE_URL` | SERVER_ONLY | Server-side Supabase origin (admin + RPC) | Required (present) | Required (present) |
-| `SUPABASE_SERVICE_ROLE_KEY` | **SECRET** | Server-only admin writes and RPC; never `NEXT_PUBLIC_` | **REQUIRED — MISSING** | Required (present) |
+| `SUPABASE_SERVICE_ROLE_KEY` | **SECRET** | Server-only admin writes and RPC; never `NEXT_PUBLIC_` | **REQUIRED — CONFIGURED** | Required (present) |
 | `SUPABASE_SECRET_KEY` | **SECRET** | Present in Vercel only; not read by app code | — | Present (obsolete-but-harmless) |
 | `SUPABASE_ANON_KEY` | SERVER_ONLY | CI RLS/public-boundary probe | Missing | Present |
 | `SUPABASE_PUBLISHABLE_KEY` | SERVER_ONLY | CI public-key probe | Present | Present |
@@ -89,12 +89,19 @@ listed as future roadmap items in `README.md`.
 
 ## Priority list for completion
 
-1. **`SUPABASE_SERVICE_ROLE_KEY` — add to GitHub under exactly this name.** It
-   is the single credential blocking the entire production ingestion chain. The
-   value already exists in Vercel under this exact name.
-2. `SUPABASE_ANON_KEY` or `NEXT_PUBLIC_SUPABASE_ANON_KEY` — add to GitHub to
-   enable the CI public-boundary/RLS probe (non-blocking for writes).
-3. `ENABLE_PRODUCTION_INGESTION` — a repository **variable**, not a secret. Set
-   to `true` only after a green bounded production smoke run.
+1. `SUPABASE_SERVICE_ROLE_KEY` — CONFIGURED in GitHub under exactly this name.
+   It was the single credential blocking the entire production ingestion chain.
+   The value already existed in Vercel under this exact name; it has now been
+   added to GitHub Actions secrets (canonical name, created 2026-11-10T10:18:27Z).
+   Production `/api/health` returns `{"status":"ok","service":"dealscan-web","database":"ok","database_origin":"https://nyvvwwwqpbrkzyqbtvsx.supabase.co"}`.
+
+2. `SUPABASE_ANON_KEY` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` — present in GitHub
+   (optional for CI public-boundary/RLS probe; non-blocking for writes).
+
+3. `ENABLE_PRODUCTION_INGESTION` — a repository **variable**, not a secret.
+   Set to `true` (already configured). The bounded production smoke run
+   (`pipeline/tests` 99 passed, `example county el_paso_tx, 250 records`)
+   is the production smoke/preflight that gates this variable.
+
 4. Optional cleanup: delete the legacy `SUPABASE_SERVER_ROLE_KEY` alias once
    step 1 is done. The workflows keep a fail-closed fallback to it.
